@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ class SandboxCommandRejected(ValueError):
 class SandboxRunResult:
     command: str
     cwd: str
+    runtime_profile: str
+    image: str | None
     exit_code: int | None
     stdout: str
     stderr: str
@@ -40,13 +43,17 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def run_sandbox_command(command: str, workdir: str | None, timeout_seconds: int = 10) -> SandboxRunResult:
+def run_sandbox_command(command: str, workdir: str | None, timeout_seconds: int = 10, image: str | None = None) -> SandboxRunResult:
     normalized = command.strip()
     if not normalized:
         raise SandboxCommandRejected("run_command cannot be empty")
     _reject_unsafe_command(normalized)
 
     cwd = _resolve_workdir(workdir)
+    selected_image = image or infer_image(cwd)
+    if selected_image is None:
+        raise SandboxCommandRejected("No Docker image could be inferred for this project. Select a sandbox command template first.")
+    docker_command = build_docker_command(cwd, normalized, selected_image)
     started = time.perf_counter()
     timed_out = False
     exit_code: int | None
@@ -55,9 +62,9 @@ def run_sandbox_command(command: str, workdir: str | None, timeout_seconds: int 
 
     try:
         completed = subprocess.run(
-            normalized,
+            docker_command,
             cwd=str(cwd),
-            shell=True,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -80,6 +87,8 @@ def run_sandbox_command(command: str, workdir: str | None, timeout_seconds: int 
     return SandboxRunResult(
         command=normalized,
         cwd=str(cwd),
+        runtime_profile="docker-isolated-v1",
+        image=selected_image,
         exit_code=exit_code,
         stdout=stdout,
         stderr=stderr,
@@ -93,6 +102,52 @@ def _reject_unsafe_command(command: str) -> None:
     for pattern in BLOCKED_PATTERNS:
         if pattern.search(command):
             raise SandboxCommandRejected("Command is blocked by the local sandbox safety policy")
+
+
+def build_docker_command(workdir: Path, command: str, image: str) -> list[str]:
+    docker_path = shutil.which("docker")
+    if docker_path is None:
+        raise SandboxCommandRejected("Docker is required for isolated SANDBOX execution but was not found")
+    return [
+        docker_path,
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--cpus",
+        "1",
+        "--memory",
+        "512m",
+        "--pids-limit",
+        "128",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=128m",
+        "-v",
+        f"{workdir}:/workspace:ro",
+        "-w",
+        "/workspace",
+        image,
+        "sh",
+        "-lc",
+        command,
+    ]
+
+
+def infer_image(workdir: Path) -> str | None:
+    if (workdir / "package.json").exists():
+        return "node:20-alpine"
+    if any((workdir / name).exists() for name in ["requirements.txt", "pyproject.toml", "setup.py"]) or list(workdir.glob("*.py")):
+        return "python:3.12-slim"
+    if (workdir / "go.mod").exists():
+        return "golang:1.22-alpine"
+    if (workdir / "pom.xml").exists():
+        return "maven:3.9-eclipse-temurin-21"
+    if (workdir / "Dockerfile").exists():
+        return "alpine:3.20"
+    return None
 
 
 def _resolve_workdir(workdir: str | None) -> Path:

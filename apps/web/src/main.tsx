@@ -18,6 +18,7 @@ type AiReview = { summary: string; false_positive_likelihood: string; remediatio
 type Finding = { id: string; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
 type DastValidation = { id: string; target_url: string; verdict: string; validator: string | null; evidence_summary: string | null; request_summary?: string | null; response_summary?: string | null; reproduction_steps?: string | null; remediation_hint?: string | null; created_at: string };
 type SandboxEvidence = { id: string; run_command: string; runtime_profile: string | null; network_policy: string; filesystem_policy: string; observed_files: Record<string, unknown>[]; observed_network: Record<string, unknown>[]; observed_processes: Record<string, unknown>[]; observed_tool_calls: Record<string, unknown>[]; evidence_summary: string | null; operator: string | null; created_at: string };
+type SandboxTemplate = { name: string; command: string; command_type: string; image: string; risk_level: string; description: string };
 type AttackChainStep = { module: string; title: string; evidence: string | null };
 type AttackChain = { id: string; name: string; severity: Severity; modules: string[]; evidence_count: number; summary: string; recommended_action: string; steps: AttackChainStep[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; attack_chains: AttackChain[] };
@@ -53,12 +54,14 @@ function App() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [validations, setValidations] = useState<DastValidation[]>([]);
   const [evidence, setEvidence] = useState<SandboxEvidence[]>([]);
+  const [sandboxTemplates, setSandboxTemplates] = useState<SandboxTemplate[]>([]);
   const [summary, setSummary] = useState<AspmSummary | null>(null);
   const [sourcePath, setSourcePath] = useState(DEFAULT_SOURCE_PATH);
   const [sastPath, setSastPath] = useState(DEFAULT_SAST_PATH);
   const [agentPath, setAgentPath] = useState(DEFAULT_AGENT_PATH);
   const [targetUrl, setTargetUrl] = useState("https://example.com/login");
   const [runCommand, setRunCommand] = useState("python agent_runner.py");
+  const [sandboxImage, setSandboxImage] = useState("python:3.12-slim");
   const [status, setStatus] = useState("正在连接 API...");
   const [loading, setLoading] = useState(false);
   const [savingKey, setSavingKey] = useState<ModuleKey | null>(null);
@@ -104,6 +107,7 @@ function App() {
     setFindings([]);
     setValidations([]);
     setEvidence([]);
+    setSandboxTemplates([]);
     setSummary(null);
     setAssetProbe(null);
   }
@@ -144,17 +148,19 @@ function App() {
 
   async function refreshProjectData(projectId = project?.id) {
     if (!projectId) return;
-    const [componentData, findingData, validationData, evidenceData, summaryData] = await Promise.all([
+    const [componentData, findingData, validationData, evidenceData, templateData, summaryData] = await Promise.all([
       request<Component[]>(`/sca/projects/${projectId}/components`),
       request<Finding[]>(`/findings?project_id=${projectId}`),
       request<DastValidation[]>(`/dast/projects/${projectId}/validations`),
       request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`),
+      request<SandboxTemplate[]>(`/sandbox/projects/${projectId}/templates`),
       request<AspmSummary>(`/aspm/projects/${projectId}/summary`),
     ]);
     setComponents(componentData);
     setFindings(findingData);
     setValidations(validationData);
     setEvidence(evidenceData);
+    setSandboxTemplates(templateData);
     setSummary(summaryData);
   }
 
@@ -273,7 +279,7 @@ function App() {
     if (!project) return;
     setLoading(true);
     try {
-      await request("/sandbox/run", { method: "POST", body: JSON.stringify({ project_id: project.id, run_command: runCommand, timeout_seconds: 10, operator: "security-user" }) });
+      await request("/sandbox/run", { method: "POST", body: JSON.stringify({ project_id: project.id, run_command: runCommand, image: sandboxImage, timeout_seconds: 10, operator: "security-user" }) });
       await refreshProjectContext(project.id);
       setStatus("SANDBOX 受控执行已完成");
     } catch (error) { console.error(error); setStatus("SANDBOX 执行失败，请确认模块已启用且命令未被安全策略阻止"); } finally { setLoading(false); }
@@ -330,7 +336,7 @@ function App() {
         {activeView === "sast" && <SastView project={project} findings={sastFindings} categorySummary={sastCategorySummary} sourcePath={sastPath} loading={loading} onSourcePathChange={setSastPath} onRunScan={() => runScan("sast")} onAgentReview={runSastAgentReview} />}
         {activeView === "agent" && <AgentView project={project} findings={agentFindings} categorySummary={agentCategorySummary} sourcePath={agentPath} loading={loading} onSourcePathChange={setAgentPath} onRunScan={() => runScan("agent")} />}
         {activeView === "dast" && <DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} />}
-        {activeView === "sandbox" && <SandboxView project={project} evidence={evidence} runCommand={runCommand} loading={loading} onRunCommandChange={setRunCommand} onRun={createSandboxEvidence} />}
+        {activeView === "sandbox" && <SandboxView project={project} evidence={evidence} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} loading={loading} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={createSandboxEvidence} />}
         {activeView === "aspm" && <AspmView summary={summary} findings={findings} validations={validations} evidence={evidence} onUpdateFinding={updateFindingGovernance} />}
       </section>
     </main>
@@ -388,7 +394,7 @@ function DastView({ project, validations, targetUrl, loading, onTargetUrlChange,
   return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>DAST 漏洞动态验证</h2><p>对目标 URL 发起 HTTP 探测，检查可达性、安全响应头、服务指纹并自动生成三色裁决和验证证据。</p></div><div className="path-control"><input value={targetUrl} onChange={(event) => onTargetUrlChange(event.target.value)} placeholder="https://example.com" /><button className="primary-action" onClick={() => void onProbe()} disabled={loading || !project}>{loading ? "验证中" : "执行 DAST 验证"}</button></div></div><section className="module-summary"><Metric label="验证记录" value={validations.length} /><Metric label="可利用" value={verdictSummary.exploitable ?? 0} /><Metric label="不确定" value={verdictSummary.uncertain ?? 0} /><Metric label="不可利用" value={verdictSummary.not_exploitable ?? 0} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>三色裁决</h2><span>Verdict</span></div><KeyValue data={verdictSummary} /></div><div className="panel"><div className="panel-header"><h2>当前目标</h2><span>{project?.name ?? "未连接"}</span></div><div className="kv-list"><div><span>Target</span><strong>{targetUrl}</strong></div></div></div><div className="panel full"><div className="panel-header"><h2>动态验证记录</h2><span>共 {validations.length} 条</span></div><table><thead><tr><th>裁决</th><th>目标</th><th>证据摘要</th><th>请求 / 响应</th><th>修复建议</th></tr></thead><tbody>{validations.length === 0 ? <tr><td colSpan={5} className="empty-cell">暂无 DAST 验证记录，执行 DAST 验证后显示结果。</td></tr> : pageValidations.map((validation) => <tr key={validation.id}><td><span className={`risk-badge ${validation.verdict}`}>{validation.verdict}</span><span className="cell-subtext">{validation.validator ?? "auto-dast"}</span></td><td>{validation.target_url}</td><td>{validation.evidence_summary ?? "-"}</td><td>{validation.request_summary ?? "-"}<span className="cell-subtext">{validation.response_summary ?? "-"}</span></td><td>{validation.remediation_hint ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
 }
 
-function SandboxView({ project, evidence, runCommand, loading, onRunCommandChange, onRun }: { project: Project | null; evidence: SandboxEvidence[]; runCommand: string; loading: boolean; onRunCommandChange: (value: string) => void; onRun: () => Promise<void> }) {
+function SandboxView({ project, evidence, templates, runCommand, sandboxImage, loading, onRunCommandChange, onSandboxImageChange, onRun }: { project: Project | null; evidence: SandboxEvidence[]; templates: SandboxTemplate[]; runCommand: string; sandboxImage: string; loading: boolean; onRunCommandChange: (value: string) => void; onSandboxImageChange: (value: string) => void; onRun: () => Promise<void> }) {
   const [page, setPage] = useState(1);
   const pageSize = 10;
   const runtimeSummary = countBy(evidence.map((item) => ({ runtime: item.runtime_profile ?? "unknown" })), "runtime");
@@ -398,7 +404,7 @@ function SandboxView({ project, evidence, runCommand, loading, onRunCommandChang
   const completed = evidence.filter((item) => item.observed_processes.some((process) => textValue(process.exit_code) !== "-")).length;
   useEffect(() => { setPage(1); }, [evidence]);
 
-  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SANDBOX 沙箱动态证据链</h2><p>在项目源码目录内执行受控命令，采集退出码、耗时、标准输出、错误输出和运行策略，形成第一版动态证据。</p></div><div className="path-control"><input value={runCommand} onChange={(event) => onRunCommandChange(event.target.value)} placeholder="python agent_runner.py" /><button className="primary-action" onClick={() => void onRun()} disabled={loading || !project}>{loading ? "执行中" : "执行 SANDBOX"}</button></div></div><section className="module-summary"><Metric label="证据记录" value={evidence.length} /><Metric label="进程完成" value={completed} /><Metric label="网络策略" value="restricted" /><Metric label="当前项目" value={project?.name ?? "未连接"} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>运行环境</h2><span>Runtime</span></div><KeyValue data={runtimeSummary} /></div><div className="panel"><div className="panel-header"><h2>执行策略</h2><span>Policy</span></div><div className="kv-list"><div><span>Network</span><strong>restricted</strong></div><div><span>Timeout</span><strong>10s</strong></div></div></div><div className="panel full"><div className="panel-header"><h2>沙箱证据记录</h2><span>共 {evidence.length} 条</span></div><table><thead><tr><th>命令</th><th>运行环境</th><th>进程结果</th><th>证据摘要</th><th>策略</th></tr></thead><tbody>{evidence.length === 0 ? <tr><td colSpan={5} className="empty-cell">暂无 SANDBOX 证据，执行 SANDBOX 后显示结果。</td></tr> : pageEvidence.map((item) => { const process = item.observed_processes[0] ?? {}; return <tr key={item.id}><td><strong>{item.run_command}</strong><span className="cell-subtext">{new Date(item.created_at).toLocaleString()}</span></td><td>{item.runtime_profile ?? "-"}<span className="cell-subtext">{item.operator ?? "-"}</span></td><td>exit: {textValue(process.exit_code)}<span className="cell-subtext">{textValue(process.elapsed_ms)}ms · timeout: {textValue(process.timed_out)}</span></td><td>{item.evidence_summary ?? "-"}<span className="cell-subtext">{textValue(process.stderr)}</span></td><td>{item.network_policy}<span className="cell-subtext">{item.filesystem_policy}</span></td></tr>; })}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SANDBOX 沙箱动态证据链</h2><p>识别项目可执行入口，并在 Docker 隔离容器中运行命令，源码只读挂载、默认禁用网络并限制资源。</p></div><div className="path-control"><input value={runCommand} onChange={(event) => onRunCommandChange(event.target.value)} placeholder="python app.py" /><input value={sandboxImage} onChange={(event) => onSandboxImageChange(event.target.value)} placeholder="python:3.12-slim" /><button className="primary-action" onClick={() => void onRun()} disabled={loading || !project}>{loading ? "执行中" : "执行 SANDBOX"}</button></div></div><section className="module-summary"><Metric label="证据记录" value={evidence.length} /><Metric label="推荐命令" value={templates.length} /><Metric label="进程完成" value={completed} /><Metric label="隔离策略" value="Docker / read-only" /></section><div className="content-grid"><div className="panel full"><div className="panel-header"><h2>推荐命令模板</h2><span>{templates.length ? "点击后填入执行框" : "未识别到可执行入口"}</span></div>{templates.length === 0 ? <div className="empty-project">当前项目未识别到 package.json、Python 入口、go.mod、pom.xml 或 Dockerfile。可以手动输入命令和镜像执行。</div> : <table><thead><tr><th>名称</th><th>命令</th><th>镜像</th><th>类型</th><th>说明</th></tr></thead><tbody>{templates.map((template) => <tr key={`${template.image}-${template.command}`}><td><button className="secondary-action" onClick={() => { onRunCommandChange(template.command); onSandboxImageChange(template.image); }}>{template.name}</button><span className="cell-subtext">风险：{template.risk_level}</span></td><td>{template.command}</td><td>{template.image}</td><td>{template.command_type}</td><td>{template.description}</td></tr>)}</tbody></table>}</div><div className="panel"><div className="panel-header"><h2>运行环境</h2><span>Runtime</span></div><KeyValue data={runtimeSummary} /></div><div className="panel"><div className="panel-header"><h2>执行策略</h2><span>Policy</span></div><div className="kv-list"><div><span>Network</span><strong>none</strong></div><div><span>Source</span><strong>readonly</strong></div><div><span>Memory</span><strong>512m</strong></div><div><span>CPU</span><strong>1</strong></div></div></div><div className="panel full"><div className="panel-header"><h2>沙箱证据记录</h2><span>共 {evidence.length} 条</span></div><table><thead><tr><th>命令</th><th>运行环境</th><th>进程结果</th><th>证据摘要</th><th>策略</th></tr></thead><tbody>{evidence.length === 0 ? <tr><td colSpan={5} className="empty-cell">暂无 SANDBOX 证据，执行 SANDBOX 后显示结果。</td></tr> : pageEvidence.map((item) => { const process = item.observed_processes[0] ?? {}; return <tr key={item.id}><td><strong>{item.run_command}</strong><span className="cell-subtext">{new Date(item.created_at).toLocaleString()}</span></td><td>{item.runtime_profile ?? "-"}<span className="cell-subtext">{textValue(process.image) || item.operator || "-"}</span></td><td>exit: {textValue(process.exit_code)}<span className="cell-subtext">{textValue(process.elapsed_ms)}ms · timeout: {textValue(process.timed_out)}</span></td><td>{item.evidence_summary ?? "-"}<span className="cell-subtext">{textValue(process.stderr)}</span></td><td>{item.network_policy}<span className="cell-subtext">{item.filesystem_policy}</span></td></tr>; })}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
 }
 
 function SastView({ project, findings, categorySummary, sourcePath, loading, onSourcePathChange, onRunScan, onAgentReview }: { project: Project | null; findings: Finding[]; categorySummary: Record<string, number>; sourcePath: string; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void>; onAgentReview: () => Promise<void> }) {

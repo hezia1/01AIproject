@@ -323,6 +323,7 @@ class SandboxRunRequest(BaseModel):
     finding_id: UUID | None = None
     timeout_seconds: int = Field(default=10, ge=1, le=30)
     operator: str | None = "sandbox-runner"
+    image: str | None = None
 
 
 class SandboxEvidence(SandboxEvidenceCreate):
@@ -341,6 +342,15 @@ class SandboxEvidenceUpdate(BaseModel):
     observed_tool_calls: list[dict[str, object]] | None = None
     evidence_summary: str | None = None
     operator: str | None = None
+
+
+class SandboxCommandTemplate(BaseModel):
+    name: str
+    command: str
+    command_type: str
+    image: str
+    risk_level: str
+    description: str
 
 
 class AttackChainStep(BaseModel):

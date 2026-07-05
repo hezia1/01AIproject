@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord
-from app.models import ModuleKey, SandboxEvidence, SandboxEvidenceCreate, SandboxEvidenceUpdate, SandboxRunRequest
+from app.models import ModuleKey, SandboxCommandTemplate, SandboxEvidence, SandboxEvidenceCreate, SandboxEvidenceUpdate, SandboxRunRequest
 from app.repositories.mappers import sandbox_evidence_to_schema
 from app.services.sandbox_runner import SandboxCommandRejected, run_sandbox_command
+from app.services.sandbox_templates import discover_sandbox_templates
 
 router = APIRouter()
 
@@ -45,13 +46,14 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
     _validate_finding(db, payload.project_id, payload.finding_id)
 
     try:
-        result = run_sandbox_command(payload.run_command, project.source_path, payload.timeout_seconds)
+        result = run_sandbox_command(payload.run_command, project.source_path, payload.timeout_seconds, payload.image)
     except SandboxCommandRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     observed_process = {
         "command": result.command,
         "cwd": result.cwd,
+        "image": result.image,
         "exit_code": result.exit_code,
         "elapsed_ms": result.elapsed_ms,
         "timed_out": result.timed_out,
@@ -62,13 +64,21 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
         project_id=str(payload.project_id),
         finding_id=str(payload.finding_id) if payload.finding_id else None,
         run_command=result.command,
-        runtime_profile="local-subprocess-v1",
-        network_policy="restricted",
-        filesystem_policy="project-workdir" if project.source_path else "backend-workdir",
+        runtime_profile=result.runtime_profile,
+        network_policy="docker-network-none",
+        filesystem_policy="readonly-source-mount",
         observed_files=[],
-        observed_network=[],
+        observed_network=[{"policy": "none", "allowed": False}],
         observed_processes=[observed_process],
-        observed_tool_calls=[{"tool": "local-subprocess", "arguments": result.command}],
+        observed_tool_calls=[
+            {
+                "tool": "docker",
+                "arguments": result.command,
+                "image": result.image,
+                "resource_limits": {"cpus": "1", "memory": "512m", "pids_limit": 128},
+                "mount": {"source": result.cwd, "target": "/workspace", "mode": "ro"},
+            }
+        ],
         evidence_summary=result.evidence_summary,
         operator=payload.operator or "sandbox-runner",
     )
@@ -76,6 +86,12 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
     db.commit()
     db.refresh(record)
     return sandbox_evidence_to_schema(record)
+
+
+@router.get("/projects/{project_id}/templates", response_model=list[SandboxCommandTemplate])
+def list_project_templates(project_id: UUID, db: Session = Depends(get_db)) -> list[SandboxCommandTemplate]:
+    project = _require_sandbox_project(db, project_id)
+    return discover_sandbox_templates(project.source_path)
 
 
 @router.get("/projects/{project_id}/evidence", response_model=list[SandboxEvidence])
