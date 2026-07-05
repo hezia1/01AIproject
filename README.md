@@ -1,406 +1,280 @@
-# AI 原生应用安全检测、验证与治理平台
+# AI 网络安全检测、验证与治理平台
 
-本仓库用于逐步实现 `01.pptx` 中描述的平台：面向软件供应链、复杂业务系统和 AI Agent 生态的应用安全检测、动态验证与治理平台。
+本项目用于逐步实现 `01.pptx` 中描述的平台：围绕一个已经存在的项目，读取本地源代码、运行地址和运行入口，完成 SCA、SAST、AGENT、DAST、SANDBOX、ASPM 六个模块的可选接入、检测、验证和治理汇总。
 
-当前阶段为 MVP 工程启动阶段，已建立：
+当前阶段目标是先形成一个本地可跑通的完整平台，再逐步补齐每个模块的深度能力。
 
-- `docs/`：PRD、技术架构、MVP 路线图。
-- `apps/api/`：FastAPI 后端骨架。
-- `apps/web/`：React 控制台骨架。
-- `infra/`：本地基础设施配置。
+## 当前架构
 
-## MVP 闭环
+- `apps/api/`：FastAPI 后端，提供项目、模块、扫描、证据、治理汇总 API。
+- `apps/web/`：React + Vite 前端控制台。
+- `infra/`：本地 PostgreSQL / Redis Docker Compose 配置。
+- `docs/`：需求、架构和模块设计文档。
+- `.agents/`：后续 Agent 编排相关说明或配置。
 
-第一版目标是跑通：
+## 本地启动
 
-```text
-项目创建 -> 仓库接入 -> 扫描任务 -> SCA/SAST 结果 -> AI 复核 -> 漏洞治理 -> 报告导出
-```
+### 1. 启动基础设施
 
-## 本地开发
-
-### API
+先打开 Docker Desktop，确认 Docker Engine 处于 Running 状态。
 
 ```powershell
-cd apps/api
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+cd D:\project\PYproject\AI网安项目
+docker compose -f infra/docker-compose.yml up -d
 ```
 
-健康检查：
+### 2. 启动后端
+
+```powershell
+cd D:\project\PYproject\AI网安项目
+.\.venv\Scripts\python.exe -m pip install -r apps\api\requirements.txt
+cd apps\api
+..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+后端健康检查：
 
 ```text
 http://localhost:8000/api/health
 ```
 
-### Web
+### 3. 启动前端
 
 ```powershell
-cd apps/web
+cd D:\project\PYproject\AI网安项目\apps\web
 npm install
 npm run dev
 ```
 
-访问：
+前端访问：
 
 ```text
 http://localhost:5173
 ```
 
-## 下一步开发顺序
+## 平台级能力
 
-1. 接入 PostgreSQL，替换内存数据。
-2. 将六个安全模块配置持久化。
-3. 前端模块能力中心接入真实 API。
-4. 实现 Worker 与本地仓库扫描目录。
-5. 实现 SCA 模块，先做依赖文件解析和组件清单。
-6. 实现 SAST 模块，先覆盖硬编码密钥和危险调用。
-7. 接入 AI 复核网关。
+### 已实现
 
-## 六个可选安全模块
+- 项目创建、删除、查询、切换。
+- 项目资产配置：本地源码路径、运行地址、API 地址、沙箱命令、沙箱镜像。
+- 六个安全模块可单独启用或停用。
+- 项目资产探测：根据源码目录识别 SCA、SAST、AGENT 可执行任务。
+- 统一任务中心：触发 SCA、SAST、AGENT、DAST、SANDBOX。
+- PostgreSQL 持久化：项目、模块配置、扫描任务、组件、Finding、DAST 记录、SANDBOX 证据。
+- 前端多页面视图：项目管理、项目资产、模块接入、任务中心、组件清单、SAST 审计、AGENT 安全、DAST 验证、SANDBOX 证据、ASPM 治理总览。
 
-平台按 PPT 第三页拆为六个可选接入模块：
+### 还缺少
 
-- SAST：智能静态审计
-- SCA：供应链风险分析
-- AGENT：Agent 供应链安全
-- DAST：漏洞动态验证
-- SANDBOX：沙箱动态证据链
-- ASPM：平台治理与交付
+- 正式 Alembic 数据库迁移。
+- 用户登录、权限、租户隔离。
+- 扫描任务队列和后台 Worker。
+- 报告导出。
+- CI/CD 接入。
+- 完整审计日志。
 
-详细设计见 `docs/module-system.md`。
+## 模块完成度
 
-## PostgreSQL 持久化进度
+### 1. SCA 供应链风险分析
 
-当前后端已经从内存存储切到数据库模型，开发模式下会在 FastAPI 启动时自动创建表。
+已实现：
 
-新增环境变量示例见：
+- 解析依赖文件并生成组件清单。
+- 支持 `package.json`、`requirements.txt`、`pom.xml`、`go.mod`。
+- 组件去重、依赖类型、来源文件、包管理器字段。
+- 接入 OSV 漏洞库查询。
+- 内置少量本地漏洞规则。
+- 基础许可证风险识别。
+- 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
+- 前端组件风险清单分页，每页 10 条。
 
-```text
-apps/api/.env.example
-```
-
-启动顺序：
-
-```powershell
-# 1. 先打开 Docker Desktop，确认 Docker Engine 已 Running
-
-# 2. 启动 PostgreSQL 和 Redis
-docker compose -f infra/docker-compose.yml up -d
-
-# 3. 安装后端依赖
-.\.venv\Scripts\python.exe -m pip install -r apps\api\requirements.txt
-
-# 4. 启动 API
-cd apps/api
-..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-当前已持久化的对象：
-
-- projects
-- project_modules
-- scan_tasks
-- findings
-
-后续要补：
-
-- Alembic 正式迁移
-- security_modules 表或版本化模块注册快照
-- components / SBOM 组件表
-- reports 报告表
-- worker_jobs 扫描执行表
-
-## SCA 第一版组件清单扫描
-
-当前已实现 SCA 基础扫描，不依赖外部安全工具，使用 Python 标准库解析：
-
-- package.json
-- requirements.txt
-- pom.xml
-- go.mod
-
-接口：
+主要 API：
 
 ```text
 POST /api/sca/scan
 GET  /api/sca/projects/{project_id}/components
 ```
 
-扫描请求示例：
+还缺少：
 
-```json
-{
-  "project_id": "<project uuid>",
-  "source_path": "D:\\path\\to\\source-code",
-  "clear_previous": true
-}
-```
+- lockfile 传递依赖解析，例如 `package-lock.json`、`pnpm-lock.yaml`、`poetry.lock`。
+- SBOM 标准导出，例如 CycloneDX / SPDX。
+- 更完整的许可证合规策略。
+- 更完整的本地漏洞规则库。
+- Syft / Trivy / Grype 等专业工具接入。
+- 离线漏洞库缓存。
 
-当前输出字段：
+### 2. SAST 智能静态审计
 
-- ecosystem
-- name
-- version
-- dependency_type
-- source_file
-- package_manager
-- license
-- risk_status
+已实现：
 
-当前边界：
+- 本地规则扫描：硬编码密钥、危险命令执行、动态代码执行、SQL 拼接、SSRF、路径穿越、弱加密、反序列化等。
+- Semgrep 接入：优先使用本机 `semgrep`，没有时尝试使用 Docker 镜像 `semgrep/semgrep:latest`。
+- 噪声过滤：跳过常见构建产物、依赖目录、压缩文件等。
+- SAST Finding 持久化。
+- 规则化 agent 编排第一版：`scanner_agent`、`review_agent`、`evidence_agent`、`fix_agent`。
+- 复核结果包含分类、语言、误报可能性、证据摘要、修复策略、优先级。
+- 前端 SAST 审计页展示风险列表、分类统计和严重等级统计。
 
-- 只生成组件清单。
-- 暂不匹配 CVE。
-- 暂不判断许可证风险。
-- 暂不解析 lockfile 的传递依赖。
-- 后续 SCA 二期再接 Syft、Grype、Trivy 或 OSV。 
-
-## SAST 第一版基础规则扫描
-
-当前已实现 SAST 基础扫描，不依赖 Semgrep 等外部工具，使用 Python 标准库正则规则扫描源码目录。
-
-接口：
+主要 API：
 
 ```text
 POST /api/sast/scan
 GET  /api/sast/projects/{project_id}/findings
+POST /api/sast/projects/{project_id}/agent-review
 ```
 
-扫描请求示例：
+还缺少：
 
-```json
-{
-  "project_id": "<project uuid>",
-  "source_path": "D:\\path\\to\\source-code",
-  "clear_previous": true
-}
-```
+- SAST 的 `Failed to fetch` 网络问题尚未继续处理，已按用户要求暂时跳过。
+- 更稳定的 Semgrep 镜像拉取和配置管理。
+- 自定义规则库管理页面。
+- AST / 数据流 / 污点分析。
+- 外部 AI 复核接入。
+- 修复补丁生成。
+- 与 DAST、SANDBOX 的自动联动验证。
 
-当前覆盖规则：
+### 3. AGENT 供应链安全
 
-- 疑似硬编码密码
-- 疑似硬编码 API Key 或 Secret
-- 危险命令执行调用
-- 危险动态代码执行
-- 疑似 SQL 字符串拼接
-- 疑似用户可控 SSRF 请求
-- 疑似路径穿越风险
-- 弱加密或弱哈希算法使用
+已实现：
 
-当前边界：
+- 扫描 Agent / MCP / 插件相关配置和说明文件。
+- 支持 `.md`、`.yaml`、`.yml`、`.json`、`.toml`、`AGENTS.md`、`CLAUDE.md`、`mcp.json`、`plugin.json`。
+- 识别环境变量/密钥读取、Shell 执行、文件写入/删除、外部网络请求、MCP 权限过宽、提示词覆盖安全策略等风险。
+- 增强 MCP 协议配置扫描。
+- 输出 Finding、风险分类、修复建议和信任影响。
+- 前端 AGENT 页面支持分页、分类统计和严重等级统计。
 
-- 只做文本规则扫描。
-- 不做 AST 分析。
-- 不做跨函数数据流。
-- 不做 AI 复核。
-- 不做多 Agent 审计。
-- 后续可接 Semgrep、自定义规则库和 AI 复核流程。
-
-## AGENT 第一版配置风险扫描
-
-当前已实现 AGENT 基础扫描，不运行 Agent，不调用模型，只扫描 Agent/MCP/插件相关配置与说明文件中的危险能力声明。
-
-接口：
+主要 API：
 
 ```text
 POST /api/agent/scan
 GET  /api/agent/projects/{project_id}/findings
 ```
 
-扫描请求示例：
+还缺少：
 
-```json
-{
-  "project_id": "<project uuid>",
-  "source_path": "D:\\path\\to\\agent-configs",
-  "clear_previous": true
-}
-```
+- 不运行真实 Agent。
+- 不连接真实 MCP Server。
+- 不执行插件工具调用。
+- 不生成完整工具权限矩阵。
+- 不做 Agent 行为回放。
+- 不做外部 AI 驱动的信任评分。
 
-当前扫描文件：
+### 4. DAST 漏洞动态验证
 
-- .md
-- .yaml
-- .yml
-- .json
-- .toml
-- AGENTS.md
-- CLAUDE.md
-- mcp.json
-- plugin.json
+已实现：
 
-当前覆盖规则：
+- 人工 DAST 验证记录。
+- 自动轻量探测第一版：对目标 URL 发起 GET 请求。
+- 检查 HTTP/HTTPS、状态码、响应时间、Server Header、基础安全响应头。
+- 根据轻量规则生成 `exploitable`、`uncertain`、`not_exploitable` 裁决。
+- 支持项目运行地址作为默认目标。
+- 前端 DAST 页面可查看验证记录。
 
-- Agent 配置允许读取环境变量或密钥
-- Agent 工具暴露 Shell 或命令执行能力
-- Agent 工具具备文件写入或删除能力
-- Agent 工具允许外部网络请求
-- MCP 或插件权限范围过宽
-- 提示词包含忽略安全策略或覆盖指令风险
-
-当前边界：
-
-- 不运行 Agent。
-- 不执行 MCP Server。
-- 不连接插件源。
-- 不做真实工具调用矩阵。
-- 不做信任评分模型。
-- 后续可扩展为规则检测 + AI 审计 + 覆盖矩阵 + 信任评分。
-
-## DAST 第一版动态验证记录
-
-当前已实现 DAST 第一版，不做自动攻击探测，不调用 OWASP ZAP，不发送 payload。第一版用于记录人工动态验证裁决和证据摘要。
-
-接口：
+主要 API：
 
 ```text
 POST  /api/dast/validations
+POST  /api/dast/probe
 GET   /api/dast/projects/{project_id}/validations
 PATCH /api/dast/validations/{validation_id}
 ```
 
-创建验证记录示例：
+还缺少：
 
-```json
-{
-  "project_id": "<project uuid>",
-  "finding_id": "<optional finding uuid>",
-  "target_url": "https://example.com/login",
-  "verdict": "exploitable",
-  "validator": "security-user",
-  "evidence_summary": "验证账号可复现越权访问。",
-  "request_summary": "GET /api/admin/users",
-  "response_summary": "返回非授权用户列表。",
-  "reproduction_steps": "登录普通账号后直接访问接口。",
-  "remediation_hint": "补充服务端权限校验。"
-}
-```
+- 已按用户要求暂时跳过 DAST 深化，计划最后再做。
+- 不做爬虫。
+- 不生成攻击 payload。
+- 不做登录态管理。
+- 不接 OWASP ZAP / Nuclei。
+- 不做漏洞复现链自动生成。
+- 不做自动复测。
 
-裁决值：
+### 5. SANDBOX 沙箱动态证据链
 
-- exploitable
-- uncertain
-- not_exploitable
+已实现：
 
-当前边界：
+- 人工证据记录。
+- Docker 隔离执行第一版。
+- 用户可填写沙箱命令。
+- 支持项目级默认沙箱命令和沙箱镜像。
+- 根据项目文件自动推荐命令模板和镜像。
+- Docker 执行策略包含：
+  - `--network none`
+  - `--read-only`
+  - 源码目录只读挂载到 `/workspace`
+  - `--cpus 1`
+  - `--memory 512m`
+  - `--pids-limit 128`
+  - `--security-opt no-new-privileges`
+  - `/tmp` 使用受限 tmpfs
+- 阻止明显危险命令，例如递归删除、格式化磁盘、关机等。
+- 采集退出码、标准输出、错误输出、耗时、超时状态和证据摘要。
+- 输出内容会对疑似密钥字段做简单脱敏。
 
-- 不做自动爬虫。
-- 不生成 payload。
-- 不主动攻击目标。
-- 不接 ZAP/Nuclei。
-- 后续可扩展为静态发现联动验证、策略生成、请求响应证据归档和自动复测。
-
-## SANDBOX 第一版运行策略与证据链记录
-
-当前已实现 SANDBOX 第一版，不真实启动容器，不执行命令，不做运行时监控。第一版用于记录沙箱运行策略和人工观察到的动态证据。
-
-接口：
+主要 API：
 
 ```text
 POST  /api/sandbox/evidence
+POST  /api/sandbox/run
+GET   /api/sandbox/projects/{project_id}/templates
 GET   /api/sandbox/projects/{project_id}/evidence
 PATCH /api/sandbox/evidence/{evidence_id}
 ```
 
-创建证据记录示例：
+还缺少：
 
-```json
-{
-  "project_id": "<project uuid>",
-  "finding_id": "<optional finding uuid>",
-  "run_command": "python agent_runner.py",
-  "runtime_profile": "python-agent",
-  "network_policy": "restricted",
-  "filesystem_policy": "readonly",
-  "observed_files": [{"path": ".env", "action": "read"}],
-  "observed_network": [{"host": "api.example.com", "action": "connect"}],
-  "observed_processes": [{"command": "python agent_runner.py"}],
-  "observed_tool_calls": [{"tool": "shell", "arguments": "whoami"}],
-  "evidence_summary": "Agent 尝试读取 .env 并调用 shell 工具。",
-  "operator": "security-user"
-}
-```
+- 不采集真实文件访问事件。
+- 不采集真实网络连接事件，因为当前默认禁网。
+- 不采集进程树详情。
+- 不接 eBPF、Sysmon 或审计探针。
+- 不支持交互式程序。
+- 不支持复杂多步骤场景编排。
+- 不做恶意样本级强隔离，只适合本地开发验证。
 
-当前边界：
+### 6. ASPM 平台治理与交付
 
-- 不真实执行 run_command。
-- 不启动 Docker 沙箱。
-- 不采集真实文件、网络、进程事件。
-- 不接 eBPF/Sysmon。
-- 后续可扩展为容器隔离执行、运行时行为采集、工具调用账本和 AI 驱动动态验证。
+已实现：
 
-## ASPM 第一版统一治理视图 API
+- 聚合项目模块启用状态、组件数量、Finding 数量、DAST 验证数量、SANDBOX 证据数量、扫描任务数量。
+- 按来源、严重等级、状态、DAST 裁决做统计。
+- 风险分计算。
+- Finding 治理字段：状态、负责人、备注、到期时间。
+- 攻击链第一版：从 Finding、DAST、SANDBOX 证据中生成简单攻击链视图。
+- 前端治理总览展示项目摘要、风险分、统计和风险列表。
 
-当前已实现 ASPM 第一版，不新增独立治理表，直接聚合各模块已有数据，按项目输出统一治理概览。
-
-接口：
+主要 API：
 
 ```text
-GET /api/aspm/projects/{project_id}/summary
+GET   /api/aspm/projects/{project_id}/summary
+PATCH /api/findings/{finding_id}/governance
+PATCH /api/findings/{finding_id}/status
 ```
 
-当前聚合字段：
+还缺少：
 
-- enabled_modules
-- risk_score
-- component_count
-- finding_count
-- dast_validation_count
-- sandbox_evidence_count
-- scan_task_count
-- findings_by_source
-- findings_by_severity
-- findings_by_status
-- dast_by_verdict
+- 风险分规则还比较简单，尚未接 CVSS、EPSS、资产暴露面、业务重要性。
+- 攻击链还只是规则化聚合，不是真正的图谱推理。
+- 没有 SLA 管理。
+- 没有工单系统接入。
+- 没有整改闭环流程。
+- 没有合规报告。
+- 没有管理层报表导出。
 
-临时风险分规则：
+## 当前关键限制
 
-- critical finding: +12
-- high finding: +8
-- medium finding: +4
-- low finding: +1
-- exploitable DAST verdict: +10
-- uncertain DAST verdict: +3
-- sandbox evidence: 每条 +2，最多 +10
-- 总分封顶 100
+- 平台目前主要面向本地开发环境。
+- 需要被检测项目的本地源码路径。
+- DAST 只有目标项目有 Web 地址时才有意义。
+- SANDBOX 需要 Docker Desktop 正常运行，并且需要提前准备对应镜像。
+- Semgrep 依赖本机 CLI 或 Docker 镜像，网络和镜像状态会影响 SAST 结果。
+- 当前没有用户权限系统，请不要暴露到公网。
 
-当前边界：
+## 下一步建议
 
-- 不做 SLA。
-- 不做攻击链。
-- 不做工单流转。
-- 不做 CI/CD 安全门禁。
-- 不做合规报告导出。
-- 后续可扩展为治理看板、整改闭环、门禁策略和报告中心。
-
-## 前端统一模块任务中心与治理总览
-
-当前前端已新增统一任务中心和 ASPM 治理总览，将六个模块第一版从 API 能力推进到页面可操作。
-
-新增视图：
-
-- 模块接入：启用/停用六个安全模块。
-- 任务中心：触发 SCA、SAST、AGENT，录入 DAST 验证和 SANDBOX 证据。
-- SCA 清单：查看组件清单。
-- 治理总览：查看 ASPM 项目汇总、风险分、findings 统计和最新风险发现。
-
-当前页面可调用：
-
-```text
-POST /api/sca/scan
-POST /api/sast/scan
-POST /api/agent/scan
-POST /api/dast/validations
-POST /api/sandbox/evidence
-GET  /api/aspm/projects/{project_id}/summary
-```
-
-当前边界：
-
-- 仍是单项目演示流。
-- DAST 和 SANDBOX 是人工记录，不执行真实动态测试。
-- SAST 和 AGENT 是基础规则扫描。
-- 后续需要补项目创建向导、多项目切换、任务历史和更完整的详情页。
+1. 继续完善 SANDBOX：补充运行事件结构化采集和证据页面。
+2. 回头处理 SAST 前端 `Failed to fetch` 问题。
+3. 增强 ASPM 攻击链：把 SCA、SAST、AGENT、DAST、SANDBOX 的证据串联起来。
+4. 为 SCA 增加 lockfile 解析和 SBOM 导出。
+5. 增加正式数据库迁移和任务队列。
