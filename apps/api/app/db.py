@@ -34,6 +34,10 @@ def create_db_schema() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_path VARCHAR(1000)"))
+        connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS runtime_url VARCHAR(1000)"))
+        connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS api_base_url VARCHAR(1000)"))
+        connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS sandbox_command VARCHAR(1000)"))
+        connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS sandbox_image VARCHAR(300)"))
         connection.execute(text("ALTER TABLE components ADD COLUMN IF NOT EXISTS vulnerability_ids JSONB NOT NULL DEFAULT '[]'::jsonb"))
         connection.execute(text("ALTER TABLE components ADD COLUMN IF NOT EXISTS severity VARCHAR(40)"))
         connection.execute(text("ALTER TABLE components ADD COLUMN IF NOT EXISTS risk_summary TEXT"))

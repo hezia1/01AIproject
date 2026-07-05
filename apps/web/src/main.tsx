@@ -9,8 +9,9 @@ type Severity = "critical" | "high" | "medium" | "low" | "info";
 type FindingStatus = "open" | "pending" | "confirmed" | "fixing" | "fixed" | "accepted_risk" | "false_positive" | "retest" | "closed";
 
 type SecurityModule = { key: ModuleKey; code: string; name: string; subtitle: string; category: string; description: string; capabilities: { title: string; description: string }[]; dependencies: ModuleKey[]; default_config: Record<string, unknown> };
-type Project = { id: string; name: string; business_owner: string | null; security_owner: string | null; repository_url: string | null; source_path: string | null; default_branch: string; risk_score: number; created_at: string };
-type ProjectDraft = { name: string; business_owner: string; security_owner: string; repository_url: string; source_path: string; default_branch: string };
+type Project = { id: string; name: string; business_owner: string | null; security_owner: string | null; repository_url: string | null; source_path: string | null; runtime_url: string | null; api_base_url: string | null; sandbox_command: string | null; sandbox_image: string | null; default_branch: string; risk_score: number; created_at: string };
+type ProjectDraft = { name: string; business_owner: string; security_owner: string; repository_url: string; source_path: string; runtime_url: string; api_base_url: string; sandbox_command: string; sandbox_image: string; default_branch: string };
+type ProjectAssetDraft = Pick<ProjectDraft, "runtime_url" | "api_base_url" | "sandbox_command" | "sandbox_image">;
 type ProjectModule = { project_id: string; module_key: ModuleKey; enabled: boolean; config: Record<string, unknown> };
 type ProjectAssetProbe = { project_id: string; source_path: string | null; path_exists: boolean; sca_files: string[]; source_files: string[]; agent_files: string[]; recommended_tasks: ("sca" | "sast" | "agent")[]; message: string };
 type Component = { id: string; ecosystem: string; name: string; version: string | null; dependency_type: string; source_file: string; package_manager: string | null; license?: string | null; risk_status?: string; vulnerability_ids?: string[]; severity?: Severity | null; risk_summary?: string | null; remediation?: string | null; license_risk?: string | null; risk_source?: string | null; osv_checked?: boolean; osv_error?: string | null };
@@ -47,7 +48,8 @@ function App() {
   const [modules, setModules] = useState<SecurityModule[]>(fallbackModules);
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
-  const [projectDraft, setProjectDraft] = useState<ProjectDraft>({ name: "", business_owner: "", security_owner: "", repository_url: "", source_path: "", default_branch: "main" });
+  const emptyProjectDraft: ProjectDraft = { name: "", business_owner: "", security_owner: "", repository_url: "", source_path: "", runtime_url: "", api_base_url: "", sandbox_command: "", sandbox_image: "", default_branch: "main" };
+  const [projectDraft, setProjectDraft] = useState<ProjectDraft>(emptyProjectDraft);
   const [assetProbe, setAssetProbe] = useState<ProjectAssetProbe | null>(null);
   const [enabledModules, setEnabledModules] = useState<Set<ModuleKey>>(() => new Set(DEFAULT_ENABLED_MODULES));
   const [components, setComponents] = useState<Component[]>([]);
@@ -122,6 +124,11 @@ function App() {
         setSastPath(nextProject.source_path);
         setAgentPath(nextProject.source_path);
       }
+      if (nextProject.runtime_url || nextProject.api_base_url) {
+        setTargetUrl(nextProject.runtime_url ?? nextProject.api_base_url ?? "");
+      }
+      if (nextProject.sandbox_command) setRunCommand(nextProject.sandbox_command);
+      if (nextProject.sandbox_image) setSandboxImage(nextProject.sandbox_image);
       await refreshProjectContext(nextProject.id);
       setStatus(`已切换到项目：${nextProject.name}`);
     } catch (error) {
@@ -177,17 +184,45 @@ function App() {
           security_owner: emptyToNull(projectDraft.security_owner),
           repository_url: emptyToNull(projectDraft.repository_url),
           source_path: emptyToNull(projectDraft.source_path),
+          runtime_url: emptyToNull(projectDraft.runtime_url),
+          api_base_url: emptyToNull(projectDraft.api_base_url),
+          sandbox_command: emptyToNull(projectDraft.sandbox_command),
+          sandbox_image: emptyToNull(projectDraft.sandbox_image),
           default_branch: projectDraft.default_branch.trim() || "main",
         }),
       });
       await Promise.all(DEFAULT_ENABLED_MODULES.map((moduleKey) => enableProjectModule(created.id, moduleKey, true)));
       const projectData = await request<Project[]>("/projects");
-      setProjectDraft({ name: "", business_owner: "", security_owner: "", repository_url: "", source_path: "", default_branch: "main" });
+      setProjectDraft(emptyProjectDraft);
       await selectProject(created, projectData);
       setStatus(`项目已创建，并默认启用 ${DEFAULT_ENABLED_MODULES.map((item) => item.toUpperCase()).join(" + ")}`);
     } catch (error) {
       console.error(error);
       setStatus("项目创建失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateProjectAssets(draft: ProjectAssetDraft) {
+    if (!project) return setStatus("请先选择项目");
+    setLoading(true);
+    try {
+      const updated = await request<Project>(`/projects/${project.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          runtime_url: emptyToNull(draft.runtime_url),
+          api_base_url: emptyToNull(draft.api_base_url),
+          sandbox_command: emptyToNull(draft.sandbox_command),
+          sandbox_image: emptyToNull(draft.sandbox_image),
+        }),
+      });
+      const projectData = await request<Project[]>("/projects");
+      await selectProject(updated, projectData);
+      setStatus("项目资产配置已保存");
+    } catch (error) {
+      console.error(error);
+      setStatus("项目资产配置保存失败");
     } finally {
       setLoading(false);
     }
@@ -329,7 +364,7 @@ function App() {
       <section className="workspace"><header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><div className="current-project-pill"><span>当前项目</span><strong>{project?.name ?? "未选择"}</strong></div><button className="primary-action" onClick={() => void bootstrap()} disabled={loading}>刷新数据</button></div></header>
         <div className={`api-status ${status.includes("失败") || status.includes("未连接") ? "warning" : "ok"}`}>{status}</div>
         {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={loading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
-        {activeView === "assets" && <ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("tasks")} onOpenModules={() => setActiveView("modules")} />}
+        {activeView === "assets" && <><ProjectAssetConfig project={project} loading={loading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("tasks")} onOpenModules={() => setActiveView("modules")} /></>}
         {activeView === "modules" && <ModulesView modules={optionalModules} project={project} enabledModules={enabledModules} selectedModules={selectedModules} savingKey={savingKey} onToggle={toggleModule} />}
         {activeView === "tasks" && <TaskCenter project={project} assetProbe={assetProbe} enabledModules={enabledModules} sourcePath={sourcePath} sastPath={sastPath} agentPath={agentPath} targetUrl={targetUrl} runCommand={runCommand} loading={loading} onSourcePathChange={setSourcePath} onSastPathChange={setSastPath} onAgentPathChange={setAgentPath} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onScan={runScan} onRecommended={runRecommendedScans} onDast={createDastValidation} onSandbox={createSandboxEvidence} />}
         {activeView === "sca" && <ScaView project={project} components={components} sourcePath={sourcePath} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onRunScan={() => runScan("sca")} />}
@@ -348,7 +383,22 @@ function viewEyebrow(view: ViewKey) { return view === "projects" ? "项目空间
 function viewTitle(view: ViewKey) { return view === "projects" ? "创建项目并切换当前项目" : view === "assets" ? "确认项目资产并查看推荐任务" : view === "modules" ? "选择接入的五个检测与验证模块" : view === "tasks" ? "按已启用模块触发检测与记录任务" : view === "sca" ? "查看项目 SBOM 与供应链组件清单" : view === "sast" ? "查看代码风险、CWE 与修复建议" : view === "agent" ? "查看 Agent 指令、工具和插件风险" : view === "dast" ? "对目标 URL 执行动态验证" : view === "sandbox" ? "运行受控命令并归档沙箱证据" : "按项目聚合模块结果与风险态势"; }
 
 function ProjectWorkspace({ projects, project, draft, loading, onDraftChange, onCreate, onSelect, onDelete }: { projects: Project[]; project: Project | null; draft: ProjectDraft; loading: boolean; onDraftChange: (draft: ProjectDraft) => void; onCreate: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; onSelect: (project: Project) => void; onDelete: (projectId: string) => Promise<void> }) {
-  return <section className="project-workspace"><div className="panel project-create"><div className="panel-header"><h2>项目创建向导</h2><span>ASPM 默认内置，SCA + SAST 默认启用</span></div><form className="project-form" onSubmit={(event) => void onCreate(event)}><label>项目名称<input value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} placeholder="例如：政企门户应用" /></label><label>业务负责人<input value={draft.business_owner} onChange={(event) => onDraftChange({ ...draft, business_owner: event.target.value })} placeholder="业务系统部" /></label><label>安全负责人<input value={draft.security_owner} onChange={(event) => onDraftChange({ ...draft, security_owner: event.target.value })} placeholder="应用安全组" /></label><label>代码仓库<input value={draft.repository_url} onChange={(event) => onDraftChange({ ...draft, repository_url: event.target.value })} placeholder="git.example.com/team/repo" /></label><label>本地源码路径<input value={draft.source_path} onChange={(event) => onDraftChange({ ...draft, source_path: event.target.value })} placeholder="D:\\project\\demo-repo" /></label><label>默认分支<input value={draft.default_branch} onChange={(event) => onDraftChange({ ...draft, default_branch: event.target.value })} placeholder="main" /></label><button className="primary-action" disabled={loading || !draft.name.trim()}><Plus size={16} />创建项目</button></form></div><div className="panel project-directory"><div className="panel-header"><h2>项目列表</h2><span>{projects.length} 个项目</span></div><div className="project-list">{projects.length === 0 ? <div className="empty-project">暂无项目。创建项目后，模块配置、任务中心、组件清单和 ASPM 总览会按项目隔离。</div> : projects.map((item) => <div className={`project-row ${project?.id === item.id ? "active" : ""}`} key={item.id}><button className="project-main" onClick={() => onSelect(item)} disabled={loading}><div><strong>{item.name}</strong><span>{item.repository_url ?? "未配置仓库"} · {item.default_branch}</span><span>{item.source_path ?? "未配置本地源码路径"}</span></div><span>{item.business_owner ?? "未配置业务负责人"}</span><span>{item.security_owner ?? "未配置安全负责人"}</span></button><button className="danger-action" disabled={loading} onClick={() => void onDelete(item.id)}>删除</button></div>)}</div></div><div className="panel current-project"><div className="panel-header"><h2>当前项目</h2><span>{project ? "已选择" : "未选择"}</span></div>{project ? <div className="project-detail"><strong>{project.name}</strong><span>业务：{project.business_owner ?? "未配置"}</span><span>安全：{project.security_owner ?? "未配置"}</span><span>仓库：{project.repository_url ?? "未配置"}</span><span>源码路径：{project.source_path ?? "未配置"}</span><span>分支：{project.default_branch}</span></div> : <div className="empty-project">请先创建或选择一个项目。</div>}</div></section>;
+  return <section className="project-workspace"><div className="panel project-create"><div className="panel-header"><h2>项目创建向导</h2><span>ASPM 默认内置，SCA + SAST 默认启用</span></div><form className="project-form" onSubmit={(event) => void onCreate(event)}><label>项目名称<input value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} placeholder="例如：政企门户应用" /></label><label>业务负责人<input value={draft.business_owner} onChange={(event) => onDraftChange({ ...draft, business_owner: event.target.value })} placeholder="业务系统部" /></label><label>安全负责人<input value={draft.security_owner} onChange={(event) => onDraftChange({ ...draft, security_owner: event.target.value })} placeholder="应用安全组" /></label><label>代码仓库<input value={draft.repository_url} onChange={(event) => onDraftChange({ ...draft, repository_url: event.target.value })} placeholder="git.example.com/team/repo" /></label><label>本地源码路径<input value={draft.source_path} onChange={(event) => onDraftChange({ ...draft, source_path: event.target.value })} placeholder="D:\\project\\demo-repo" /></label><label>运行地址<input value={draft.runtime_url} onChange={(event) => onDraftChange({ ...draft, runtime_url: event.target.value })} placeholder="http://localhost:3000" /></label><label>API 地址<input value={draft.api_base_url} onChange={(event) => onDraftChange({ ...draft, api_base_url: event.target.value })} placeholder="http://localhost:3000/api" /></label><label>沙箱命令<input value={draft.sandbox_command} onChange={(event) => onDraftChange({ ...draft, sandbox_command: event.target.value })} placeholder="npm test" /></label><label>沙箱镜像<input value={draft.sandbox_image} onChange={(event) => onDraftChange({ ...draft, sandbox_image: event.target.value })} placeholder="node:20-alpine" /></label><label>默认分支<input value={draft.default_branch} onChange={(event) => onDraftChange({ ...draft, default_branch: event.target.value })} placeholder="main" /></label><button className="primary-action" disabled={loading || !draft.name.trim()}><Plus size={16} />创建项目</button></form></div><div className="panel project-directory"><div className="panel-header"><h2>项目列表</h2><span>{projects.length} 个项目</span></div><div className="project-list">{projects.length === 0 ? <div className="empty-project">暂无项目。创建项目后，模块配置、任务中心、组件清单和 ASPM 总览会按项目隔离。</div> : projects.map((item) => <div className={`project-row ${project?.id === item.id ? "active" : ""}`} key={item.id}><button className="project-main" onClick={() => onSelect(item)} disabled={loading}><div><strong>{item.name}</strong><span>{item.repository_url ?? "未配置仓库"} · {item.default_branch}</span><span>{item.source_path ?? "未配置本地源码路径"}</span></div><span>{item.business_owner ?? "未配置业务负责人"}</span><span>{item.security_owner ?? "未配置安全负责人"}</span></button><button className="danger-action" disabled={loading} onClick={() => void onDelete(item.id)}>删除</button></div>)}</div></div><div className="panel current-project"><div className="panel-header"><h2>当前项目</h2><span>{project ? "已选择" : "未选择"}</span></div>{project ? <div className="project-detail"><strong>{project.name}</strong><span>业务：{project.business_owner ?? "未配置"}</span><span>安全：{project.security_owner ?? "未配置"}</span><span>仓库：{project.repository_url ?? "未配置"}</span><span>源码路径：{project.source_path ?? "未配置"}</span><span>运行地址：{project.runtime_url ?? "未配置"}</span><span>API 地址：{project.api_base_url ?? "未配置"}</span><span>沙箱命令：{project.sandbox_command ?? "未配置"}</span><span>沙箱镜像：{project.sandbox_image ?? "未配置"}</span><span>分支：{project.default_branch}</span></div> : <div className="empty-project">请先创建或选择一个项目。</div>}</div></section>;
+}
+
+function ProjectAssetConfig({ project, loading, onSave }: { project: Project | null; loading: boolean; onSave: (draft: ProjectAssetDraft) => Promise<void> }) {
+  const [draft, setDraft] = useState<ProjectAssetDraft>({ runtime_url: "", api_base_url: "", sandbox_command: "", sandbox_image: "" });
+
+  useEffect(() => {
+    setDraft({
+      runtime_url: project?.runtime_url ?? "",
+      api_base_url: project?.api_base_url ?? "",
+      sandbox_command: project?.sandbox_command ?? "",
+      sandbox_image: project?.sandbox_image ?? "",
+    });
+  }, [project?.id, project?.runtime_url, project?.api_base_url, project?.sandbox_command, project?.sandbox_image]);
+
+  return <section className="panel full asset-config"><div className="panel-header"><h2>项目资产配置</h2><span>{project ? "影响 DAST 与 SANDBOX 默认参数" : "请先选择项目"}</span></div><div className="asset-config-grid"><label>运行地址<input value={draft.runtime_url} onChange={(event) => setDraft({ ...draft, runtime_url: event.target.value })} placeholder="http://localhost:3000" disabled={!project || loading} /></label><label>API 地址<input value={draft.api_base_url} onChange={(event) => setDraft({ ...draft, api_base_url: event.target.value })} placeholder="http://localhost:3000/api" disabled={!project || loading} /></label><label>沙箱命令<input value={draft.sandbox_command} onChange={(event) => setDraft({ ...draft, sandbox_command: event.target.value })} placeholder="npm test" disabled={!project || loading} /></label><label>沙箱镜像<input value={draft.sandbox_image} onChange={(event) => setDraft({ ...draft, sandbox_image: event.target.value })} placeholder="node:20-alpine" disabled={!project || loading} /></label></div><div className="asset-config-actions"><button className="primary-action" disabled={!project || loading} onClick={() => void onSave(draft)}>保存资产配置</button></div></section>;
 }
 
 function ProjectAssets({ project, assetProbe, enabledModules, components, findings, validations, evidence, summary, onOpenTasks, onOpenModules }: { project: Project | null; assetProbe: ProjectAssetProbe | null; enabledModules: Set<ModuleKey>; components: Component[]; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null; onOpenTasks: () => void; onOpenModules: () => void }) {

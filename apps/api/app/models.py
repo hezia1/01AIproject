@@ -38,6 +38,10 @@ class ProjectCreate(BaseModel):
     security_owner: str | None = None
     repository_url: str | None = None
     source_path: str | None = None
+    runtime_url: str | None = None
+    api_base_url: str | None = None
+    sandbox_command: str | None = None
+    sandbox_image: str | None = None
     default_branch: str = "main"
 
 
@@ -45,6 +49,19 @@ class Project(ProjectCreate):
     id: UUID = Field(default_factory=uuid4)
     risk_score: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    business_owner: str | None = None
+    security_owner: str | None = None
+    repository_url: str | None = None
+    source_path: str | None = None
+    runtime_url: str | None = None
+    api_base_url: str | None = None
+    sandbox_command: str | None = None
+    sandbox_image: str | None = None
+    default_branch: str | None = None
 
 
 class ProjectAssetProbe(BaseModel):

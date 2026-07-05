@@ -772,6 +772,7 @@ th {
   }
 
   .project-workspace,
+  .asset-config-grid,
   .project-row {
     grid-template-columns: 1fr;
   }
@@ -946,6 +947,42 @@ th {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
   gap: 16px;
+}
+
+.asset-config {
+  margin-bottom: 16px;
+}
+
+.asset-config-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.asset-config-grid label {
+  color: #475569;
+  display: grid;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.asset-config-grid input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #172033;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.asset-config-grid input:focus {
+  border-color: #2563eb;
+  outline: 2px solid rgba(37, 99, 235, 0.12);
+}
+
+.asset-config-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 
 .asset-hero {

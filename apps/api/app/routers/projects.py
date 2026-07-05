@@ -15,7 +15,7 @@ from app.db_models import (
     SandboxEvidenceRecord,
     ScanTaskRecord,
 )
-from app.models import Project, ProjectAssetProbe, ProjectCreate
+from app.models import Project, ProjectAssetProbe, ProjectCreate, ProjectUpdate
 from app.repositories.mappers import project_to_schema
 
 router = APIRouter()
@@ -59,6 +59,20 @@ def get_project(project_id: UUID, db: Session = Depends(get_db)) -> Project:
     record = db.get(ProjectRecord, str(project_id))
     if record is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    return project_to_schema(record)
+
+
+@router.patch("/{project_id}", response_model=Project)
+def update_project(project_id: UUID, payload: ProjectUpdate, db: Session = Depends(get_db)) -> Project:
+    record = db.get(ProjectRecord, str(project_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(record, field, value)
+    db.commit()
+    db.refresh(record)
     return project_to_schema(record)
 
 
