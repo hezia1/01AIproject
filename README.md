@@ -88,8 +88,9 @@ http://localhost:5173
 - 许可证策略归一化第一版：`allowed`、`review_required`、`restricted`、`unknown`。
 - CycloneDX JSON SBOM 导出第一版。
 - CycloneDX `dependencies` 关系导出第一版：项目到直接依赖、直接依赖到同生态传递依赖。
+- SPDX 2.3 JSON SBOM 导出第一版，包含项目包、组件包、PURL 外部引用和 `DEPENDS_ON` 关系。
 - 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
-- 前端组件风险清单分页，每页 10 条，并展示依赖类型分布、许可证策略分布和 CycloneDX 导出按钮。
+- 前端组件风险清单分页，每页 10 条，并展示依赖类型分布、许可证策略分布、CycloneDX 和 SPDX 导出按钮。
 - 前端组件清单支持按生态、依赖类型、风险状态、严重等级和许可证策略筛选。
 - 前端展示直接 / 传递依赖、风险传递依赖和影响链数量概览。
 
@@ -98,12 +99,11 @@ http://localhost:5173
 ```text
 POST /api/sca/scan
 GET  /api/sca/projects/{project_id}/components
-GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx
+GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
 ```
 
 还缺少：
 
-- SPDX SBOM 导出。
 - 更完整的 SBOM 元数据、组件哈希和精确依赖边。
 - 更完整的依赖图谱、升级杠杆和传递影响分析。
 - 更完整的许可证义务说明、例外审批和组织级策略配置。

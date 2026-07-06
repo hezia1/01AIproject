@@ -11,7 +11,7 @@ from app.models import Component, ModuleKey, ScaScanRequest, ScaScanResult, Scan
 from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
-from app.services.sca_sbom import build_cyclonedx_sbom
+from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 
 router = APIRouter()
 
@@ -114,7 +114,7 @@ def list_project_components(project_id: UUID, db: Session = Depends(get_db)) -> 
 @router.get("/projects/{project_id}/sbom")
 def export_project_sbom(
     project_id: UUID,
-    format: str = Query(default="cyclonedx", pattern="^(cyclonedx|CycloneDX)$"),
+    format: str = Query(default="cyclonedx", pattern="^(cyclonedx|CycloneDX|spdx|SPDX)$"),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     project = db.get(ProjectRecord, str(project_id))
@@ -131,6 +131,8 @@ def export_project_sbom(
 
     if format.lower() == "cyclonedx":
         return build_cyclonedx_sbom(project, records)
+    if format.lower() == "spdx":
+        return build_spdx_sbom(project, records)
     raise HTTPException(status_code=400, detail="Unsupported SBOM format")
 
 

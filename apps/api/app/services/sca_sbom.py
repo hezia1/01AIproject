@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from uuid import uuid4
 
 from app.db_models import ComponentRecord, ProjectRecord
@@ -44,6 +45,48 @@ def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecor
     return bom
 
 
+def build_spdx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, object]:
+    created_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    project_spdx_id = spdx_id(f"project-{project.id}")
+    packages = [project_to_spdx_package(project, project_spdx_id)]
+    packages.extend(component_to_spdx_package(component) for component in components)
+
+    relationships: list[dict[str, str]] = [
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relationshipType": "DESCRIBES",
+            "relatedSpdxElement": project_spdx_id,
+        }
+    ]
+    for source_ref, target_ref in build_dependency_edges(
+        project,
+        components,
+        project_spdx_id,
+        ref_builder=component_spdx_ref,
+    ):
+        relationships.append(
+            {
+                "spdxElementId": source_ref,
+                "relationshipType": "DEPENDS_ON",
+                "relatedSpdxElement": target_ref,
+            }
+        )
+
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": f"{project.name} SCA SBOM",
+        "documentNamespace": f"https://ai-security-platform.local/spdx/{project.id}/{uuid4()}",
+        "creationInfo": {
+            "created": created_at,
+            "creators": ["Tool: AI Security Platform SCA Module-0.1.0"],
+        },
+        "packages": packages,
+        "relationships": relationships,
+    }
+
+
 def build_dependencies(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, object]]:
     project_ref = f"project:{project.id}"
     direct_components = [component for component in components if component.dependency_type != "transitive"]
@@ -66,6 +109,27 @@ def build_dependencies(project: ProjectRecord, components: list[ComponentRecord]
             continue
         dependencies.append({"ref": ref, "dependsOn": []})
     return dependencies
+
+
+def build_dependency_edges(
+    project: ProjectRecord,
+    components: list[ComponentRecord],
+    project_ref: str | None = None,
+    ref_builder=None,
+) -> list[tuple[str, str]]:
+    build_ref = ref_builder or component_ref
+    source_project_ref = project_ref or f"project:{project.id}"
+    direct_components = [component for component in components if component.dependency_type != "transitive"]
+    transitive_components = [component for component in components if component.dependency_type == "transitive"]
+    edges: list[tuple[str, str]] = [
+        (source_project_ref, build_ref(component)) for component in direct_components
+    ]
+
+    for direct in direct_components:
+        for component in transitive_components:
+            if components_share_dependency_context(direct, component):
+                edges.append((build_ref(direct), build_ref(component)))
+    return sorted(set(edges))
 
 
 def components_share_dependency_context(parent: ComponentRecord, child: ComponentRecord) -> bool:
@@ -112,6 +176,53 @@ def component_to_cyclonedx(component: ComponentRecord) -> dict[str, object]:
     return item
 
 
+def project_to_spdx_package(project: ProjectRecord, package_spdx_id: str) -> dict[str, object]:
+    return {
+        "name": project.name,
+        "SPDXID": package_spdx_id,
+        "versionInfo": project.default_branch or "main",
+        "downloadLocation": project.repository_url or "NOASSERTION",
+        "filesAnalyzed": False,
+        "licenseConcluded": "NOASSERTION",
+        "licenseDeclared": "NOASSERTION",
+        "copyrightText": "NOASSERTION",
+    }
+
+
+def component_to_spdx_package(component: ComponentRecord) -> dict[str, object]:
+    package: dict[str, object] = {
+        "name": component.name,
+        "SPDXID": component_spdx_ref(component),
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": False,
+        "licenseConcluded": normalize_spdx_license(component.license),
+        "licenseDeclared": normalize_spdx_license(component.license),
+        "copyrightText": "NOASSERTION",
+        "supplier": "NOASSERTION",
+        "primaryPackagePurpose": "LIBRARY",
+        "annotations": [
+            spdx_annotation("sca:ecosystem", component.ecosystem),
+            spdx_annotation("sca:dependency_type", component.dependency_type),
+            spdx_annotation("sca:source_file", component.source_file),
+            spdx_annotation("sca:package_manager", component.package_manager),
+            spdx_annotation("sca:risk_status", component.risk_status),
+            spdx_annotation("sca:risk_source", component.risk_source),
+        ],
+    }
+    if component.version:
+        package["versionInfo"] = component.version
+    purl = package_url(component)
+    if purl:
+        package["externalRefs"] = [
+            {
+                "referenceCategory": "PACKAGE-MANAGER",
+                "referenceType": "purl",
+                "referenceLocator": purl,
+            }
+        ]
+    return package
+
+
 def build_vulnerabilities(components: list[ComponentRecord]) -> list[dict[str, object]]:
     vulnerabilities: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
@@ -140,6 +251,14 @@ def component_ref(component: ComponentRecord) -> str:
     return f"{component.ecosystem}:{component.name}@{version}"
 
 
+def spdx_id(value: str) -> str:
+    return "SPDXRef-" + re.sub(r"[^A-Za-z0-9.-]", "-", value).strip("-")
+
+
+def component_spdx_ref(component: ComponentRecord) -> str:
+    return spdx_id(component_ref(component))
+
+
 def dependency_scope(dependency_type: str) -> str:
     if dependency_type in {"development", "test"}:
         return "excluded"
@@ -163,6 +282,26 @@ def package_url(component: ComponentRecord) -> str | None:
     if component.ecosystem == "go":
         return f"pkg:golang/{component.name}@{normalized_version}"
     return None
+
+
+def normalize_spdx_license(license_value: str | None) -> str:
+    if not license_value:
+        return "NOASSERTION"
+    normalized = license_value.strip()
+    if not normalized or normalized.lower() in {"unknown", "none"}:
+        return "NOASSERTION"
+    if any(char.isspace() for char in normalized) and not any(token in normalized for token in ("AND", "OR", "WITH")):
+        return f"LicenseRef-{spdx_id(normalized).removeprefix('SPDXRef-')}"
+    return normalized
+
+
+def spdx_annotation(key: str, value: object | None) -> dict[str, str]:
+    return {
+        "annotationType": "OTHER",
+        "annotator": "Tool: AI Security Platform SCA Module-0.1.0",
+        "annotationDate": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "comment": f"{key}={'' if value is None else value}",
+    }
 
 
 def cyclonedx_severity(severity: str | None) -> str:
