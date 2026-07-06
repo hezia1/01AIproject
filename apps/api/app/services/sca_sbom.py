@@ -9,6 +9,7 @@ from app.db_models import ComponentRecord, ProjectRecord
 def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, object]:
     bom_components = [component_to_cyclonedx(component) for component in components]
     vulnerabilities = build_vulnerabilities(components)
+    dependencies = build_dependencies(project, components)
     bom: dict[str, object] = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -36,10 +37,53 @@ def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecor
             ],
         },
         "components": bom_components,
+        "dependencies": dependencies,
     }
     if vulnerabilities:
         bom["vulnerabilities"] = vulnerabilities
     return bom
+
+
+def build_dependencies(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, object]]:
+    project_ref = f"project:{project.id}"
+    direct_components = [component for component in components if component.dependency_type != "transitive"]
+    transitive_components = [component for component in components if component.dependency_type == "transitive"]
+    direct_refs = sorted(component_ref(component) for component in direct_components)
+    dependencies: list[dict[str, object]] = [{"ref": project_ref, "dependsOn": direct_refs}]
+
+    for direct in direct_components:
+        related_transitives = [
+            component_ref(component)
+            for component in transitive_components
+            if components_share_dependency_context(direct, component)
+        ]
+        dependencies.append({"ref": component_ref(direct), "dependsOn": sorted(set(related_transitives))})
+
+    direct_ref_set = set(direct_refs)
+    for component in components:
+        ref = component_ref(component)
+        if ref in direct_ref_set:
+            continue
+        dependencies.append({"ref": ref, "dependsOn": []})
+    return dependencies
+
+
+def components_share_dependency_context(parent: ComponentRecord, child: ComponentRecord) -> bool:
+    if parent.ecosystem != child.ecosystem:
+        return False
+    parent_sources = set(split_sources(parent.source_file))
+    child_sources = set(split_sources(child.source_file))
+    if parent_sources & child_sources:
+        return True
+    if parent.package_manager and child.package_manager and parent.package_manager == child.package_manager:
+        return True
+    return False
+
+
+def split_sources(source_file: str | None) -> list[str]:
+    if not source_file:
+        return []
+    return [item.strip() for item in source_file.split(",") if item.strip()]
 
 
 def component_to_cyclonedx(component: ComponentRecord) -> dict[str, object]:
