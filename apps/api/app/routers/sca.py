@@ -1,7 +1,7 @@
 ﻿from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.models import Component, ModuleKey, ScaScanRequest, ScaScanResult, Scan
 from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
+from app.services.sca_sbom import build_cyclonedx_sbom
 
 router = APIRouter()
 
@@ -108,6 +109,29 @@ def list_project_components(project_id: UUID, db: Session = Depends(get_db)) -> 
         .order_by(ComponentRecord.ecosystem, ComponentRecord.name)
     ).all()
     return [component_to_schema(record) for record in records]
+
+
+@router.get("/projects/{project_id}/sbom")
+def export_project_sbom(
+    project_id: UUID,
+    format: str = Query(default="cyclonedx", pattern="^(cyclonedx|CycloneDX)$"),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    records = db.scalars(
+        select(ComponentRecord)
+        .where(ComponentRecord.project_id == str(project_id))
+        .order_by(ComponentRecord.ecosystem, ComponentRecord.name)
+    ).all()
+    if not records:
+        raise HTTPException(status_code=400, detail="No SCA components found. Run SCA scan before exporting SBOM.")
+
+    if format.lower() == "cyclonedx":
+        return build_cyclonedx_sbom(project, records)
+    raise HTTPException(status_code=400, detail="Unsupported SBOM format")
 
 
 

@@ -86,19 +86,22 @@ http://localhost:5173
 - 接入 OSV 漏洞库查询。
 - 内置少量本地漏洞规则。
 - 基础许可证风险识别。
+- CycloneDX JSON SBOM 导出第一版。
 - 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
-- 前端组件风险清单分页，每页 10 条，并展示依赖类型分布。
+- 前端组件风险清单分页，每页 10 条，并展示依赖类型分布和 CycloneDX 导出按钮。
 
 主要 API：
 
 ```text
 POST /api/sca/scan
 GET  /api/sca/projects/{project_id}/components
+GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx
 ```
 
 还缺少：
 
-- SBOM 标准导出，例如 CycloneDX / SPDX。
+- SPDX SBOM 导出。
+- 更完整的 SBOM 元数据、依赖关系图和组件哈希。
 - 更完整的依赖图谱与传递影响分析。
 - 更完整的许可证合规策略。
 - 更完整的本地漏洞规则库。
