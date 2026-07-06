@@ -81,12 +81,13 @@ http://localhost:5173
 
 - 解析依赖文件并生成组件清单。
 - 支持 `package.json`、`requirements.txt`、`pom.xml`、`go.mod`。
-- 组件去重、依赖类型、来源文件、包管理器字段。
+- 支持 lockfile 解析第一版：`package-lock.json`、`yarn.lock`、`pnpm-lock.yaml`、`poetry.lock`、`Pipfile.lock`。
+- 组件去重、依赖类型、直接/传递依赖标记、来源文件、包管理器字段。
 - 接入 OSV 漏洞库查询。
 - 内置少量本地漏洞规则。
 - 基础许可证风险识别。
 - 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
-- 前端组件风险清单分页，每页 10 条。
+- 前端组件风险清单分页，每页 10 条，并展示依赖类型分布。
 
 主要 API：
 
@@ -97,8 +98,8 @@ GET  /api/sca/projects/{project_id}/components
 
 还缺少：
 
-- lockfile 传递依赖解析，例如 `package-lock.json`、`pnpm-lock.yaml`、`poetry.lock`。
 - SBOM 标准导出，例如 CycloneDX / SPDX。
+- 更完整的依赖图谱与传递影响分析。
 - 更完整的许可证合规策略。
 - 更完整的本地漏洞规则库。
 - Syft / Trivy / Grype 等专业工具接入。
