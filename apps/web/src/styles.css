@@ -749,6 +749,29 @@ th {
   gap: 12px;
 }
 
+.filter-grid {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.filter-control {
+  color: #475569;
+  display: grid;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.filter-control select {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #172033;
+  font: inherit;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
 .ecosystem-badge {
   background: #eef2ff;
   border-radius: 999px;
@@ -768,6 +791,10 @@ th {
 
 @media (max-width: 980px) {
   .path-control {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-grid {
     grid-template-columns: 1fr;
   }
 
