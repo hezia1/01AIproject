@@ -50,16 +50,8 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
     except SandboxCommandRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    observed_process = {
-        "command": result.command,
-        "cwd": result.cwd,
-        "image": result.image,
-        "exit_code": result.exit_code,
-        "elapsed_ms": result.elapsed_ms,
-        "timed_out": result.timed_out,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
+    observed_process = build_process_event(result, payload.timeout_seconds)
+    execution_policy = build_execution_policy(result)
     record = SandboxEvidenceRecord(
         project_id=str(payload.project_id),
         finding_id=str(payload.finding_id) if payload.finding_id else None,
@@ -67,16 +59,36 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
         runtime_profile=result.runtime_profile,
         network_policy="docker-network-none",
         filesystem_policy="readonly-source-mount",
-        observed_files=[],
-        observed_network=[{"policy": "none", "allowed": False}],
+        observed_files=[
+            {
+                "event_type": "mount",
+                "path": "/workspace",
+                "source": result.cwd,
+                "mode": "readonly",
+                "purpose": "source-code",
+            }
+        ],
+        observed_network=[
+            {
+                "event_type": "network_policy",
+                "policy": "none",
+                "allowed": False,
+                "scope": "container",
+                "evidence": "Docker run uses --network none.",
+            }
+        ],
         observed_processes=[observed_process],
         observed_tool_calls=[
             {
                 "tool": "docker",
                 "arguments": result.command,
                 "image": result.image,
-                "resource_limits": {"cpus": "1", "memory": "512m", "pids_limit": 128},
-                "mount": {"source": result.cwd, "target": "/workspace", "mode": "ro"},
+                "event_type": "container_run",
+                "resource_limits": execution_policy["resource_limits"],
+                "security_options": execution_policy["security_options"],
+                "mount": execution_policy["mount"],
+                "tmpfs": execution_policy["tmpfs"],
+                "network": execution_policy["network"],
             }
         ],
         evidence_summary=result.evidence_summary,
@@ -122,6 +134,80 @@ def update_evidence(
     db.commit()
     db.refresh(record)
     return sandbox_evidence_to_schema(record)
+
+
+def build_process_event(result, timeout_seconds: int) -> dict[str, object]:
+    return {
+        "event_type": "process_execution",
+        "command": result.command,
+        "cwd": result.cwd,
+        "image": result.image,
+        "exit_code": result.exit_code,
+        "elapsed_ms": result.elapsed_ms,
+        "timed_out": result.timed_out,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "execution": {
+            "command": result.command,
+            "image": result.image,
+            "working_directory": "/workspace",
+            "source_directory": result.cwd,
+            "exit_code": result.exit_code,
+            "elapsed_ms": result.elapsed_ms,
+            "timeout_seconds": timeout_seconds,
+            "timed_out": result.timed_out,
+        },
+        "output": {
+            "stdout_summary": first_nonempty_line(result.stdout),
+            "stderr_summary": first_nonempty_line(result.stderr),
+            "stdout_truncated": result.stdout_truncated,
+            "stderr_truncated": result.stderr_truncated,
+            "redacted": True,
+        },
+        "timeline": build_timeline(result),
+    }
+
+
+def build_execution_policy(result) -> dict[str, object]:
+    return {
+        "network": {"mode": "none", "egress_allowed": False},
+        "filesystem": {"root": "read-only", "workspace_mount": "read-only"},
+        "resource_limits": {"cpus": "1", "memory": "512m", "pids_limit": 128},
+        "security_options": ["no-new-privileges", "read-only-rootfs"],
+        "tmpfs": {"path": "/tmp", "mode": "rw,noexec,nosuid", "size": "128m"},
+        "mount": {"source": result.cwd, "target": "/workspace", "mode": "ro"},
+    }
+
+
+def build_timeline(result) -> list[dict[str, object]]:
+    final_stage = "timeout" if result.timed_out else "completed"
+    final_detail = "Command timed out before completion." if result.timed_out else f"Process exited with code {result.exit_code}."
+    return [
+        {
+            "stage": "prepared",
+            "status": "completed",
+            "detail": f"Resolved image {result.image or '-'} and mounted source as readonly workspace.",
+        },
+        {
+            "stage": "executed",
+            "status": "completed",
+            "detail": "Docker container ran with no network, read-only root filesystem, and resource limits.",
+        },
+        {
+            "stage": final_stage,
+            "status": "timeout" if result.timed_out else "completed",
+            "detail": final_detail,
+            "elapsed_ms": result.elapsed_ms,
+        },
+    ]
+
+
+def first_nonempty_line(value: str) -> str:
+    for line in value.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:240]
+    return ""
 
 
 def _require_sandbox_project(db: Session, project_id: UUID) -> ProjectRecord:

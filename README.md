@@ -212,6 +212,11 @@ PATCH /api/dast/validations/{validation_id}
 - 阻止明显危险命令，例如递归删除、格式化磁盘、关机等。
 - 采集退出码、标准输出、错误输出、耗时、超时状态和证据摘要。
 - 输出内容会对疑似密钥字段做简单脱敏。
+- 结构化记录执行事件：命令、镜像、工作目录、退出码、耗时、超时状态。
+- 结构化记录隔离策略：禁网、只读挂载、CPU / 内存 / PID 限制、tmpfs、`no-new-privileges`。
+- 结构化记录输出摘要：标准输出摘要、错误输出摘要、截断状态和脱敏状态。
+- 结构化记录运行时间线：准备、执行、完成或超时阶段。
+- 前端 SANDBOX 证据页展示执行结果、输出摘要、策略账本和时间线事件。
 
 主要 API：
 
@@ -273,8 +278,8 @@ PATCH /api/findings/{finding_id}/status
 
 ## 下一步建议
 
-1. 继续完善 SANDBOX：补充运行事件结构化采集和证据页面。
+1. 增强 ASPM 攻击链：把 SCA、SAST、AGENT、DAST、SANDBOX 的证据串联得更清晰。
 2. 回头处理 SAST 前端 `Failed to fetch` 问题。
-3. 增强 ASPM 攻击链：把 SCA、SAST、AGENT、DAST、SANDBOX 的证据串联起来。
-4. 为 SCA 增加 lockfile 解析和 SBOM 导出。
-5. 增加正式数据库迁移和任务队列。
+3. 为 SCA 增加 lockfile 解析和 SBOM 导出。
+4. 增加正式数据库迁移和任务队列。
+5. 补充报告导出和审计日志。
