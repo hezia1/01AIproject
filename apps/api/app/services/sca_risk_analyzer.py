@@ -2,52 +2,11 @@
 
 import re
 from dataclasses import replace
-from typing import NamedTuple
 
 from app.models import Severity
 from app.services.osv_client import OsvLookupError, supports_osv, query_osv
 from app.services.sca_parser import ParsedComponent
-
-
-class VulnerabilityRule(NamedTuple):
-    ecosystem: str
-    name: str
-    affected_below: str
-    vulnerability_id: str
-    severity: Severity
-    summary: str
-    fixed_version: str
-
-
-VULNERABILITY_RULES: tuple[VulnerabilityRule, ...] = (
-    VulnerabilityRule(
-        ecosystem="npm",
-        name="fastify",
-        affected_below="4.26.2",
-        vulnerability_id="LOCAL-NPM-FASTIFY-0001",
-        severity=Severity.high,
-        summary="Fastify 旧版本存在供应链安全公告命中风险，建议优先升级。",
-        fixed_version="4.26.2",
-    ),
-    VulnerabilityRule(
-        ecosystem="pypi",
-        name="requests",
-        affected_below="2.32.0",
-        vulnerability_id="LOCAL-PYPI-REQUESTS-0001",
-        severity=Severity.medium,
-        summary="requests 低版本命中本地供应链风险规则，建议升级到修复版本。",
-        fixed_version="2.32.0",
-    ),
-    VulnerabilityRule(
-        ecosystem="maven",
-        name="org.springframework:spring-core",
-        affected_below="6.1.14",
-        vulnerability_id="LOCAL-MAVEN-SPRING-CORE-0001",
-        severity=Severity.high,
-        summary="Spring Core 旧版本命中本地漏洞规则，需要升级并回归验证。",
-        fixed_version="6.1.14",
-    ),
-)
+from app.services.sca_vulnerability_rules import load_vulnerability_rules, matches_vulnerability_rule
 
 LICENSE_POLICY_RULES = {
     "mit": "allowed",
@@ -88,7 +47,11 @@ def analyze_components(components: list[ParsedComponent]) -> list[ParsedComponen
 
 
 def analyze_component(component: ParsedComponent) -> ParsedComponent:
-    matched_rules = [rule for rule in VULNERABILITY_RULES if matches_rule(component, rule)]
+    matched_rules = [
+        rule
+        for rule in load_vulnerability_rules()
+        if matches_vulnerability_rule(component.ecosystem, component.name, component.version, rule)
+    ]
     osv_vulnerabilities, osv_checked, osv_error = lookup_osv_vulnerabilities(component)
     vulnerability_ids = [item.vulnerability_id for item in osv_vulnerabilities] + [
         rule.vulnerability_id for rule in matched_rules
@@ -103,7 +66,8 @@ def analyze_component(component: ParsedComponent) -> ParsedComponent:
         remediation.append("根据 OSV 漏洞公告升级到不受影响版本，必要时替换组件并执行回归验证。")
     if matched_rules:
         summaries.extend(rule.summary for rule in matched_rules)
-        remediation.extend(f"升级 {rule.name} 到 {rule.fixed_version} 或更高版本。" for rule in matched_rules)
+        summaries.extend(rule_references_summary(rule.references) for rule in matched_rules if rule.references)
+        remediation.extend(f"升级 {rule.package} 到 {rule.fixed_version} 或更高版本。" for rule in matched_rules)
     if license_policy in {"restricted", "review_required", "unknown"}:
         summaries.append(license_summary(component.license, license_policy))
         remediation.append(license_remediation(license_policy))
@@ -173,17 +137,6 @@ def determine_risk_source(
     return "not_supported"
 
 
-def matches_rule(component: ParsedComponent, rule: VulnerabilityRule) -> bool:
-    if component.ecosystem != rule.ecosystem or component.name.lower() != rule.name.lower():
-        return False
-    if component.version is None:
-        return True
-    version = extract_version(component.version)
-    if version is None:
-        return True
-    return compare_versions(version, rule.affected_below) < 0
-
-
 def classify_license(license_name: str | None) -> str:
     if not license_name:
         return "unknown"
@@ -220,27 +173,11 @@ def license_remediation(policy: str) -> str:
     return "补全许可证元数据，无法确认前按需复核处理。"
 
 
+def rule_references_summary(references: tuple[str, ...]) -> str:
+    return "本地规则参考：" + "，".join(references[:2])
+
+
 def highest_severity(severities: list[Severity]) -> Severity | None:
     if not severities:
         return None
     return max(severities, key=lambda item: SEVERITY_WEIGHT[item])
-
-
-def extract_version(raw_version: str) -> str | None:
-    match = re.search(r"\d+(?:\.\d+){0,3}", raw_version)
-    return match.group(0) if match else None
-
-
-def compare_versions(left: str, right: str) -> int:
-    left_parts = version_parts(left)
-    right_parts = version_parts(right)
-    width = max(len(left_parts), len(right_parts))
-    left_parts.extend([0] * (width - len(left_parts)))
-    right_parts.extend([0] * (width - len(right_parts)))
-    if left_parts == right_parts:
-        return 0
-    return -1 if left_parts < right_parts else 1
-
-
-def version_parts(version: str) -> list[int]:
-    return [int(part) for part in re.findall(r"\d+", version)]
