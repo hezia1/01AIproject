@@ -19,6 +19,7 @@ from app.models import (
     ScaScanHistoryItem,
     ScaScanRequest,
     ScaScanResult,
+    ScaToolStatus,
     ScanStatus,
 )
 from app.repositories.mappers import component_to_schema
@@ -58,6 +59,8 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
     try:
         parsed = parse_dependency_tree(payload.source_path)
         tool_scan = scan_with_syft_grype(payload.source_path) if payload.enable_tool_scan else None
+        tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
+        scan.scan_metadata = {"sca_tool_scan": tool_status.model_dump()}
         parsed_components = merge_tool_components(parsed.components, tool_scan)
         analyzed_components = apply_tool_vulnerabilities(analyze_components(parsed_components), tool_scan)
         records: list[ComponentRecord] = []
@@ -109,6 +112,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         scanned_files=parsed.scanned_files,
         component_count=len(records),
         components=[component_to_schema(record) for record in records],
+        tool_status=tool_status,
     )
 
 
@@ -164,6 +168,7 @@ def list_project_sca_scan_history(project_id: UUID, db: Session = Depends(get_db
                 high_count=sum(1 for component in components if component.severity == "high"),
                 vulnerable_count=sum(1 for component in components if component.risk_status == "vulnerable"),
                 license_risk_count=sum(1 for component in components if component.license_risk in {"restricted", "review_required", "unknown"}),
+                tool_status=scan_tool_status(scan),
             )
         )
     return history
@@ -227,6 +232,7 @@ def export_project_sca_report(
     return ScaReport(
         project=project_report(project),
         scan=scan_report(scan, resolved_scan_id),
+        tool_status=scan_tool_status(scan),
         summary=report_summary(components),
         distributions=report_distributions(components),
         top_risk_components=top_risk_components(components),
@@ -272,6 +278,36 @@ def get_project_dependency_graph(
         raise HTTPException(status_code=400, detail="No SCA components found. Run SCA scan before building graph.")
 
     return build_dependency_graph(project, records)
+
+
+def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToolStatus:
+    if not enabled:
+        return ScaToolStatus(enabled=False, status="disabled")
+    if tool_scan is None:
+        return ScaToolStatus(enabled=True, status="failed", errors=["tool scan did not run"])
+    if not tool_scan.errors:
+        status = "success"
+    elif tool_scan.components or tool_scan.vulnerabilities:
+        status = "partial_failed"
+    else:
+        status = "failed"
+    return ScaToolStatus(
+        enabled=True,
+        status=status,
+        syft_component_count=len(tool_scan.components),
+        grype_vulnerability_count=len(tool_scan.vulnerabilities),
+        errors=tool_scan.errors,
+    )
+
+
+def scan_tool_status(scan: ScanTaskRecord | None) -> ScaToolStatus | None:
+    if scan is None:
+        return None
+    metadata = scan.scan_metadata or {}
+    value = metadata.get("sca_tool_scan") if isinstance(metadata, dict) else None
+    if not isinstance(value, dict):
+        return None
+    return ScaToolStatus(**value)
 
 
 def merge_tool_components(

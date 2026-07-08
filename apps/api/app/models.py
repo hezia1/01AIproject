@@ -240,6 +240,14 @@ class ScaScanRequest(BaseModel):
     enable_tool_scan: bool = False
 
 
+class ScaToolStatus(BaseModel):
+    enabled: bool = False
+    status: str = "disabled"
+    syft_component_count: int = 0
+    grype_vulnerability_count: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
 class ScaScanResult(BaseModel):
     project_id: UUID
     scan_task_id: UUID
@@ -247,6 +255,7 @@ class ScaScanResult(BaseModel):
     scanned_files: list[str]
     component_count: int
     components: list[Component]
+    tool_status: ScaToolStatus | None = None
 
 
 class ScaScanHistoryItem(BaseModel):
@@ -262,6 +271,7 @@ class ScaScanHistoryItem(BaseModel):
     high_count: int = 0
     vulnerable_count: int = 0
     license_risk_count: int = 0
+    tool_status: ScaToolStatus | None = None
 
 
 class ScaScanDiffItem(BaseModel):
@@ -317,6 +327,7 @@ class ScaReportComponent(BaseModel):
 class ScaReport(BaseModel):
     project: dict[str, object | None]
     scan: dict[str, object | None]
+    tool_status: ScaToolStatus | None = None
     summary: dict[str, object]
     distributions: dict[str, dict[str, int]]
     top_risk_components: list[ScaReportComponent] = Field(default_factory=list)

@@ -46,6 +46,7 @@ def create_db_schema() -> None:
         connection.execute(text("ALTER TABLE components ADD COLUMN IF NOT EXISTS risk_source VARCHAR(80)"))
         connection.execute(text("ALTER TABLE components ADD COLUMN IF NOT EXISTS osv_checked BOOLEAN NOT NULL DEFAULT FALSE"))
         connection.execute(text("ALTER TABLE components ADD COLUMN IF NOT EXISTS osv_error TEXT"))
+        connection.execute(text("ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb"))
         connection.execute(text("ALTER TABLE findings ALTER COLUMN rule_id TYPE VARCHAR(300)"))
         connection.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS remediation_owner VARCHAR(120)"))
         connection.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS remediation_note TEXT"))

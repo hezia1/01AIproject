@@ -54,6 +54,7 @@ class ScanTaskRecord(Base):
     scan_type: Mapped[str] = mapped_column(String(80), nullable=False, default="full")
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued")
     commit_hash: Mapped[str | None] = mapped_column(String(80))
+    scan_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
