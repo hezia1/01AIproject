@@ -299,6 +299,30 @@ class ScaScanDiffResult(BaseModel):
     changes: list[ScaScanDiffItem] = Field(default_factory=list)
 
 
+class ScaReportComponent(BaseModel):
+    ecosystem: str
+    name: str
+    version: str | None = None
+    dependency_type: str
+    risk_status: str
+    severity: Severity | None = None
+    vulnerability_ids: list[str] = Field(default_factory=list)
+    license: str | None = None
+    license_risk: str | None = None
+    risk_source: str | None = None
+    remediation: str | None = None
+
+
+class ScaReport(BaseModel):
+    project: dict[str, object | None]
+    scan: dict[str, object | None]
+    summary: dict[str, object]
+    distributions: dict[str, dict[str, int]]
+    top_risk_components: list[ScaReportComponent] = Field(default_factory=list)
+    trend: ScaScanDiffResult | None = None
+    recommendations: list[str] = Field(default_factory=list)
+
+
 class SastScanRequest(BaseModel):
     project_id: UUID
     source_path: str = Field(min_length=1)

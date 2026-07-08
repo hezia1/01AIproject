@@ -10,6 +10,8 @@ from app.db_models import ComponentRecord, ProjectModuleRecord, ProjectRecord, S
 from app.models import (
     Component,
     ModuleKey,
+    ScaReport,
+    ScaReportComponent,
     ScaScanDiffItem,
     ScaScanDiffResult,
     ScaScanDiffSummary,
@@ -199,6 +201,36 @@ def get_project_sca_scan_diff(
     )
 
 
+@router.get("/projects/{project_id}/report", response_model=ScaReport)
+def export_project_sca_report(
+    project_id: UUID,
+    scan_task_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> ScaReport:
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    resolved_scan_id = scan_task_id or latest_sca_scan_id(db, project_id)
+    if resolved_scan_id is None:
+        raise HTTPException(status_code=400, detail="No completed SCA scans found. Run SCA scan before exporting report.")
+
+    scan = db.get(ScanTaskRecord, str(resolved_scan_id))
+    components = load_project_components(db, project_id, resolved_scan_id)
+    if not components:
+        raise HTTPException(status_code=400, detail="No SCA components found for selected scan.")
+
+    return ScaReport(
+        project=project_report(project),
+        scan=scan_report(scan, resolved_scan_id),
+        summary=report_summary(components),
+        distributions=report_distributions(components),
+        top_risk_components=top_risk_components(components),
+        trend=build_scan_diff_result(db, project_id, resolved_scan_id),
+        recommendations=report_recommendations(components),
+    )
+
+
 @router.get("/projects/{project_id}/sbom")
 def export_project_sbom(
     project_id: UUID,
@@ -274,6 +306,25 @@ def load_completed_sca_scans(db: Session, project_id: UUID) -> list[ScanTaskReco
         )
         .order_by(ScanTaskRecord.finished_at.desc().nullslast(), ScanTaskRecord.created_at.desc())
     ).all()
+
+
+def build_scan_diff_result(db: Session, project_id: UUID, target_scan_id: UUID) -> ScaScanDiffResult:
+    scans = load_completed_sca_scans(db, project_id)
+    resolved_base = previous_sca_scan_id(scans, target_scan_id)
+    if resolved_base is None:
+        return ScaScanDiffResult(project_id=project_id, target_scan_id=target_scan_id, has_comparison=False)
+
+    base_components = load_project_components(db, project_id, resolved_base)
+    target_components = load_project_components(db, project_id, target_scan_id)
+    changes = build_scan_diff_items(base_components, target_components)
+    return ScaScanDiffResult(
+        project_id=project_id,
+        base_scan_id=resolved_base,
+        target_scan_id=target_scan_id,
+        has_comparison=True,
+        summary=build_scan_diff_summary(changes),
+        changes=changes,
+    )
 
 
 def previous_sca_scan_id(scans: list[ScanTaskRecord], target_scan_id: UUID) -> UUID | None:
@@ -373,6 +424,116 @@ def risk_change_type(base: ComponentRecord, target: ComponentRecord) -> str:
 
 def is_risky_for_diff(component: ComponentRecord) -> bool:
     return component.risk_status in {"vulnerable", "license-risk", "review-required"} or bool(component.vulnerability_ids) or component.severity in {"critical", "high"}
+
+
+def project_report(project: ProjectRecord) -> dict[str, object | None]:
+    return {
+        "id": str(project.id),
+        "name": project.name,
+        "business_owner": project.business_owner,
+        "security_owner": project.security_owner,
+        "repository_url": project.repository_url,
+        "source_path": project.source_path,
+        "default_branch": project.default_branch,
+        "runtime_url": project.runtime_url,
+        "api_base_url": project.api_base_url,
+    }
+
+
+def scan_report(scan: ScanTaskRecord | None, scan_task_id: UUID) -> dict[str, object | None]:
+    return {
+        "scan_task_id": str(scan_task_id),
+        "status": scan.status if scan else None,
+        "started_at": scan.started_at.isoformat() if scan and scan.started_at else None,
+        "finished_at": scan.finished_at.isoformat() if scan and scan.finished_at else None,
+        "created_at": scan.created_at.isoformat() if scan else None,
+    }
+
+
+def report_summary(components: list[ComponentRecord]) -> dict[str, object]:
+    risky_components = [component for component in components if is_report_risky(component)]
+    return {
+        "component_count": len(components),
+        "direct_dependency_count": sum(1 for component in components if component.dependency_type != "transitive"),
+        "transitive_dependency_count": sum(1 for component in components if component.dependency_type == "transitive"),
+        "risky_component_count": len(risky_components),
+        "critical_count": sum(1 for component in components if component.severity == "critical"),
+        "high_count": sum(1 for component in components if component.severity == "high"),
+        "vulnerability_count": sum(len(component.vulnerability_ids or []) for component in components),
+        "license_risk_count": sum(1 for component in components if component.license_risk in {"restricted", "review_required", "unknown"}),
+        "osv_checked_count": sum(1 for component in components if component.osv_checked),
+        "osv_error_count": sum(1 for component in components if component.osv_error),
+    }
+
+
+def report_distributions(components: list[ComponentRecord]) -> dict[str, dict[str, int]]:
+    return {
+        "ecosystem": count_component_values(components, "ecosystem"),
+        "dependency_type": count_component_values(components, "dependency_type"),
+        "risk_status": count_component_values(components, "risk_status"),
+        "severity": count_component_values(components, "severity"),
+        "license_risk": count_component_values(components, "license_risk"),
+        "risk_source": count_component_values(components, "risk_source"),
+    }
+
+
+def count_component_values(components: list[ComponentRecord], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for component in components:
+        value = getattr(component, field) or "unknown"
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return counts
+
+
+def top_risk_components(components: list[ComponentRecord], limit: int = 10) -> list[ScaReportComponent]:
+    sorted_components = sorted(
+        [component for component in components if is_report_risky(component)],
+        key=lambda component: (
+            severity_weight(component.severity),
+            len(component.vulnerability_ids or []),
+            1 if component.license_risk in {"restricted", "review_required", "unknown"} else 0,
+        ),
+        reverse=True,
+    )
+    return [
+        ScaReportComponent(
+            ecosystem=component.ecosystem,
+            name=component.name,
+            version=component.version,
+            dependency_type=component.dependency_type,
+            risk_status=component.risk_status,
+            severity=component.severity,
+            vulnerability_ids=component.vulnerability_ids or [],
+            license=component.license,
+            license_risk=component.license_risk,
+            risk_source=component.risk_source,
+            remediation=component.remediation or component.risk_summary,
+        )
+        for component in sorted_components[:limit]
+    ]
+
+
+def report_recommendations(components: list[ComponentRecord]) -> list[str]:
+    recommendations: list[str] = []
+    if any(component.severity in {"critical", "high"} for component in components):
+        recommendations.append("优先修复严重和高危组件，确认修复版本后重新执行 SCA 扫描。")
+    if any(component.dependency_type == "transitive" and is_report_risky(component) for component in components):
+        recommendations.append("存在风险传递依赖，优先查看升级杠杆并升级其上游直接依赖。")
+    if any(component.license_risk in {"restricted", "review_required", "unknown"} for component in components):
+        recommendations.append("存在许可证风险或未知许可证，建议发起合规复核并记录例外审批结论。")
+    if any(component.osv_error for component in components):
+        recommendations.append("部分组件 OSV 查询失败，建议在网络恢复后复扫或补充离线漏洞库。")
+    if not recommendations:
+        recommendations.append("当前批次未发现高优先级 SCA 风险，建议保留 SBOM 并持续跟踪后续扫描趋势。")
+    return recommendations
+
+
+def is_report_risky(component: ComponentRecord) -> bool:
+    return is_risky_for_diff(component) or component.license_risk in {"restricted", "review_required", "unknown"}
+
+
+def severity_weight(severity: str | None) -> int:
+    return {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}.get(severity or "", 0)
 
 
 

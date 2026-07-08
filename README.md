@@ -108,6 +108,7 @@ GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
 GET  /api/sca/projects/{project_id}/dependency-graph
 GET  /api/sca/projects/{project_id}/scan-history
 GET  /api/sca/projects/{project_id}/scan-diff
+GET  /api/sca/projects/{project_id}/report
 ```
 
 还缺少：
