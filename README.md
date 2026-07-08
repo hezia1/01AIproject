@@ -93,6 +93,7 @@ http://localhost:5173
 - SPDX 2.3 JSON SBOM 导出第一版，包含项目包、组件包、PURL 外部引用和 `DEPENDS_ON` 关系。
 - SBOM 元数据增强第一版：项目负责人、仓库、源码路径、运行地址、组件统计、依赖类型、风险状态、OSV 状态和哈希采集状态。
 - 依赖边质量标注第一版：区分 `manifest_direct` 与 `lockfile_inferred`，并在 SBOM 和前端概览展示依赖边数量。
+- 依赖图谱与升级杠杆第一版：新增图谱 API、SVG 可视化、风险节点标注和直接依赖升级杠杆分析。
 - 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
 - 前端组件风险清单分页，每页 10 条，并展示依赖类型分布、许可证策略分布、CycloneDX 和 SPDX 导出按钮。
 - 前端组件清单支持按生态、依赖类型、风险状态、严重等级和许可证策略筛选。
@@ -104,12 +105,13 @@ http://localhost:5173
 POST /api/sca/scan
 GET  /api/sca/projects/{project_id}/components
 GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
+GET  /api/sca/projects/{project_id}/dependency-graph
 ```
 
 还缺少：
 
 - 真实组件包文件哈希采集和包管理器原生完整依赖图。
-- 更完整的依赖图谱、升级杠杆和传递影响分析。
+- 更深度的传递影响分析、真实父子依赖树和跨模块攻击链联动。
 - 更完整的组织级许可证策略配置、策略启停、审批流持久化和例外记录管理。
 - 更完整的本地漏洞规则来源、规则覆盖面、规则启停和组织级规则管理。
 - Syft / Trivy / Grype 等专业工具接入。

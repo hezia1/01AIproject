@@ -11,6 +11,7 @@ from app.models import Component, ModuleKey, ScaScanRequest, ScaScanResult, Scan
 from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
+from app.services.sca_dependency_graph import build_dependency_graph
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 
 router = APIRouter()
@@ -134,6 +135,23 @@ def export_project_sbom(
     if format.lower() == "spdx":
         return build_spdx_sbom(project, records)
     raise HTTPException(status_code=400, detail="Unsupported SBOM format")
+
+
+@router.get("/projects/{project_id}/dependency-graph")
+def get_project_dependency_graph(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    records = db.scalars(
+        select(ComponentRecord)
+        .where(ComponentRecord.project_id == str(project_id))
+        .order_by(ComponentRecord.ecosystem, ComponentRecord.name)
+    ).all()
+    if not records:
+        raise HTTPException(status_code=400, detail="No SCA components found. Run SCA scan before building graph.")
+
+    return build_dependency_graph(project, records)
 
 
 

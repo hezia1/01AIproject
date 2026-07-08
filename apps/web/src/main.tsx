@@ -15,6 +15,10 @@ type ProjectAssetDraft = Pick<ProjectDraft, "runtime_url" | "api_base_url" | "sa
 type ProjectModule = { project_id: string; module_key: ModuleKey; enabled: boolean; config: Record<string, unknown> };
 type ProjectAssetProbe = { project_id: string; source_path: string | null; path_exists: boolean; sca_files: string[]; source_files: string[]; agent_files: string[]; recommended_tasks: ("sca" | "sast" | "agent")[]; message: string };
 type Component = { id: string; ecosystem: string; name: string; version: string | null; dependency_type: string; source_file: string; package_manager: string | null; license?: string | null; risk_status?: string; vulnerability_ids?: string[]; severity?: Severity | null; risk_summary?: string | null; remediation?: string | null; license_risk?: string | null; risk_source?: string | null; osv_checked?: boolean; osv_error?: string | null };
+type DependencyGraphNode = { id: string; label: string; kind: string; risk_status?: string | null; severity?: Severity | null; dependency_type?: string | null; ecosystem?: string | null; version?: string | null };
+type DependencyGraphEdge = { source: string; target: string; quality: string };
+type UpgradeLever = { component_id: string; component: string; ecosystem: string; version: string | null; risk_transitive_count: number; highest_severity: Severity | null; affected_components: string[]; recommendation: string };
+type DependencyGraph = { project_id: string; nodes: DependencyGraphNode[]; edges: DependencyGraphEdge[]; upgrade_levers: UpgradeLever[]; summary: Record<string, number> };
 type AiReview = { summary: string; false_positive_likelihood: string; remediation: string; category?: string | null; cwe?: string | null; owasp?: string | null; language?: string | null; description?: string | null; trust_impact?: string | null; agent_pipeline?: string[]; review_verdict?: string | null; evidence_summary?: string | null; fix_strategy?: string | null; priority?: string | null };
 type Finding = { id: string; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
 type DastValidation = { id: string; target_url: string; verdict: string; validator: string | null; evidence_summary: string | null; request_summary?: string | null; response_summary?: string | null; reproduction_steps?: string | null; remediation_hint?: string | null; created_at: string };
@@ -53,6 +57,7 @@ function App() {
   const [assetProbe, setAssetProbe] = useState<ProjectAssetProbe | null>(null);
   const [enabledModules, setEnabledModules] = useState<Set<ModuleKey>>(() => new Set(DEFAULT_ENABLED_MODULES));
   const [components, setComponents] = useState<Component[]>([]);
+  const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [validations, setValidations] = useState<DastValidation[]>([]);
   const [evidence, setEvidence] = useState<SandboxEvidence[]>([]);
@@ -106,6 +111,7 @@ function App() {
   function clearProjectData() {
     setEnabledModules(new Set(["aspm"]));
     setComponents([]);
+    setDependencyGraph(null);
     setFindings([]);
     setValidations([]);
     setEvidence([]);
@@ -155,8 +161,9 @@ function App() {
 
   async function refreshProjectData(projectId = project?.id) {
     if (!projectId) return;
-    const [componentData, findingData, validationData, evidenceData, templateData, summaryData] = await Promise.all([
+    const [componentData, graphData, findingData, validationData, evidenceData, templateData, summaryData] = await Promise.all([
       request<Component[]>(`/sca/projects/${projectId}/components`),
+      request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph`).catch(() => null),
       request<Finding[]>(`/findings?project_id=${projectId}`),
       request<DastValidation[]>(`/dast/projects/${projectId}/validations`),
       request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`),
@@ -164,6 +171,7 @@ function App() {
       request<AspmSummary>(`/aspm/projects/${projectId}/summary`),
     ]);
     setComponents(componentData);
+    setDependencyGraph(graphData);
     setFindings(findingData);
     setValidations(validationData);
     setEvidence(evidenceData);
@@ -397,7 +405,7 @@ function App() {
         {activeView === "assets" && <><ProjectAssetConfig project={project} loading={loading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("tasks")} onOpenModules={() => setActiveView("modules")} /></>}
         {activeView === "modules" && <ModulesView modules={optionalModules} project={project} enabledModules={enabledModules} selectedModules={selectedModules} savingKey={savingKey} onToggle={toggleModule} />}
         {activeView === "tasks" && <TaskCenter project={project} assetProbe={assetProbe} enabledModules={enabledModules} sourcePath={sourcePath} sastPath={sastPath} agentPath={agentPath} targetUrl={targetUrl} runCommand={runCommand} loading={loading} onSourcePathChange={setSourcePath} onSastPathChange={setSastPath} onAgentPathChange={setAgentPath} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onScan={runScan} onRecommended={runRecommendedScans} onDast={createDastValidation} onSandbox={createSandboxEvidence} />}
-        {activeView === "sca" && <ScaView project={project} components={components} sourcePath={sourcePath} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onRunScan={() => runScan("sca")} onExportSbom={exportScaSbom} />}
+        {activeView === "sca" && <ScaView project={project} components={components} dependencyGraph={dependencyGraph} sourcePath={sourcePath} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onRunScan={() => runScan("sca")} onExportSbom={exportScaSbom} />}
         {activeView === "sast" && <SastView project={project} findings={sastFindings} categorySummary={sastCategorySummary} sourcePath={sastPath} loading={loading} onSourcePathChange={setSastPath} onRunScan={() => runScan("sast")} onAgentReview={runSastAgentReview} />}
         {activeView === "agent" && <AgentView project={project} findings={agentFindings} categorySummary={agentCategorySummary} sourcePath={agentPath} loading={loading} onSourcePathChange={setAgentPath} onRunScan={() => runScan("agent")} />}
         {activeView === "dast" && <DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} />}
@@ -499,7 +507,7 @@ function SastView({ project, findings, categorySummary, sourcePath, loading, onS
 
   return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SAST 智能静态审计</h2><p>优先调用 Semgrep 规则引擎扫描源码，并通过规则化 Sub-agent 编排完成复核、证据归档和修复建议归一化。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SAST 审计"}</button><button className="secondary-action" onClick={() => void onAgentReview()} disabled={loading || !project || findings.length === 0}>执行 Agent 复核</button></div></div><section className="module-summary"><Metric label="Findings" value={findings.length} /><Metric label="Agent 已复核" value={reviewedCount} /><Metric label="Critical / High" value={(severitySummary.critical ?? 0) + (severitySummary.high ?? 0)} /><Metric label="风险分类" value={Object.keys(categorySummary).length} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>规则分类</h2><span>Category</span></div><KeyValue data={categorySummary} /></div><div className="panel"><div className="panel-header"><h2>严重等级</h2><span>Severity</span></div><KeyValue data={severitySummary} /></div><div className="panel full"><div className="panel-header"><h2>SAST 风险发现</h2><span>共 {findings.length} 条</span></div><table><thead><tr><th>等级</th><th>分类</th><th>标题</th><th>位置</th><th>Agent 复核</th><th>修复建议</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={6} className="empty-cell">暂无 SAST findings，执行 SAST 审计后显示结果。</td></tr> : pageFindings.map((finding) => <tr key={finding.id}><td><span className={`severity ${finding.severity}`}>{finding.severity}</span><span className="cell-subtext">{finding.ai_review?.priority ?? "-"}</span></td><td><span className="risk-badge review-required">{finding.ai_review?.category ?? "unknown"}</span><span className="cell-subtext">{finding.ai_review?.language ?? "Unknown"}</span></td><td><strong>{finding.title}</strong><span className="cell-subtext">{finding.evidence ?? "-"}</span></td><td>{finding.file_path ?? "-"}<span className="cell-subtext">Line {finding.line_start ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.cwe ?? "-"} · {finding.ai_review?.owasp ?? "-"}</span></td><td>{finding.ai_review?.review_verdict ?? "未复核"}<span className="cell-subtext">误报概率：{finding.ai_review?.false_positive_likelihood ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.evidence_summary ?? "-"}</span></td><td>{finding.ai_review?.fix_strategy ?? finding.ai_review?.remediation ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
 }
-function ScaView({ project, components, sourcePath, ecosystemSummary, riskSummary, loading, onSourcePathChange, onRunScan, onExportSbom }: { project: Project | null; components: Component[]; sourcePath: string; ecosystemSummary: Record<string, number>; riskSummary: Record<string, number>; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void> }) {
+function ScaView({ project, components, dependencyGraph, sourcePath, ecosystemSummary, riskSummary, loading, onSourcePathChange, onRunScan, onExportSbom }: { project: Project | null; components: Component[]; dependencyGraph: DependencyGraph | null; sourcePath: string; ecosystemSummary: Record<string, number>; riskSummary: Record<string, number>; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void> }) {
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ ecosystem: "all", dependencyType: "all", riskStatus: "all", severity: "all", licensePolicy: "all" });
   const pageSize = 10;
@@ -523,7 +531,35 @@ function ScaView({ project, components, sourcePath, ecosystemSummary, riskSummar
   }), [components]);
   useEffect(() => { setPage(1); }, [components, filters]);
 
-  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SCA 供应链风险分析</h2><p>解析项目依赖生成 SBOM，结合 OSV 漏洞库、本地规则和许可证策略生成可解释的组件风险结果。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SCA 风险分析"}</button><button className="secondary-action" onClick={() => void onExportSbom("cyclonedx")} disabled={loading || !project || components.length === 0}>导出 CycloneDX</button><button className="secondary-action" onClick={() => void onExportSbom("spdx")} disabled={loading || !project || components.length === 0}>导出 SPDX</button></div></div><section className="module-summary"><Metric label="筛选结果" value={`${filteredComponents.length} / ${components.length}`} /><Metric label="直接 / 传递" value={`${directCount} / ${dependencyTypeSummary.transitive ?? 0}`} /><Metric label="风险传递依赖" value={riskyTransitiveCount} /><Metric label="依赖边 / 推断" value={`${edgeSummary.total} / ${edgeSummary.lockfileInferred}`} /></section><div className="content-grid"><div className="panel full"><div className="panel-header"><h2>组件筛选</h2><span>Filter</span></div><div className="filter-grid"><FilterSelect label="生态" value={filters.ecosystem} options={filterOptions.ecosystems} onChange={(value) => setFilters((current) => ({ ...current, ecosystem: value }))} /><FilterSelect label="依赖类型" value={filters.dependencyType} options={filterOptions.dependencyTypes} formatOption={dependencyTypeLabel} onChange={(value) => setFilters((current) => ({ ...current, dependencyType: value }))} /><FilterSelect label="风险状态" value={filters.riskStatus} options={filterOptions.riskStatuses} formatOption={riskStatusLabel} onChange={(value) => setFilters((current) => ({ ...current, riskStatus: value }))} /><FilterSelect label="严重等级" value={filters.severity} options={filterOptions.severities} formatOption={severityLabel} onChange={(value) => setFilters((current) => ({ ...current, severity: value }))} /><FilterSelect label="许可证策略" value={filters.licensePolicy} options={filterOptions.licensePolicies} formatOption={licensePolicyLabel} onChange={(value) => setFilters((current) => ({ ...current, licensePolicy: value }))} /><button className="secondary-action" onClick={() => setFilters({ ecosystem: "all", dependencyType: "all", riskStatus: "all", severity: "all", licensePolicy: "all" })}>清空筛选</button></div></div><div className="panel"><div className="panel-header"><h2>生态分布</h2><span>SBOM ecosystem</span></div><KeyValue data={filteredEcosystemSummary} /></div><div className="panel"><div className="panel-header"><h2>依赖类型</h2><span>Dependency</span></div><KeyValue data={dependencyTypeSummary} formatKey={dependencyTypeLabel} /></div><div className="panel"><div className="panel-header"><h2>许可证策略</h2><span>License</span></div><KeyValue data={licensePolicySummary} formatKey={licensePolicyLabel} /></div><div className="panel full"><div className="panel-header"><h2>组件风险清单</h2><span>Project: {project?.name ?? "未连接"}</span></div><table><thead><tr><th>生态</th><th>组件</th><th>版本</th><th>类型</th><th>风险</th><th>来源 / OSV</th><th>漏洞编号</th><th>许可证</th><th>修复建议</th></tr></thead><tbody>{components.length === 0 ? <tr><td colSpan={9} className="empty-cell">暂无组件，执行 SCA 扫描后显示结果。</td></tr> : filteredComponents.length === 0 ? <tr><td colSpan={9} className="empty-cell">当前筛选条件下没有组件。</td></tr> : pageComponents.map((component) => <tr key={component.id}><td><span className="ecosystem-badge">{component.ecosystem}</span></td><td><strong>{component.name}</strong><span className="cell-subtext">{component.source_file}</span></td><td>{component.version ?? "-"}</td><td>{dependencyTypeLabel(component.dependency_type)}</td><td><RiskBadge status={component.risk_status ?? "not_checked"} severity={component.severity ?? null} /></td><td><span className="risk-badge review-required">{sourceLabel(component.risk_source)}</span><span className="cell-subtext">{component.osv_checked ? "OSV 已查询" : "OSV 未查询"}</span>{component.osv_error ? <span className="cell-subtext">{component.osv_error}</span> : null}</td><td>{component.vulnerability_ids?.length ? component.vulnerability_ids.join(", ") : "-"}</td><td>{component.license ?? "-"}{component.license_risk ? <span className="cell-subtext">策略：{licensePolicyLabel(component.license_risk)}</span> : null}</td><td>{component.remediation ?? component.risk_summary ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条，共 {filteredComponents.length} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SCA 供应链风险分析</h2><p>解析项目依赖生成 SBOM，结合 OSV 漏洞库、本地规则和许可证策略生成可解释的组件风险结果。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SCA 风险分析"}</button><button className="secondary-action" onClick={() => void onExportSbom("cyclonedx")} disabled={loading || !project || components.length === 0}>导出 CycloneDX</button><button className="secondary-action" onClick={() => void onExportSbom("spdx")} disabled={loading || !project || components.length === 0}>导出 SPDX</button></div></div><section className="module-summary"><Metric label="筛选结果" value={`${filteredComponents.length} / ${components.length}`} /><Metric label="直接 / 传递" value={`${directCount} / ${dependencyTypeSummary.transitive ?? 0}`} /><Metric label="风险传递依赖" value={riskyTransitiveCount} /><Metric label="依赖边 / 推断" value={`${edgeSummary.total} / ${edgeSummary.lockfileInferred}`} /></section><div className="content-grid"><div className="panel full"><div className="panel-header"><h2>依赖图谱</h2><span>{dependencyGraph ? `${dependencyGraph.summary.node_count ?? 0} 节点 / ${dependencyGraph.summary.edge_count ?? 0} 边` : "Graph"}</span></div><DependencyGraphView graph={dependencyGraph} /></div><div className="panel full"><div className="panel-header"><h2>升级杠杆</h2><span>{dependencyGraph?.upgrade_levers.length ?? 0} 项</span></div><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></div><div className="panel full"><div className="panel-header"><h2>组件筛选</h2><span>Filter</span></div><div className="filter-grid"><FilterSelect label="生态" value={filters.ecosystem} options={filterOptions.ecosystems} onChange={(value) => setFilters((current) => ({ ...current, ecosystem: value }))} /><FilterSelect label="依赖类型" value={filters.dependencyType} options={filterOptions.dependencyTypes} formatOption={dependencyTypeLabel} onChange={(value) => setFilters((current) => ({ ...current, dependencyType: value }))} /><FilterSelect label="风险状态" value={filters.riskStatus} options={filterOptions.riskStatuses} formatOption={riskStatusLabel} onChange={(value) => setFilters((current) => ({ ...current, riskStatus: value }))} /><FilterSelect label="严重等级" value={filters.severity} options={filterOptions.severities} formatOption={severityLabel} onChange={(value) => setFilters((current) => ({ ...current, severity: value }))} /><FilterSelect label="许可证策略" value={filters.licensePolicy} options={filterOptions.licensePolicies} formatOption={licensePolicyLabel} onChange={(value) => setFilters((current) => ({ ...current, licensePolicy: value }))} /><button className="secondary-action" onClick={() => setFilters({ ecosystem: "all", dependencyType: "all", riskStatus: "all", severity: "all", licensePolicy: "all" })}>清空筛选</button></div></div><div className="panel"><div className="panel-header"><h2>生态分布</h2><span>SBOM ecosystem</span></div><KeyValue data={filteredEcosystemSummary} /></div><div className="panel"><div className="panel-header"><h2>依赖类型</h2><span>Dependency</span></div><KeyValue data={dependencyTypeSummary} formatKey={dependencyTypeLabel} /></div><div className="panel"><div className="panel-header"><h2>许可证策略</h2><span>License</span></div><KeyValue data={licensePolicySummary} formatKey={licensePolicyLabel} /></div><div className="panel full"><div className="panel-header"><h2>组件风险清单</h2><span>Project: {project?.name ?? "未连接"}</span></div><table><thead><tr><th>生态</th><th>组件</th><th>版本</th><th>类型</th><th>风险</th><th>来源 / OSV</th><th>漏洞编号</th><th>许可证</th><th>修复建议</th></tr></thead><tbody>{components.length === 0 ? <tr><td colSpan={9} className="empty-cell">暂无组件，执行 SCA 扫描后显示结果。</td></tr> : filteredComponents.length === 0 ? <tr><td colSpan={9} className="empty-cell">当前筛选条件下没有组件。</td></tr> : pageComponents.map((component) => <tr key={component.id}><td><span className="ecosystem-badge">{component.ecosystem}</span></td><td><strong>{component.name}</strong><span className="cell-subtext">{component.source_file}</span></td><td>{component.version ?? "-"}</td><td>{dependencyTypeLabel(component.dependency_type)}</td><td><RiskBadge status={component.risk_status ?? "not_checked"} severity={component.severity ?? null} /></td><td><span className="risk-badge review-required">{sourceLabel(component.risk_source)}</span><span className="cell-subtext">{component.osv_checked ? "OSV 已查询" : "OSV 未查询"}</span>{component.osv_error ? <span className="cell-subtext">{component.osv_error}</span> : null}</td><td>{component.vulnerability_ids?.length ? component.vulnerability_ids.join(", ") : "-"}</td><td>{component.license ?? "-"}{component.license_risk ? <span className="cell-subtext">策略：{licensePolicyLabel(component.license_risk)}</span> : null}</td><td>{component.remediation ?? component.risk_summary ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条，共 {filteredComponents.length} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+}
+
+function DependencyGraphView({ graph }: { graph: DependencyGraph | null }) {
+  if (!graph || graph.nodes.length === 0) return <div className="empty-project">暂无依赖图谱，执行 SCA 扫描后显示结果。</div>;
+  const positions = graphLayout(graph);
+  return <div className="graph-shell"><svg viewBox="0 0 960 360" role="img" aria-label="SCA 依赖图谱">
+    <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#8aa0b8" /></marker></defs>
+    {graph.edges.map((edge) => {
+      const source = positions.get(edge.source);
+      const target = positions.get(edge.target);
+      if (!source || !target) return null;
+      return <line key={`${edge.source}-${edge.target}`} x1={source.x + 92} y1={source.y} x2={target.x - 92} y2={target.y} className={`graph-edge ${edge.quality}`} markerEnd="url(#arrow)" />;
+    })}
+    {graph.nodes.map((node) => {
+      const position = positions.get(node.id);
+      if (!position) return null;
+      return <g key={node.id} transform={`translate(${position.x - 82}, ${position.y - 26})`} className={`graph-node ${nodeRiskClass(node)}`}>
+        <rect width="164" height="52" rx="8" />
+        <text x="12" y="21">{truncateText(node.label, 20)}</text>
+        <text x="12" y="39" className="graph-node-meta">{node.kind === "project" ? "项目" : `${dependencyTypeLabel(node.dependency_type)} · ${node.ecosystem ?? "-"}`}</text>
+      </g>;
+    })}
+  </svg><div className="graph-legend"><span><i className="legend-dot clean" />无风险</span><span><i className="legend-dot vulnerable" />漏洞/高危</span><span><i className="legend-dot license-risk" />许可证风险</span><span>实线：直接依赖 / 虚线：推断传递依赖</span></div></div>;
+}
+
+function UpgradeLeverTable({ levers }: { levers: UpgradeLever[] }) {
+  if (levers.length === 0) return <div className="empty-project">暂无升级杠杆。通常表示当前没有直接依赖带入风险传递依赖。</div>;
+  return <table><thead><tr><th>直接依赖</th><th>风险传递依赖</th><th>最高等级</th><th>影响组件</th><th>建议动作</th></tr></thead><tbody>{levers.map((lever) => <tr key={lever.component_id}><td><strong>{lever.component}</strong><span className="cell-subtext">{lever.ecosystem} · {lever.version ?? "-"}</span></td><td>{lever.risk_transitive_count}</td><td>{severityLabel(lever.highest_severity ?? "none")}</td><td>{lever.affected_components.slice(0, 5).join(", ") || "-"}{lever.affected_components.length > 5 ? <span className="cell-subtext">另 {lever.affected_components.length - 5} 个</span> : null}</td><td>{lever.recommendation}</td></tr>)}</tbody></table>;
 }
 
 function RiskBadge({ status, severity }: { status: string; severity: Severity | null }) {
@@ -573,6 +609,32 @@ function dependencyEdgeSummary(components: Component[]) {
     }
   }
   return { manifestDirect: direct.length, lockfileInferred, total: direct.length + lockfileInferred };
+}
+function graphLayout(graph: DependencyGraph) {
+  const groups = {
+    project: graph.nodes.filter((node) => node.kind === "project"),
+    direct: graph.nodes.filter((node) => node.kind !== "project" && node.dependency_type !== "transitive"),
+    transitive: graph.nodes.filter((node) => node.dependency_type === "transitive"),
+  };
+  const positions = new Map<string, { x: number; y: number }>();
+  placeGraphNodes(groups.project, 110, positions);
+  placeGraphNodes(groups.direct, 450, positions);
+  placeGraphNodes(groups.transitive, 790, positions);
+  return positions;
+}
+function placeGraphNodes(nodes: DependencyGraphNode[], x: number, positions: Map<string, { x: number; y: number }>) {
+  const visible = nodes.slice(0, 8);
+  const gap = visible.length <= 1 ? 0 : 280 / (visible.length - 1);
+  visible.forEach((node, index) => positions.set(node.id, { x, y: visible.length <= 1 ? 180 : 40 + index * gap }));
+}
+function nodeRiskClass(node: DependencyGraphNode) {
+  if (node.kind === "project") return "project";
+  if (node.risk_status === "license-risk") return "license-risk";
+  if (node.risk_status === "vulnerable" || node.severity === "critical" || node.severity === "high") return "vulnerable";
+  return "clean";
+}
+function truncateText(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 }
 function componentsShareDependencyContext(parent: Component, child: Component) {
   if (parent.ecosystem !== child.ecosystem) return false;

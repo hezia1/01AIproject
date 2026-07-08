@@ -1226,3 +1226,93 @@ th {
   margin-top: 4px;
   overflow-wrap: anywhere;
 }
+
+.graph-shell {
+  display: grid;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.graph-shell svg {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  min-width: 760px;
+  width: 100%;
+}
+
+.graph-edge {
+  stroke: #8aa0b8;
+  stroke-width: 1.6;
+}
+
+.graph-edge.lockfile_inferred {
+  stroke-dasharray: 6 5;
+}
+
+.graph-node rect {
+  fill: #ffffff;
+  stroke: #cbd5e1;
+  stroke-width: 1.4;
+}
+
+.graph-node.project rect {
+  fill: #eff6ff;
+  stroke: #2563eb;
+}
+
+.graph-node.vulnerable rect {
+  fill: #fef2f2;
+  stroke: #dc2626;
+}
+
+.graph-node.license-risk rect {
+  fill: #fff7ed;
+  stroke: #ea580c;
+}
+
+.graph-node.clean rect {
+  fill: #ecfdf5;
+  stroke: #10b981;
+}
+
+.graph-node text {
+  fill: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.graph-node-meta {
+  fill: #64748b !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+}
+
+.graph-legend {
+  align-items: center;
+  color: #64748b;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 12px;
+}
+
+.legend-dot {
+  border-radius: 999px;
+  display: inline-block;
+  height: 9px;
+  margin-right: 5px;
+  width: 9px;
+}
+
+.legend-dot.clean {
+  background: #10b981;
+}
+
+.legend-dot.vulnerable {
+  background: #dc2626;
+}
+
+.legend-dot.license-risk {
+  background: #ea580c;
+}
