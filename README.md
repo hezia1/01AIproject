@@ -120,6 +120,7 @@ GET  /api/sca/projects/{project_id}/report
   - `docker pull anchore/grype:latest`
 - 如果 Docker 或镜像不可用，基础 SCA 扫描仍可运行。
 - 增强扫描状态会写入扫描历史和 SCA 报告，包含 Syft 组件数、Grype 漏洞数和错误信息。
+- SCA 高危/严重漏洞、漏洞编号命中、许可证风险和版本缺失风险会自动转为统一 Finding，进入 ASPM 治理闭环。
 
 还缺少：
 

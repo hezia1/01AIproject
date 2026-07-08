@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import ComponentRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord
+from app.db_models import ComponentRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord
 from app.models import (
     Component,
     ModuleKey,
@@ -87,6 +87,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             )
             db.add(record)
             records.append(record)
+        create_sca_findings(db, str(payload.project_id), scan.id, records)
 
         scan.status = ScanStatus.completed.value
         scan.finished_at = datetime.utcnow()
@@ -308,6 +309,119 @@ def scan_tool_status(scan: ScanTaskRecord | None) -> ScaToolStatus | None:
     if not isinstance(value, dict):
         return None
     return ScaToolStatus(**value)
+
+
+def create_sca_findings(
+    db: Session,
+    project_id: str,
+    scan_task_id: str,
+    components: list[ComponentRecord],
+) -> None:
+    existing_rule_ids = set(
+        db.scalars(
+            select(FindingRecord.rule_id).where(
+                FindingRecord.project_id == project_id,
+                FindingRecord.scan_task_id == scan_task_id,
+                FindingRecord.source == "SCA",
+            )
+        ).all()
+    )
+    for component in components:
+        for finding in sca_findings_for_component(project_id, scan_task_id, component):
+            if finding.rule_id in existing_rule_ids:
+                continue
+            db.add(finding)
+            existing_rule_ids.add(finding.rule_id)
+
+
+def sca_findings_for_component(
+    project_id: str,
+    scan_task_id: str,
+    component: ComponentRecord,
+) -> list[FindingRecord]:
+    findings: list[FindingRecord] = []
+    for vulnerability_id in component.vulnerability_ids or []:
+        findings.append(
+            FindingRecord(
+                project_id=project_id,
+                scan_task_id=scan_task_id,
+                source="SCA",
+                rule_id=f"SCA:{component.ecosystem}:{component.name}:{vulnerability_id}",
+                title=f"SCA 漏洞组件：{component.name} {vulnerability_id}",
+                severity=sca_finding_severity(component),
+                file_path=component.source_file,
+                evidence=sca_finding_evidence(component),
+            )
+        )
+    if component.license_risk in {"restricted", "review_required", "unknown"}:
+        findings.append(
+            FindingRecord(
+                project_id=project_id,
+                scan_task_id=scan_task_id,
+                source="SCA",
+                rule_id=f"SCA-LICENSE:{component.ecosystem}:{component.name}:{component.license_risk}",
+                title=f"SCA 许可证风险：{component.name} {component.license_risk}",
+                severity="medium" if component.license_risk == "restricted" else "low",
+                file_path=component.source_file,
+                evidence=sca_finding_evidence(component),
+            )
+        )
+    if component.risk_status == "review-required" and component.version is None:
+        findings.append(
+            FindingRecord(
+                project_id=project_id,
+                scan_task_id=scan_task_id,
+                source="SCA",
+                rule_id=f"SCA-VERSION:{component.ecosystem}:{component.name}",
+                title=f"SCA 组件版本缺失：{component.name}",
+                severity="low",
+                file_path=component.source_file,
+                evidence=sca_finding_evidence(component),
+            )
+        )
+    if not findings and component.severity in {"critical", "high"} and component.risk_status == "vulnerable":
+        findings.append(
+            FindingRecord(
+                project_id=project_id,
+                scan_task_id=scan_task_id,
+                source="SCA",
+                rule_id=f"SCA-RISK:{component.ecosystem}:{component.name}:{component.version or 'unknown'}",
+                title=f"SCA 高风险组件：{component.name}",
+                severity=sca_finding_severity(component),
+                file_path=component.source_file,
+                evidence=sca_finding_evidence(component),
+            )
+        )
+    return findings
+
+
+def sca_finding_severity(component: ComponentRecord) -> str:
+    if component.severity in {"critical", "high", "medium", "low", "info"}:
+        return component.severity
+    if component.risk_status == "vulnerable":
+        return "medium"
+    if component.license_risk == "restricted":
+        return "medium"
+    return "low"
+
+
+def sca_finding_evidence(component: ComponentRecord) -> str:
+    details = [
+        f"组件：{component.ecosystem}/{component.name}",
+        f"版本：{component.version or '-'}",
+        f"依赖类型：{component.dependency_type}",
+        f"来源文件：{component.source_file}",
+        f"风险来源：{component.risk_source or '-'}",
+    ]
+    if component.vulnerability_ids:
+        details.append("漏洞编号：" + ", ".join(str(item) for item in component.vulnerability_ids))
+    if component.license or component.license_risk:
+        details.append(f"许可证：{component.license or '-'} / 策略：{component.license_risk or '-'}")
+    if component.remediation:
+        details.append(f"修复建议：{component.remediation}")
+    elif component.risk_summary:
+        details.append(f"风险摘要：{component.risk_summary}")
+    return "；".join(details)
 
 
 def merge_tool_components(
