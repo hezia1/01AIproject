@@ -111,6 +111,15 @@ GET  /api/sca/projects/{project_id}/scan-diff
 GET  /api/sca/projects/{project_id}/report
 ```
 
+可选增强：
+
+- SCA 扫描支持通过 Docker 镜像 `anchore/syft:latest` 和 `anchore/grype:latest` 做专业工具增强。
+- 前端可勾选“Syft/Grype 增强”后执行扫描。
+- 需要本机 Docker 可用，并提前拉取镜像或允许首次扫描时自动拉取：
+  - `docker pull anchore/syft:latest`
+  - `docker pull anchore/grype:latest`
+- 如果 Docker 或镜像不可用，基础 SCA 扫描仍可运行。
+
 还缺少：
 
 - 真实组件包文件哈希采集和包管理器原生完整依赖图。

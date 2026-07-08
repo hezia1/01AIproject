@@ -1,4 +1,5 @@
 ﻿from datetime import datetime
+from dataclasses import replace
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,10 +22,11 @@ from app.models import (
     ScanStatus,
 )
 from app.repositories.mappers import component_to_schema
-from app.services.sca_parser import parse_dependency_tree
+from app.services.sca_parser import ParsedComponent, dedupe_components, parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
+from app.services.sca_tool_scanner import ToolScanResult, scan_with_syft_grype
 
 router = APIRouter()
 
@@ -55,7 +57,9 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
 
     try:
         parsed = parse_dependency_tree(payload.source_path)
-        analyzed_components = analyze_components(parsed.components)
+        tool_scan = scan_with_syft_grype(payload.source_path) if payload.enable_tool_scan else None
+        parsed_components = merge_tool_components(parsed.components, tool_scan)
+        analyzed_components = apply_tool_vulnerabilities(analyze_components(parsed_components), tool_scan)
         records: list[ComponentRecord] = []
         for component in analyzed_components:
             record = ComponentRecord(
@@ -268,6 +272,79 @@ def get_project_dependency_graph(
         raise HTTPException(status_code=400, detail="No SCA components found. Run SCA scan before building graph.")
 
     return build_dependency_graph(project, records)
+
+
+def merge_tool_components(
+    base_components: list[ParsedComponent],
+    tool_scan: ToolScanResult | None,
+) -> list[ParsedComponent]:
+    if tool_scan is None or not tool_scan.components:
+        return base_components
+    return dedupe_components([*base_components, *tool_scan.components])
+
+
+def apply_tool_vulnerabilities(
+    components: list[ParsedComponent],
+    tool_scan: ToolScanResult | None,
+) -> list[ParsedComponent]:
+    if tool_scan is None or not tool_scan.vulnerabilities:
+        return components
+
+    vulnerabilities_by_exact: dict[tuple[str, str, str | None], list] = {}
+    vulnerabilities_by_name: dict[tuple[str, str], list] = {}
+    for vulnerability in tool_scan.vulnerabilities:
+        exact_key = (vulnerability.ecosystem, vulnerability.name.lower(), vulnerability.version)
+        name_key = (vulnerability.ecosystem, vulnerability.name.lower())
+        vulnerabilities_by_exact.setdefault(exact_key, []).append(vulnerability)
+        vulnerabilities_by_name.setdefault(name_key, []).append(vulnerability)
+
+    updated: list[ParsedComponent] = []
+    for component in components:
+        exact_matches = vulnerabilities_by_exact.get((component.ecosystem, component.name.lower(), component.version), [])
+        name_matches = vulnerabilities_by_name.get((component.ecosystem, component.name.lower()), [])
+        matches = exact_matches or name_matches
+        if not matches:
+            updated.append(component)
+            continue
+
+        vulnerability_ids = sorted({*(component.vulnerability_ids or []), *(match.vulnerability_id for match in matches)})
+        highest_severity = highest_component_severity([component.severity, *(match.severity for match in matches)])
+        remediation = component.remediation or first_value(match.remediation for match in matches)
+        risk_summary = component.risk_summary or first_value(match.summary for match in matches)
+        updated.append(
+            replace(
+                component,
+                risk_status="vulnerable",
+                vulnerability_ids=vulnerability_ids,
+                severity=highest_severity,
+                risk_summary=risk_summary,
+                remediation=remediation,
+                risk_source=merge_risk_source(component.risk_source, "grype"),
+            )
+        )
+    return updated
+
+
+def highest_component_severity(values) -> str | None:
+    severities = [value for value in values if value]
+    if not severities:
+        return None
+    return max(severities, key=severity_weight)
+
+
+def first_value(values) -> str | None:
+    for value in values:
+        if value:
+            return value
+    return None
+
+
+def merge_risk_source(existing: str | None, source: str) -> str:
+    if not existing or existing in {"clean", "not_supported"}:
+        return source
+    if source in existing.split("+"):
+        return existing
+    return f"{existing}+{source}"
 
 
 def load_project_components(

@@ -237,6 +237,7 @@ class ScaScanRequest(BaseModel):
     project_id: UUID
     source_path: str = Field(min_length=1)
     clear_previous: bool = True
+    enable_tool_scan: bool = False
 
 
 class ScaScanResult(BaseModel):
