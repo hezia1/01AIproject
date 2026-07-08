@@ -168,6 +168,15 @@ h2 {
   padding: 16px;
 }
 
+.module-summary.inline-summary {
+  margin-bottom: 0;
+}
+
+.diff-stack {
+  display: grid;
+  gap: 16px;
+}
+
 .module-summary span,
 .module-summary strong {
   display: block;

@@ -263,6 +263,42 @@ class ScaScanHistoryItem(BaseModel):
     license_risk_count: int = 0
 
 
+class ScaScanDiffItem(BaseModel):
+    ecosystem: str
+    name: str
+    change_type: str
+    base_version: str | None = None
+    target_version: str | None = None
+    base_risk_status: str | None = None
+    target_risk_status: str | None = None
+    base_severity: Severity | None = None
+    target_severity: Severity | None = None
+    base_license_risk: str | None = None
+    target_license_risk: str | None = None
+    base_vulnerability_ids: list[str] = Field(default_factory=list)
+    target_vulnerability_ids: list[str] = Field(default_factory=list)
+    summary: str
+
+
+class ScaScanDiffSummary(BaseModel):
+    added_components: int = 0
+    removed_components: int = 0
+    version_changes: int = 0
+    risk_added: int = 0
+    risk_removed: int = 0
+    license_risk_changes: int = 0
+    total_changes: int = 0
+
+
+class ScaScanDiffResult(BaseModel):
+    project_id: UUID
+    base_scan_id: UUID | None = None
+    target_scan_id: UUID
+    has_comparison: bool = False
+    summary: ScaScanDiffSummary = Field(default_factory=ScaScanDiffSummary)
+    changes: list[ScaScanDiffItem] = Field(default_factory=list)
+
+
 class SastScanRequest(BaseModel):
     project_id: UUID
     source_path: str = Field(min_length=1)

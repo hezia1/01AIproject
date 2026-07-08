@@ -7,7 +7,17 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import ComponentRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord
-from app.models import Component, ModuleKey, ScaScanHistoryItem, ScaScanRequest, ScaScanResult, ScanStatus
+from app.models import (
+    Component,
+    ModuleKey,
+    ScaScanDiffItem,
+    ScaScanDiffResult,
+    ScaScanDiffSummary,
+    ScaScanHistoryItem,
+    ScaScanRequest,
+    ScaScanResult,
+    ScanStatus,
+)
 from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
@@ -153,6 +163,42 @@ def list_project_sca_scan_history(project_id: UUID, db: Session = Depends(get_db
     return history
 
 
+@router.get("/projects/{project_id}/scan-diff", response_model=ScaScanDiffResult)
+def get_project_sca_scan_diff(
+    project_id: UUID,
+    target_scan_id: UUID | None = None,
+    base_scan_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> ScaScanDiffResult:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    scans = load_completed_sca_scans(db, project_id)
+    if not scans:
+        raise HTTPException(status_code=400, detail="No completed SCA scans found.")
+
+    resolved_target = target_scan_id or UUID(str(scans[0].id))
+    resolved_base = base_scan_id or previous_sca_scan_id(scans, resolved_target)
+    if resolved_base is None:
+        return ScaScanDiffResult(
+            project_id=project_id,
+            target_scan_id=resolved_target,
+            has_comparison=False,
+        )
+
+    base_components = load_project_components(db, project_id, resolved_base)
+    target_components = load_project_components(db, project_id, resolved_target)
+    changes = build_scan_diff_items(base_components, target_components)
+    return ScaScanDiffResult(
+        project_id=project_id,
+        base_scan_id=resolved_base,
+        target_scan_id=resolved_target,
+        has_comparison=True,
+        summary=build_scan_diff_summary(changes),
+        changes=changes,
+    )
+
+
 @router.get("/projects/{project_id}/sbom")
 def export_project_sbom(
     project_id: UUID,
@@ -216,6 +262,117 @@ def latest_sca_scan_id(db: Session, project_id: UUID) -> UUID | None:
         .order_by(ScanTaskRecord.finished_at.desc().nullslast(), ScanTaskRecord.created_at.desc())
     )
     return UUID(str(scan.id)) if scan else None
+
+
+def load_completed_sca_scans(db: Session, project_id: UUID) -> list[ScanTaskRecord]:
+    return db.scalars(
+        select(ScanTaskRecord)
+        .where(
+            ScanTaskRecord.project_id == str(project_id),
+            ScanTaskRecord.scan_type == "sca",
+            ScanTaskRecord.status == ScanStatus.completed.value,
+        )
+        .order_by(ScanTaskRecord.finished_at.desc().nullslast(), ScanTaskRecord.created_at.desc())
+    ).all()
+
+
+def previous_sca_scan_id(scans: list[ScanTaskRecord], target_scan_id: UUID) -> UUID | None:
+    for index, scan in enumerate(scans):
+        if str(scan.id) != str(target_scan_id):
+            continue
+        if index + 1 >= len(scans):
+            return None
+        return UUID(str(scans[index + 1].id))
+    return UUID(str(scans[1].id)) if len(scans) > 1 else None
+
+
+def build_scan_diff_items(
+    base_components: list[ComponentRecord],
+    target_components: list[ComponentRecord],
+) -> list[ScaScanDiffItem]:
+    base_map = {component_key(component): component for component in base_components}
+    target_map = {component_key(component): component for component in target_components}
+    changes: list[ScaScanDiffItem] = []
+    for key in sorted(set(base_map) | set(target_map)):
+        base = base_map.get(key)
+        target = target_map.get(key)
+        if base is None and target is not None:
+            changes.append(diff_item(None, target, "added", f"新增组件 {target.name} {target.version or ''}".strip()))
+            continue
+        if target is None and base is not None:
+            changes.append(diff_item(base, None, "removed", f"移除组件 {base.name} {base.version or ''}".strip()))
+            continue
+        if base is None or target is None:
+            continue
+        if base.version != target.version:
+            changes.append(diff_item(base, target, "version_changed", f"版本从 {base.version or '-'} 变为 {target.version or '-'}"))
+        if component_risk_key(base) != component_risk_key(target):
+            changes.append(diff_item(base, target, risk_change_type(base, target), "风险状态、漏洞编号或严重等级发生变化"))
+        if base.license_risk != target.license_risk:
+            changes.append(diff_item(base, target, "license_risk_changed", f"许可证策略从 {base.license_risk or '-'} 变为 {target.license_risk or '-'}"))
+    return changes
+
+
+def diff_item(
+    base: ComponentRecord | None,
+    target: ComponentRecord | None,
+    change_type: str,
+    summary: str,
+) -> ScaScanDiffItem:
+    component = target or base
+    assert component is not None
+    return ScaScanDiffItem(
+        ecosystem=component.ecosystem,
+        name=component.name,
+        change_type=change_type,
+        base_version=base.version if base else None,
+        target_version=target.version if target else None,
+        base_risk_status=base.risk_status if base else None,
+        target_risk_status=target.risk_status if target else None,
+        base_severity=base.severity if base else None,
+        target_severity=target.severity if target else None,
+        base_license_risk=base.license_risk if base else None,
+        target_license_risk=target.license_risk if target else None,
+        base_vulnerability_ids=base.vulnerability_ids or [] if base else [],
+        target_vulnerability_ids=target.vulnerability_ids or [] if target else [],
+        summary=summary,
+    )
+
+
+def build_scan_diff_summary(changes: list[ScaScanDiffItem]) -> ScaScanDiffSummary:
+    return ScaScanDiffSummary(
+        added_components=sum(1 for item in changes if item.change_type == "added"),
+        removed_components=sum(1 for item in changes if item.change_type == "removed"),
+        version_changes=sum(1 for item in changes if item.change_type == "version_changed"),
+        risk_added=sum(1 for item in changes if item.change_type == "risk_added"),
+        risk_removed=sum(1 for item in changes if item.change_type == "risk_removed"),
+        license_risk_changes=sum(1 for item in changes if item.change_type == "license_risk_changed"),
+        total_changes=len(changes),
+    )
+
+
+def component_key(component: ComponentRecord) -> tuple[str, str]:
+    return (component.ecosystem, component.name)
+
+
+def component_risk_key(component: ComponentRecord) -> tuple[str | None, str | None, tuple[str, ...]]:
+    return (
+        component.risk_status,
+        component.severity,
+        tuple(sorted(str(item) for item in component.vulnerability_ids or [])),
+    )
+
+
+def risk_change_type(base: ComponentRecord, target: ComponentRecord) -> str:
+    if not is_risky_for_diff(base) and is_risky_for_diff(target):
+        return "risk_added"
+    if is_risky_for_diff(base) and not is_risky_for_diff(target):
+        return "risk_removed"
+    return "risk_changed"
+
+
+def is_risky_for_diff(component: ComponentRecord) -> bool:
+    return component.risk_status in {"vulnerable", "license-risk", "review-required"} or bool(component.vulnerability_ids) or component.severity in {"critical", "high"}
 
 
 
