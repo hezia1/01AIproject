@@ -18,6 +18,7 @@ def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecor
     bom_components = [component_to_cyclonedx(component) for component in components]
     vulnerabilities = build_vulnerabilities(components)
     dependencies = build_dependencies(project, components)
+    edge_summary = dependency_edge_summary(project, components)
     project_component = {
         "type": "application",
         "name": project.name,
@@ -45,7 +46,10 @@ def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecor
             "properties": [
                 property_item("sca:sbom_profile", "local-platform-sca"),
                 property_item("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
-                property_item("sca:dependency_edge_quality", "inferred from dependency type, source file, and package manager"),
+                property_item("sca:dependency_edge_quality", dependency_edge_quality_label(edge_summary)),
+                property_item("sca:manifest_direct_edge_count", edge_summary["manifest_direct"]),
+                property_item("sca:lockfile_inferred_edge_count", edge_summary["lockfile_inferred"]),
+                property_item("sca:dependency_edge_count", edge_summary["total"]),
             ],
         },
         "components": bom_components,
@@ -69,18 +73,21 @@ def build_spdx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -
             "relatedSpdxElement": project_spdx_id,
         }
     ]
-    for source_ref, target_ref in build_dependency_edges(
+    for edge in build_dependency_edge_records(
         project,
         components,
         project_spdx_id,
         ref_builder=component_spdx_ref,
     ):
+        relationship = {
+            "spdxElementId": edge["source"],
+            "relationshipType": "DEPENDS_ON",
+            "relatedSpdxElement": edge["target"],
+        }
+        if edge["quality"]:
+            relationship["comment"] = f"sca:edge_quality={edge['quality']}"
         relationships.append(
-            {
-                "spdxElementId": source_ref,
-                "relationshipType": "DEPENDS_ON",
-                "relatedSpdxElement": target_ref,
-            }
+            relationship
         )
 
     return {
@@ -104,7 +111,13 @@ def build_dependencies(project: ProjectRecord, components: list[ComponentRecord]
     direct_components = [component for component in components if component.dependency_type != "transitive"]
     transitive_components = [component for component in components if component.dependency_type == "transitive"]
     direct_refs = sorted(component_ref(component) for component in direct_components)
-    dependencies: list[dict[str, object]] = [{"ref": root_ref, "dependsOn": direct_refs}]
+    dependencies: list[dict[str, object]] = [
+        {
+            "ref": root_ref,
+            "dependsOn": direct_refs,
+            "properties": [property_item("sca:edge_quality", "manifest_direct")],
+        }
+    ]
 
     for direct in direct_components:
         related_transitives = [
@@ -112,7 +125,13 @@ def build_dependencies(project: ProjectRecord, components: list[ComponentRecord]
             for component in transitive_components
             if components_share_dependency_context(direct, component)
         ]
-        dependencies.append({"ref": component_ref(direct), "dependsOn": sorted(set(related_transitives))})
+        dependency: dict[str, object] = {
+            "ref": component_ref(direct),
+            "dependsOn": sorted(set(related_transitives)),
+        }
+        if related_transitives:
+            dependency["properties"] = [property_item("sca:edge_quality", "lockfile_inferred")]
+        dependencies.append(dependency)
 
     direct_ref_set = set(direct_refs)
     for component in components:
@@ -129,19 +148,42 @@ def build_dependency_edges(
     project_ref: str | None = None,
     ref_builder=None,
 ) -> list[tuple[str, str]]:
+    return [
+        (edge["source"], edge["target"])
+        for edge in build_dependency_edge_records(project, components, project_ref, ref_builder)
+    ]
+
+
+def build_dependency_edge_records(
+    project: ProjectRecord,
+    components: list[ComponentRecord],
+    project_ref: str | None = None,
+    ref_builder=None,
+) -> list[dict[str, str]]:
     build_ref = ref_builder or component_ref
     source_project_ref = project_ref or f"project:{project.id}"
     direct_components = [component for component in components if component.dependency_type != "transitive"]
     transitive_components = [component for component in components if component.dependency_type == "transitive"]
-    edges: list[tuple[str, str]] = [
-        (source_project_ref, build_ref(component)) for component in direct_components
+    edges: list[dict[str, str]] = [
+        {"source": source_project_ref, "target": build_ref(component), "quality": "manifest_direct"}
+        for component in direct_components
     ]
 
     for direct in direct_components:
         for component in transitive_components:
             if components_share_dependency_context(direct, component):
-                edges.append((build_ref(direct), build_ref(component)))
-    return sorted(set(edges))
+                edges.append(
+                    {
+                        "source": build_ref(direct),
+                        "target": build_ref(component),
+                        "quality": "lockfile_inferred",
+                    }
+                )
+
+    deduped: dict[tuple[str, str], dict[str, str]] = {}
+    for edge in edges:
+        deduped[(edge["source"], edge["target"])] = edge
+    return sorted(deduped.values(), key=lambda edge: (edge["source"], edge["target"]))
 
 
 def components_share_dependency_context(parent: ComponentRecord, child: ComponentRecord) -> bool:
@@ -154,6 +196,25 @@ def components_share_dependency_context(parent: ComponentRecord, child: Componen
     if parent.package_manager and child.package_manager and parent.package_manager == child.package_manager:
         return True
     return False
+
+
+def dependency_edge_summary(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, int]:
+    counts = {"manifest_direct": 0, "lockfile_inferred": 0, "total": 0}
+    for edge in build_dependency_edge_records(project, components):
+        quality = edge["quality"]
+        if quality in counts:
+            counts[quality] += 1
+        counts["total"] += 1
+    return counts
+
+
+def dependency_edge_quality_label(summary: dict[str, int]) -> str:
+    labels: list[str] = []
+    if summary.get("manifest_direct", 0):
+        labels.append("manifest_direct")
+    if summary.get("lockfile_inferred", 0):
+        labels.append("lockfile_inferred")
+    return ",".join(labels) if labels else "none"
 
 
 def split_sources(source_file: str | None) -> list[str]:
@@ -289,6 +350,7 @@ def build_vulnerabilities(components: list[ComponentRecord]) -> list[dict[str, o
 
 
 def project_properties(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, str]]:
+    edge_summary = dependency_edge_summary(project, components)
     direct_count = sum(1 for component in components if component.dependency_type != "transitive")
     transitive_count = sum(1 for component in components if component.dependency_type == "transitive")
     risky_count = sum(1 for component in components if component.risk_status not in {None, "clean", "not_checked"})
@@ -309,6 +371,10 @@ def project_properties(project: ProjectRecord, components: list[ComponentRecord]
         property_item("sca:risky_component_count", risky_count),
         property_item("sca:ecosystems", ecosystems),
         property_item("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
+        property_item("sca:dependency_edge_quality", dependency_edge_quality_label(edge_summary)),
+        property_item("sca:manifest_direct_edge_count", edge_summary["manifest_direct"]),
+        property_item("sca:lockfile_inferred_edge_count", edge_summary["lockfile_inferred"]),
+        property_item("sca:dependency_edge_count", edge_summary["total"]),
     ]
 
 
