@@ -1,0 +1,92 @@
+[
+  {
+    "id": "LICENSE-MIT",
+    "keywords": ["mit"],
+    "policy": "allowed",
+    "summary": "MIT 许可证通常允许商业使用、修改、分发和私有使用。",
+    "obligations": ["保留版权声明和许可证文本。"],
+    "approval_required": false,
+    "approval_roles": [],
+    "remediation": "确认分发包或制品中保留版权声明和许可证文本。"
+  },
+  {
+    "id": "LICENSE-APACHE-2.0",
+    "keywords": ["apache-2.0", "apache 2.0", "apache license 2.0"],
+    "policy": "allowed",
+    "summary": "Apache-2.0 许可证通常允许商业使用、修改、分发和私有使用，并包含专利授权条款。",
+    "obligations": ["保留 LICENSE 文本。", "如项目包含 NOTICE 文件，分发时保留 NOTICE 声明。", "标注显著修改。"],
+    "approval_required": false,
+    "approval_roles": [],
+    "remediation": "确认 LICENSE、NOTICE 和修改声明在分发制品中完整保留。"
+  },
+  {
+    "id": "LICENSE-BSD-ISC",
+    "keywords": ["bsd", "isc"],
+    "policy": "allowed",
+    "summary": "BSD/ISC 类许可证通常允许商业使用、修改和分发。",
+    "obligations": ["保留版权声明、许可证文本和免责声明。"],
+    "approval_required": false,
+    "approval_roles": [],
+    "remediation": "确认版权声明、许可证文本和免责声明随制品保留。"
+  },
+  {
+    "id": "LICENSE-MPL-EPL-CDDL",
+    "keywords": ["mpl", "epl", "cddl"],
+    "policy": "review_required",
+    "summary": "弱 Copyleft 许可证需要确认修改文件、链接方式和分发边界。",
+    "obligations": ["确认修改过的受许可证覆盖文件是否需要开放源码。", "保留许可证文本和版权声明。", "确认二进制分发时的告知义务。"],
+    "approval_required": true,
+    "approval_roles": ["security", "legal"],
+    "remediation": "由安全与法务/合规负责人确认分发方式、修改范围和源码披露义务。"
+  },
+  {
+    "id": "LICENSE-LGPL",
+    "keywords": ["lgpl"],
+    "policy": "review_required",
+    "summary": "LGPL 许可证需要确认动态/静态链接方式、修改范围和重新链接能力。",
+    "obligations": ["保留许可证文本和版权声明。", "如修改 LGPL 组件本身，确认源码披露义务。", "确认用户是否具备重新链接或替换 LGPL 组件的能力。"],
+    "approval_required": true,
+    "approval_roles": ["security", "legal"],
+    "remediation": "优先使用动态链接并保留替换能力；由安全与法务/合规负责人确认交付边界。"
+  },
+  {
+    "id": "LICENSE-GPL",
+    "keywords": ["gpl"],
+    "policy": "restricted",
+    "summary": "GPL 许可证可能触发强 Copyleft 义务，商业闭源或嵌入式分发场景需要谨慎处理。",
+    "obligations": ["确认衍生作品和分发场景。", "如触发义务，需提供对应源码和许可证文本。", "确认是否允许进入当前产品交付范围。"],
+    "approval_required": true,
+    "approval_roles": ["security", "legal", "business_owner"],
+    "remediation": "优先替换为允许许可证组件；如必须使用，需完成安全、法务/合规和业务负责人例外审批。"
+  },
+  {
+    "id": "LICENSE-AGPL-SSPL",
+    "keywords": ["agpl", "sspl"],
+    "policy": "restricted",
+    "summary": "AGPL/SSPL 类许可证可能对网络服务或服务端使用触发额外源码披露义务。",
+    "obligations": ["确认是否通过网络提供服务。", "确认服务端源码披露义务。", "确认组织是否允许此类许可证进入运行环境。"],
+    "approval_required": true,
+    "approval_roles": ["security", "legal", "business_owner"],
+    "remediation": "默认建议替换组件；如必须使用，需完成安全、法务/合规和业务负责人例外审批。"
+  },
+  {
+    "id": "LICENSE-COMMERCIAL-PROPRIETARY",
+    "keywords": ["commercial", "proprietary"],
+    "policy": "review_required",
+    "summary": "商业或专有许可证需要确认采购、授权范围、使用人数、部署环境和再分发权利。",
+    "obligations": ["确认授权合同和使用范围。", "确认是否允许再分发或嵌入产品。", "保留采购和授权证据。"],
+    "approval_required": true,
+    "approval_roles": ["legal", "business_owner"],
+    "remediation": "补充授权证明，并由法务/合规和业务负责人确认使用范围。"
+  },
+  {
+    "id": "LICENSE-UNKNOWN",
+    "keywords": ["unknown", "none", "not declared", "not_declared"],
+    "policy": "unknown",
+    "summary": "许可证未声明或无法识别，不能确认组件使用边界。",
+    "obligations": ["补充许可证元数据。", "在确认前按需复核处理。"],
+    "approval_required": true,
+    "approval_roles": ["security"],
+    "remediation": "补全许可证信息；无法确认时替换组件或提交安全负责人复核。"
+  }
+]

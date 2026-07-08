@@ -86,7 +86,8 @@ http://localhost:5173
 - 接入 OSV 漏洞库查询。
 - 本地漏洞规则库第一版：独立 JSON 规则文件，覆盖 npm、PyPI、Maven、Go 示例规则。
 - 本地规则支持简单版本范围：`<1.2.3`、`<=1.2.3`、`>=1.0.0,<2.0.0`。
-- 许可证策略归一化第一版：`allowed`、`review_required`、`restricted`、`unknown`。
+- 许可证策略第一版：独立 JSON 策略文件，归一化为 `allowed`、`review_required`、`restricted`、`unknown`。
+- 许可证义务说明与例外审批建议第一版：输出保留声明、NOTICE、源码披露、授权证明、法务/安全/业务审批等建议。
 - CycloneDX JSON SBOM 导出第一版。
 - CycloneDX `dependencies` 关系导出第一版：项目到直接依赖、直接依赖到同生态传递依赖。
 - SPDX 2.3 JSON SBOM 导出第一版，包含项目包、组件包、PURL 外部引用和 `DEPENDS_ON` 关系。
@@ -107,7 +108,7 @@ GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
 
 - 更完整的 SBOM 元数据、组件哈希和精确依赖边。
 - 更完整的依赖图谱、升级杠杆和传递影响分析。
-- 更完整的许可证义务说明、例外审批和组织级策略配置。
+- 更完整的组织级许可证策略配置、策略启停、审批流持久化和例外记录管理。
 - 更完整的本地漏洞规则来源、规则覆盖面、规则启停和组织级规则管理。
 - Syft / Trivy / Grype 等专业工具接入。
 - 离线漏洞库缓存。

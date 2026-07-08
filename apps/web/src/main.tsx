@@ -551,7 +551,7 @@ function objectValue(value: unknown): Record<string, unknown> { return value && 
 function listValue(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function textValue(value: unknown) { return value === null || value === undefined || value === "" ? "-" : String(value); }
 function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
-function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需复核" : value === "restricted" ? "受限" : value === "unknown" ? "未知" : value ?? "-"; }
+function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需合规复核" : value === "restricted" ? "受限需审批" : value === "unknown" ? "未知需确认" : value ?? "-"; }
 function normalizeFindingStatus(status: FindingStatus) { return status === "pending" ? "open" : status === "retest" ? "fixing" : status === "closed" ? "fixed" : status; }
 function statusLabel(status: FindingStatus) { return status === "open" ? "待确认" : status === "confirmed" ? "已确认" : status === "fixing" ? "修复中" : status === "fixed" ? "已修复" : status === "accepted_risk" ? "接受风险" : status === "false_positive" ? "误报" : status; }
 function dateInputValue(value?: string | null) { return value ? value.slice(0, 10) : ""; }

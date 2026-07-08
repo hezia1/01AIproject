@@ -1,37 +1,12 @@
 ﻿from __future__ import annotations
 
-import re
 from dataclasses import replace
 
 from app.models import Severity
+from app.services.sca_license_policy import assess_license, format_license_summary
 from app.services.osv_client import OsvLookupError, supports_osv, query_osv
 from app.services.sca_parser import ParsedComponent
 from app.services.sca_vulnerability_rules import load_vulnerability_rules, matches_vulnerability_rule
-
-LICENSE_POLICY_RULES = {
-    "mit": "allowed",
-    "apache-2.0": "allowed",
-    "apache 2.0": "allowed",
-    "bsd": "allowed",
-    "isc": "allowed",
-    "mpl": "review_required",
-    "lgpl": "review_required",
-    "epl": "review_required",
-    "cddl": "review_required",
-    "gpl": "restricted",
-    "agpl": "restricted",
-    "sspl": "restricted",
-    "commercial": "review_required",
-    "proprietary": "review_required",
-    "unknown": "unknown",
-}
-
-LICENSE_POLICY_ORDER = {
-    "restricted": 4,
-    "review_required": 3,
-    "unknown": 2,
-    "allowed": 1,
-}
 
 SEVERITY_WEIGHT = {
     Severity.critical: 5,
@@ -57,7 +32,8 @@ def analyze_component(component: ParsedComponent) -> ParsedComponent:
         rule.vulnerability_id for rule in matched_rules
     ]
     severity = highest_severity([item.severity for item in osv_vulnerabilities] + [rule.severity for rule in matched_rules])
-    license_policy = classify_license(component.license)
+    license_assessment = assess_license(component.license)
+    license_policy = license_assessment.policy
 
     summaries: list[str] = []
     remediation: list[str] = []
@@ -69,8 +45,8 @@ def analyze_component(component: ParsedComponent) -> ParsedComponent:
         summaries.extend(rule_references_summary(rule.references) for rule in matched_rules if rule.references)
         remediation.extend(f"升级 {rule.package} 到 {rule.fixed_version} 或更高版本。" for rule in matched_rules)
     if license_policy in {"restricted", "review_required", "unknown"}:
-        summaries.append(license_summary(component.license, license_policy))
-        remediation.append(license_remediation(license_policy))
+        summaries.append(format_license_summary(license_assessment))
+        remediation.append(license_assessment.remediation)
 
     if osv_vulnerabilities or matched_rules:
         risk_status = "vulnerable"
@@ -135,42 +111,6 @@ def determine_risk_source(
     if osv_checked:
         return "clean"
     return "not_supported"
-
-
-def classify_license(license_name: str | None) -> str:
-    if not license_name:
-        return "unknown"
-    normalized = license_name.lower()
-    matched_policies: list[str] = []
-    for keyword, policy in LICENSE_POLICY_RULES.items():
-        if license_keyword_matches(normalized, keyword):
-            matched_policies.append(policy)
-    if not matched_policies:
-        return "review_required"
-    return max(matched_policies, key=lambda item: LICENSE_POLICY_ORDER[item])
-
-
-def license_keyword_matches(normalized_license: str, keyword: str) -> bool:
-    if keyword == "gpl":
-        return bool(re.search(r"(?<![al])gpl", normalized_license))
-    return keyword in normalized_license
-
-
-def license_summary(license_name: str | None, policy: str) -> str:
-    label = license_name or "unknown"
-    if policy == "restricted":
-        return f"许可证 {label} 命中受限策略，需要确认是否允许在当前交付场景中使用。"
-    if policy == "review_required":
-        return f"许可证 {label} 需要合规复核后再确认使用边界。"
-    return f"许可证 {label} 未明确识别，需要补充许可证信息或人工确认。"
-
-
-def license_remediation(policy: str) -> str:
-    if policy == "restricted":
-        return "优先替换为允许许可证组件，或由法务/合规负责人审批例外使用。"
-    if policy == "review_required":
-        return "由安全与法务/合规负责人确认许可证义务、分发方式和使用边界。"
-    return "补全许可证元数据，无法确认前按需复核处理。"
 
 
 def rule_references_summary(references: tuple[str, ...]) -> str:
