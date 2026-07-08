@@ -248,6 +248,21 @@ class ScaScanResult(BaseModel):
     components: list[Component]
 
 
+class ScaScanHistoryItem(BaseModel):
+    scan_task_id: UUID
+    status: ScanStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    component_count: int = 0
+    direct_dependency_count: int = 0
+    transitive_dependency_count: int = 0
+    critical_count: int = 0
+    high_count: int = 0
+    vulnerable_count: int = 0
+    license_risk_count: int = 0
+
+
 class SastScanRequest(BaseModel):
     project_id: UUID
     source_path: str = Field(min_length=1)

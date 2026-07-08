@@ -106,6 +106,7 @@ POST /api/sca/scan
 GET  /api/sca/projects/{project_id}/components
 GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
 GET  /api/sca/projects/{project_id}/dependency-graph
+GET  /api/sca/projects/{project_id}/scan-history
 ```
 
 还缺少：

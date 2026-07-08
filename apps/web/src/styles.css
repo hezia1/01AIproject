@@ -580,6 +580,15 @@ th {
   font-weight: 600;
 }
 
+.compact-table th,
+.compact-table td {
+  padding: 10px 8px;
+}
+
+.selected-row {
+  background: #eff6ff;
+}
+
 .severity {
   display: inline-block;
   min-width: 70px;

@@ -15,6 +15,8 @@ type ProjectAssetDraft = Pick<ProjectDraft, "runtime_url" | "api_base_url" | "sa
 type ProjectModule = { project_id: string; module_key: ModuleKey; enabled: boolean; config: Record<string, unknown> };
 type ProjectAssetProbe = { project_id: string; source_path: string | null; path_exists: boolean; sca_files: string[]; source_files: string[]; agent_files: string[]; recommended_tasks: ("sca" | "sast" | "agent")[]; message: string };
 type Component = { id: string; ecosystem: string; name: string; version: string | null; dependency_type: string; source_file: string; package_manager: string | null; license?: string | null; risk_status?: string; vulnerability_ids?: string[]; severity?: Severity | null; risk_summary?: string | null; remediation?: string | null; license_risk?: string | null; risk_source?: string | null; osv_checked?: boolean; osv_error?: string | null };
+type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[] };
+type ScaScanHistoryItem = { scan_task_id: string; status: string; started_at: string | null; finished_at: string | null; created_at: string; component_count: number; direct_dependency_count: number; transitive_dependency_count: number; critical_count: number; high_count: number; vulnerable_count: number; license_risk_count: number };
 type DependencyGraphNode = { id: string; label: string; kind: string; risk_status?: string | null; severity?: Severity | null; dependency_type?: string | null; ecosystem?: string | null; version?: string | null };
 type DependencyGraphEdge = { source: string; target: string; quality: string };
 type UpgradeLever = { component_id: string; component: string; ecosystem: string; version: string | null; risk_transitive_count: number; highest_severity: Severity | null; affected_components: string[]; recommendation: string };
@@ -57,6 +59,8 @@ function App() {
   const [assetProbe, setAssetProbe] = useState<ProjectAssetProbe | null>(null);
   const [enabledModules, setEnabledModules] = useState<Set<ModuleKey>>(() => new Set(DEFAULT_ENABLED_MODULES));
   const [components, setComponents] = useState<Component[]>([]);
+  const [scaScanHistory, setScaScanHistory] = useState<ScaScanHistoryItem[]>([]);
+  const [selectedScaScanId, setSelectedScaScanId] = useState<string | null>(null);
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [validations, setValidations] = useState<DastValidation[]>([]);
@@ -111,6 +115,8 @@ function App() {
   function clearProjectData() {
     setEnabledModules(new Set(["aspm"]));
     setComponents([]);
+    setScaScanHistory([]);
+    setSelectedScaScanId(null);
     setDependencyGraph(null);
     setFindings([]);
     setValidations([]);
@@ -145,7 +151,7 @@ function App() {
     }
   }
 
-  async function refreshProjectContext(projectId = project?.id) {
+  async function refreshProjectContext(projectId = project?.id, scaScanId: string | null = selectedScaScanId) {
     if (!projectId) return;
     const [projectModules, probeData] = await Promise.all([
       request<ProjectModule[]>(`/modules/projects/${projectId}`),
@@ -156,20 +162,25 @@ function App() {
     }
     setEnabledModules(new Set([...projectModules.filter((item) => item.enabled).map((item) => item.module_key), "aspm"]));
     setAssetProbe(probeData);
-    await refreshProjectData(projectId);
+    await refreshProjectData(projectId, scaScanId);
   }
 
-  async function refreshProjectData(projectId = project?.id) {
+  async function refreshProjectData(projectId = project?.id, scaScanId: string | null = selectedScaScanId) {
     if (!projectId) return;
+    const historyData = await request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`).catch(() => []);
+    const effectiveScaScanId = scaScanId ?? historyData[0]?.scan_task_id ?? null;
+    const scaQuery = effectiveScaScanId ? `?scan_task_id=${effectiveScaScanId}` : "";
     const [componentData, graphData, findingData, validationData, evidenceData, templateData, summaryData] = await Promise.all([
-      request<Component[]>(`/sca/projects/${projectId}/components`),
-      request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph`).catch(() => null),
+      request<Component[]>(`/sca/projects/${projectId}/components${scaQuery}`),
+      request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph${scaQuery}`).catch(() => null),
       request<Finding[]>(`/findings?project_id=${projectId}`),
       request<DastValidation[]>(`/dast/projects/${projectId}/validations`),
       request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`),
       request<SandboxTemplate[]>(`/sandbox/projects/${projectId}/templates`),
       request<AspmSummary>(`/aspm/projects/${projectId}/summary`),
     ]);
+    setScaScanHistory(historyData);
+    setSelectedScaScanId(effectiveScaScanId);
     setComponents(componentData);
     setDependencyGraph(graphData);
     setFindings(findingData);
@@ -283,8 +294,10 @@ function App() {
     const source = kind === "sca" ? sourcePath : kind === "sast" ? sastPath : agentPath;
     setLoading(true);
     try {
-      await request(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, clear_previous: true }) });
-      await refreshProjectContext(project.id);
+      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, clear_previous: true }) });
+      const nextScaScanId = kind === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId;
+      if (kind === "sca") setSelectedScaScanId(nextScaScanId);
+      await refreshProjectContext(project.id, nextScaScanId);
       setStatus(`${kind.toUpperCase()} 扫描完成`);
     } catch (error) { console.error(error); setStatus(`${kind.toUpperCase()} 扫描失败：${errorMessage(error)}`); } finally { setLoading(false); }
   }
@@ -295,10 +308,13 @@ function App() {
     if (runnable.length === 0) return setStatus("没有可执行的推荐任务，请先配置源码路径并启用对应模块");
     setLoading(true);
     try {
+      let nextScaScanId = selectedScaScanId;
       for (const kind of runnable) {
-        await request(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, clear_previous: true }) });
+        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, clear_previous: true }) });
+        if (kind === "sca") nextScaScanId = (result as ScaScanResult).scan_task_id;
       }
-      await refreshProjectContext(project.id);
+      setSelectedScaScanId(nextScaScanId);
+      await refreshProjectContext(project.id, nextScaScanId);
       setStatus(`推荐任务已完成：${runnable.map((item) => item.toUpperCase()).join(" + ")}`);
     } catch (error) {
       console.error(error);
@@ -355,11 +371,27 @@ function App() {
     }
   }
 
+  async function selectScaScanSnapshot(scanTaskId: string) {
+    if (!project) return;
+    setLoading(true);
+    try {
+      setSelectedScaScanId(scanTaskId);
+      await refreshProjectData(project.id, scanTaskId);
+      setStatus("SCA 历史快照已切换");
+    } catch (error) {
+      console.error(error);
+      setStatus(`SCA 历史快照切换失败：${errorMessage(error)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function exportScaSbom(format: "cyclonedx" | "spdx") {
     if (!project) return setStatus("请先选择项目");
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/sbom?format=${format}`);
+      const scanQuery = selectedScaScanId ? `&scan_task_id=${selectedScaScanId}` : "";
+      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/sbom?format=${format}${scanQuery}`);
       if (!response.ok) {
         let detail = `${response.status} ${response.statusText}`;
         try {
@@ -373,7 +405,8 @@ function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${project.name || "project"}-${format}-sbom.json`;
+      const scanSuffix = selectedScaScanId ? `-${selectedScaScanId.slice(0, 8)}` : "";
+      link.download = `${project.name || "project"}${scanSuffix}-${format}-sbom.json`;
       link.click();
       URL.revokeObjectURL(url);
       setStatus(`${format === "cyclonedx" ? "CycloneDX" : "SPDX"} SBOM 已导出`);
@@ -405,7 +438,7 @@ function App() {
         {activeView === "assets" && <><ProjectAssetConfig project={project} loading={loading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("tasks")} onOpenModules={() => setActiveView("modules")} /></>}
         {activeView === "modules" && <ModulesView modules={optionalModules} project={project} enabledModules={enabledModules} selectedModules={selectedModules} savingKey={savingKey} onToggle={toggleModule} />}
         {activeView === "tasks" && <TaskCenter project={project} assetProbe={assetProbe} enabledModules={enabledModules} sourcePath={sourcePath} sastPath={sastPath} agentPath={agentPath} targetUrl={targetUrl} runCommand={runCommand} loading={loading} onSourcePathChange={setSourcePath} onSastPathChange={setSastPath} onAgentPathChange={setAgentPath} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onScan={runScan} onRecommended={runRecommendedScans} onDast={createDastValidation} onSandbox={createSandboxEvidence} />}
-        {activeView === "sca" && <ScaView project={project} components={components} dependencyGraph={dependencyGraph} sourcePath={sourcePath} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onRunScan={() => runScan("sca")} onExportSbom={exportScaSbom} />}
+        {activeView === "sca" && <ScaView project={project} components={components} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} dependencyGraph={dependencyGraph} sourcePath={sourcePath} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onRunScan={() => runScan("sca")} onExportSbom={exportScaSbom} onSelectScan={selectScaScanSnapshot} />}
         {activeView === "sast" && <SastView project={project} findings={sastFindings} categorySummary={sastCategorySummary} sourcePath={sastPath} loading={loading} onSourcePathChange={setSastPath} onRunScan={() => runScan("sast")} onAgentReview={runSastAgentReview} />}
         {activeView === "agent" && <AgentView project={project} findings={agentFindings} categorySummary={agentCategorySummary} sourcePath={agentPath} loading={loading} onSourcePathChange={setAgentPath} onRunScan={() => runScan("agent")} />}
         {activeView === "dast" && <DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} />}
@@ -507,7 +540,7 @@ function SastView({ project, findings, categorySummary, sourcePath, loading, onS
 
   return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SAST 智能静态审计</h2><p>优先调用 Semgrep 规则引擎扫描源码，并通过规则化 Sub-agent 编排完成复核、证据归档和修复建议归一化。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SAST 审计"}</button><button className="secondary-action" onClick={() => void onAgentReview()} disabled={loading || !project || findings.length === 0}>执行 Agent 复核</button></div></div><section className="module-summary"><Metric label="Findings" value={findings.length} /><Metric label="Agent 已复核" value={reviewedCount} /><Metric label="Critical / High" value={(severitySummary.critical ?? 0) + (severitySummary.high ?? 0)} /><Metric label="风险分类" value={Object.keys(categorySummary).length} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>规则分类</h2><span>Category</span></div><KeyValue data={categorySummary} /></div><div className="panel"><div className="panel-header"><h2>严重等级</h2><span>Severity</span></div><KeyValue data={severitySummary} /></div><div className="panel full"><div className="panel-header"><h2>SAST 风险发现</h2><span>共 {findings.length} 条</span></div><table><thead><tr><th>等级</th><th>分类</th><th>标题</th><th>位置</th><th>Agent 复核</th><th>修复建议</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={6} className="empty-cell">暂无 SAST findings，执行 SAST 审计后显示结果。</td></tr> : pageFindings.map((finding) => <tr key={finding.id}><td><span className={`severity ${finding.severity}`}>{finding.severity}</span><span className="cell-subtext">{finding.ai_review?.priority ?? "-"}</span></td><td><span className="risk-badge review-required">{finding.ai_review?.category ?? "unknown"}</span><span className="cell-subtext">{finding.ai_review?.language ?? "Unknown"}</span></td><td><strong>{finding.title}</strong><span className="cell-subtext">{finding.evidence ?? "-"}</span></td><td>{finding.file_path ?? "-"}<span className="cell-subtext">Line {finding.line_start ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.cwe ?? "-"} · {finding.ai_review?.owasp ?? "-"}</span></td><td>{finding.ai_review?.review_verdict ?? "未复核"}<span className="cell-subtext">误报概率：{finding.ai_review?.false_positive_likelihood ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.evidence_summary ?? "-"}</span></td><td>{finding.ai_review?.fix_strategy ?? finding.ai_review?.remediation ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
 }
-function ScaView({ project, components, dependencyGraph, sourcePath, ecosystemSummary, riskSummary, loading, onSourcePathChange, onRunScan, onExportSbom }: { project: Project | null; components: Component[]; dependencyGraph: DependencyGraph | null; sourcePath: string; ecosystemSummary: Record<string, number>; riskSummary: Record<string, number>; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void> }) {
+function ScaView({ project, components, scanHistory, selectedScanId, dependencyGraph, sourcePath, ecosystemSummary, riskSummary, loading, onSourcePathChange, onRunScan, onExportSbom, onSelectScan }: { project: Project | null; components: Component[]; scanHistory: ScaScanHistoryItem[]; selectedScanId: string | null; dependencyGraph: DependencyGraph | null; sourcePath: string; ecosystemSummary: Record<string, number>; riskSummary: Record<string, number>; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onSelectScan: (scanTaskId: string) => Promise<void> }) {
   const [page, setPage] = useState(1);
   const [mode, setMode] = useState<"list" | "graph">("list");
   const [filters, setFilters] = useState({ ecosystem: "all", dependencyType: "all", riskStatus: "all", severity: "all", licensePolicy: "all" });
@@ -534,10 +567,15 @@ function ScaView({ project, components, dependencyGraph, sourcePath, ecosystemSu
   useEffect(() => { setMode("list"); }, [project?.id]);
 
   if (mode === "graph") {
-    return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>完整依赖图谱</h2><p>展示当前 SCA 扫描得到的项目、直接依赖、传递依赖和推断依赖边。</p></div><div className="path-control"><button className="secondary-action" onClick={() => setMode("list")}>返回 SCA 清单</button></div></div><section className="module-summary"><Metric label="节点" value={dependencyGraph?.summary.node_count ?? 0} /><Metric label="依赖边" value={dependencyGraph?.summary.edge_count ?? 0} /><Metric label="风险节点" value={dependencyGraph?.summary.risk_node_count ?? 0} /><Metric label="推断边" value={dependencyGraph?.summary.lockfile_inferred_edge_count ?? 0} /></section><div className="content-grid"><div className="panel full"><div className="panel-header"><h2>完整图谱</h2><span>{project?.name ?? "未连接"}</span></div><DependencyGraphView graph={dependencyGraph} full /></div><div className="panel full"><div className="panel-header"><h2>升级杠杆</h2><span>{dependencyGraph?.upgrade_levers.length ?? 0} 项</span></div><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></div></div></section>;
+    return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>完整依赖图谱</h2><p>展示当前 SCA 扫描批次得到的项目、直接依赖、传递依赖和推断依赖边。</p></div><div className="path-control"><button className="secondary-action" onClick={() => setMode("list")}>返回 SCA 清单</button></div></div><section className="module-summary"><Metric label="节点" value={dependencyGraph?.summary.node_count ?? 0} /><Metric label="依赖边" value={dependencyGraph?.summary.edge_count ?? 0} /><Metric label="风险节点" value={dependencyGraph?.summary.risk_node_count ?? 0} /><Metric label="推断边" value={dependencyGraph?.summary.lockfile_inferred_edge_count ?? 0} /></section><div className="content-grid"><div className="panel full"><div className="panel-header"><h2>完整图谱</h2><span>{selectedScanId ? `批次 ${selectedScanId.slice(0, 8)}` : project?.name ?? "未连接"}</span></div><DependencyGraphView graph={dependencyGraph} full /></div><div className="panel full"><div className="panel-header"><h2>升级杠杆</h2><span>{dependencyGraph?.upgrade_levers.length ?? 0} 项</span></div><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></div></div></section>;
   }
 
-  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SCA 供应链风险分析</h2><p>解析项目依赖生成 SBOM，结合 OSV 漏洞库、本地规则和许可证策略生成可解释的组件风险结果。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SCA 风险分析"}</button><button className="secondary-action" onClick={() => void onExportSbom("cyclonedx")} disabled={loading || !project || components.length === 0}>导出 CycloneDX</button><button className="secondary-action" onClick={() => void onExportSbom("spdx")} disabled={loading || !project || components.length === 0}>导出 SPDX</button></div></div><section className="module-summary"><Metric label="筛选结果" value={`${filteredComponents.length} / ${components.length}`} /><Metric label="直接 / 传递" value={`${directCount} / ${dependencyTypeSummary.transitive ?? 0}`} /><Metric label="风险传递依赖" value={riskyTransitiveCount} /><Metric label="依赖边 / 推断" value={`${edgeSummary.total} / ${edgeSummary.lockfileInferred}`} /></section><div className="content-grid"><button className="graph-open-card panel full" onClick={() => setMode("graph")} disabled={!dependencyGraph}><span>依赖图谱</span><strong>{dependencyGraph ? `${dependencyGraph.summary.node_count ?? 0} 节点 / ${dependencyGraph.summary.edge_count ?? 0} 边` : "暂无图谱"}</strong><em>风险节点 {dependencyGraph?.summary.risk_node_count ?? 0} · 推断边 {dependencyGraph?.summary.lockfile_inferred_edge_count ?? 0}</em></button><div className="panel full"><div className="panel-header"><h2>升级杠杆</h2><span>{dependencyGraph?.upgrade_levers.length ?? 0} 项</span></div><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></div><div className="panel full"><div className="panel-header"><h2>组件筛选</h2><span>Filter</span></div><div className="filter-grid"><FilterSelect label="生态" value={filters.ecosystem} options={filterOptions.ecosystems} onChange={(value) => setFilters((current) => ({ ...current, ecosystem: value }))} /><FilterSelect label="依赖类型" value={filters.dependencyType} options={filterOptions.dependencyTypes} formatOption={dependencyTypeLabel} onChange={(value) => setFilters((current) => ({ ...current, dependencyType: value }))} /><FilterSelect label="风险状态" value={filters.riskStatus} options={filterOptions.riskStatuses} formatOption={riskStatusLabel} onChange={(value) => setFilters((current) => ({ ...current, riskStatus: value }))} /><FilterSelect label="严重等级" value={filters.severity} options={filterOptions.severities} formatOption={severityLabel} onChange={(value) => setFilters((current) => ({ ...current, severity: value }))} /><FilterSelect label="许可证策略" value={filters.licensePolicy} options={filterOptions.licensePolicies} formatOption={licensePolicyLabel} onChange={(value) => setFilters((current) => ({ ...current, licensePolicy: value }))} /><button className="secondary-action" onClick={() => setFilters({ ecosystem: "all", dependencyType: "all", riskStatus: "all", severity: "all", licensePolicy: "all" })}>清空筛选</button></div></div><div className="panel"><div className="panel-header"><h2>生态分布</h2><span>SBOM ecosystem</span></div><KeyValue data={filteredEcosystemSummary} /></div><div className="panel"><div className="panel-header"><h2>依赖类型</h2><span>Dependency</span></div><KeyValue data={dependencyTypeSummary} formatKey={dependencyTypeLabel} /></div><div className="panel"><div className="panel-header"><h2>许可证策略</h2><span>License</span></div><KeyValue data={licensePolicySummary} formatKey={licensePolicyLabel} /></div><div className="panel full"><div className="panel-header"><h2>组件风险清单</h2><span>Project: {project?.name ?? "未连接"}</span></div><table><thead><tr><th>生态</th><th>组件</th><th>版本</th><th>类型</th><th>风险</th><th>来源 / OSV</th><th>漏洞编号</th><th>许可证</th><th>修复建议</th></tr></thead><tbody>{components.length === 0 ? <tr><td colSpan={9} className="empty-cell">暂无组件，执行 SCA 扫描后显示结果。</td></tr> : filteredComponents.length === 0 ? <tr><td colSpan={9} className="empty-cell">当前筛选条件下没有组件。</td></tr> : pageComponents.map((component) => <tr key={component.id}><td><span className="ecosystem-badge">{component.ecosystem}</span></td><td><strong>{component.name}</strong><span className="cell-subtext">{component.source_file}</span></td><td>{component.version ?? "-"}</td><td>{dependencyTypeLabel(component.dependency_type)}</td><td><RiskBadge status={component.risk_status ?? "not_checked"} severity={component.severity ?? null} /></td><td><span className="risk-badge review-required">{sourceLabel(component.risk_source)}</span><span className="cell-subtext">{component.osv_checked ? "OSV 已查询" : "OSV 未查询"}</span>{component.osv_error ? <span className="cell-subtext">{component.osv_error}</span> : null}</td><td>{component.vulnerability_ids?.length ? component.vulnerability_ids.join(", ") : "-"}</td><td>{component.license ?? "-"}{component.license_risk ? <span className="cell-subtext">策略：{licensePolicyLabel(component.license_risk)}</span> : null}</td><td>{component.remediation ?? component.risk_summary ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条，共 {filteredComponents.length} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SCA 供应链风险分析</h2><p>解析项目依赖生成 SBOM，结合 OSV 漏洞库、本地规则和许可证策略生成可解释的组件风险结果。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SCA 风险分析"}</button><button className="secondary-action" onClick={() => void onExportSbom("cyclonedx")} disabled={loading || !project || components.length === 0}>导出 CycloneDX</button><button className="secondary-action" onClick={() => void onExportSbom("spdx")} disabled={loading || !project || components.length === 0}>导出 SPDX</button></div></div><section className="module-summary"><Metric label="筛选结果" value={`${filteredComponents.length} / ${components.length}`} /><Metric label="直接 / 传递" value={`${directCount} / ${dependencyTypeSummary.transitive ?? 0}`} /><Metric label="风险传递依赖" value={riskyTransitiveCount} /><Metric label="依赖边 / 推断" value={`${edgeSummary.total} / ${edgeSummary.lockfileInferred}`} /></section><div className="content-grid"><div className="panel full"><div className="panel-header"><h2>扫描历史</h2><span>{selectedScanId ? `当前批次 ${selectedScanId.slice(0, 8)}` : "未选择批次"}</span></div><ScaScanHistoryTable history={scanHistory} selectedScanId={selectedScanId} loading={loading} onSelect={onSelectScan} /></div><button className="graph-open-card panel full" onClick={() => setMode("graph")} disabled={!dependencyGraph}><span>依赖图谱</span><strong>{dependencyGraph ? `${dependencyGraph.summary.node_count ?? 0} 节点 / ${dependencyGraph.summary.edge_count ?? 0} 边` : "暂无图谱"}</strong><em>风险节点 {dependencyGraph?.summary.risk_node_count ?? 0} · 推断边 {dependencyGraph?.summary.lockfile_inferred_edge_count ?? 0}</em></button><div className="panel full"><div className="panel-header"><h2>升级杠杆</h2><span>{dependencyGraph?.upgrade_levers.length ?? 0} 项</span></div><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></div><div className="panel full"><div className="panel-header"><h2>组件筛选</h2><span>Filter</span></div><div className="filter-grid"><FilterSelect label="生态" value={filters.ecosystem} options={filterOptions.ecosystems} onChange={(value) => setFilters((current) => ({ ...current, ecosystem: value }))} /><FilterSelect label="依赖类型" value={filters.dependencyType} options={filterOptions.dependencyTypes} formatOption={dependencyTypeLabel} onChange={(value) => setFilters((current) => ({ ...current, dependencyType: value }))} /><FilterSelect label="风险状态" value={filters.riskStatus} options={filterOptions.riskStatuses} formatOption={riskStatusLabel} onChange={(value) => setFilters((current) => ({ ...current, riskStatus: value }))} /><FilterSelect label="严重等级" value={filters.severity} options={filterOptions.severities} formatOption={severityLabel} onChange={(value) => setFilters((current) => ({ ...current, severity: value }))} /><FilterSelect label="许可证策略" value={filters.licensePolicy} options={filterOptions.licensePolicies} formatOption={licensePolicyLabel} onChange={(value) => setFilters((current) => ({ ...current, licensePolicy: value }))} /><button className="secondary-action" onClick={() => setFilters({ ecosystem: "all", dependencyType: "all", riskStatus: "all", severity: "all", licensePolicy: "all" })}>清空筛选</button></div></div><div className="panel"><div className="panel-header"><h2>生态分布</h2><span>SBOM ecosystem</span></div><KeyValue data={filteredEcosystemSummary} /></div><div className="panel"><div className="panel-header"><h2>依赖类型</h2><span>Dependency</span></div><KeyValue data={dependencyTypeSummary} formatKey={dependencyTypeLabel} /></div><div className="panel"><div className="panel-header"><h2>许可证策略</h2><span>License</span></div><KeyValue data={licensePolicySummary} formatKey={licensePolicyLabel} /></div><div className="panel full"><div className="panel-header"><h2>组件风险清单</h2><span>Project: {project?.name ?? "未连接"}</span></div><table><thead><tr><th>生态</th><th>组件</th><th>版本</th><th>类型</th><th>风险</th><th>来源 / OSV</th><th>漏洞编号</th><th>许可证</th><th>修复建议</th></tr></thead><tbody>{components.length === 0 ? <tr><td colSpan={9} className="empty-cell">暂无组件，执行 SCA 扫描后显示结果。</td></tr> : filteredComponents.length === 0 ? <tr><td colSpan={9} className="empty-cell">当前筛选条件下没有组件。</td></tr> : pageComponents.map((component) => <tr key={component.id}><td><span className="ecosystem-badge">{component.ecosystem}</span></td><td><strong>{component.name}</strong><span className="cell-subtext">{component.source_file}</span></td><td>{component.version ?? "-"}</td><td>{dependencyTypeLabel(component.dependency_type)}</td><td><RiskBadge status={component.risk_status ?? "not_checked"} severity={component.severity ?? null} /></td><td><span className="risk-badge review-required">{sourceLabel(component.risk_source)}</span><span className="cell-subtext">{component.osv_checked ? "OSV 已查询" : "OSV 未查询"}</span>{component.osv_error ? <span className="cell-subtext">{component.osv_error}</span> : null}</td><td>{component.vulnerability_ids?.length ? component.vulnerability_ids.join(", ") : "-"}</td><td>{component.license ?? "-"}{component.license_risk ? <span className="cell-subtext">策略：{licensePolicyLabel(component.license_risk)}</span> : null}</td><td>{component.remediation ?? component.risk_summary ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条，共 {filteredComponents.length} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+}
+
+function ScaScanHistoryTable({ history, selectedScanId, loading, onSelect }: { history: ScaScanHistoryItem[]; selectedScanId: string | null; loading: boolean; onSelect: (scanTaskId: string) => Promise<void> }) {
+  if (history.length === 0) return <div className="empty-project">暂无 SCA 扫描历史，执行 SCA 风险分析后会保留每次扫描快照。</div>;
+  return <table className="compact-table"><thead><tr><th>批次</th><th>状态</th><th>完成时间</th><th>组件</th><th>直接 / 传递</th><th>漏洞 / 高危</th><th>许可证风险</th><th>操作</th></tr></thead><tbody>{history.map((item) => <tr key={item.scan_task_id} className={selectedScanId === item.scan_task_id ? "selected-row" : ""}><td><strong>{item.scan_task_id.slice(0, 8)}</strong><span className="cell-subtext">{formatDateTime(item.started_at ?? item.created_at)}</span></td><td>{scanStatusLabel(item.status)}</td><td>{formatDateTime(item.finished_at)}</td><td>{item.component_count}</td><td>{item.direct_dependency_count} / {item.transitive_dependency_count}</td><td>{item.vulnerable_count}<span className="cell-subtext">严重 {item.critical_count} · 高危 {item.high_count}</span></td><td>{item.license_risk_count}</td><td><button className="secondary-action" disabled={loading || selectedScanId === item.scan_task_id} onClick={() => void onSelect(item.scan_task_id)}>{selectedScanId === item.scan_task_id ? "当前批次" : "查看快照"}</button></td></tr>)}</tbody></table>;
 }
 
 function DependencyGraphView({ graph, full = false }: { graph: DependencyGraph | null; full?: boolean }) {
@@ -598,6 +636,7 @@ function riskStatusLabel(value?: string | null) { return value === "vulnerable" 
 function severityLabel(value?: string | null) { return value === "critical" ? "严重" : value === "high" ? "高危" : value === "medium" ? "中危" : value === "low" ? "低危" : value === "info" ? "提示" : value === "none" ? "无等级" : value ?? "-"; }
 function dependencyTypeLabel(value?: string | null) { return value === "runtime" ? "运行依赖" : value === "development" ? "开发依赖" : value === "optional" ? "可选依赖" : value === "peer" ? "对等依赖" : value === "test" ? "测试依赖" : value === "transitive" ? "传递依赖" : value === "compile" ? "编译依赖" : value === "provided" ? "容器提供" : value === "system" ? "系统依赖" : value === "import" ? "导入依赖" : value ?? "-"; }
 function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需合规复核" : value === "restricted" ? "受限需审批" : value === "unknown" ? "未知需确认" : value ?? "-"; }
+function scanStatusLabel(value?: string | null) { return value === "queued" ? "排队中" : value === "running" ? "运行中" : value === "completed" ? "已完成" : value === "failed" ? "失败" : value ?? "-"; }
 function normalizeFindingStatus(status: FindingStatus) { return status === "pending" ? "open" : status === "retest" ? "fixing" : status === "closed" ? "fixed" : status; }
 function statusLabel(status: FindingStatus) { return status === "open" ? "待确认" : status === "confirmed" ? "已确认" : status === "fixing" ? "修复中" : status === "fixed" ? "已修复" : status === "accepted_risk" ? "接受风险" : status === "false_positive" ? "误报" : status; }
 function dateInputValue(value?: string | null) { return value ? value.slice(0, 10) : ""; }
