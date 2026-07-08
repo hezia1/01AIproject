@@ -7,34 +7,45 @@ from uuid import uuid4
 from app.db_models import ComponentRecord, ProjectRecord
 
 
+SCA_TOOL_VENDOR = "AI Security Platform"
+SCA_TOOL_NAME = "SCA Module"
+SCA_TOOL_VERSION = "0.1.0"
+HASH_STATUS_NOT_COLLECTED = "NOASSERTION: package artifact hash not collected"
+
+
 def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, object]:
+    timestamp = utc_timestamp()
     bom_components = [component_to_cyclonedx(component) for component in components]
     vulnerabilities = build_vulnerabilities(components)
     dependencies = build_dependencies(project, components)
+    project_component = {
+        "type": "application",
+        "name": project.name,
+        "version": project.default_branch or "main",
+        "bom-ref": project_ref(project),
+        "properties": project_properties(project, components),
+    }
+    if project.repository_url:
+        project_component["externalReferences"] = [{"type": "vcs", "url": project.repository_url}]
     bom: dict[str, object] = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "serialNumber": f"urn:uuid:{uuid4()}",
         "version": 1,
         "metadata": {
-            "timestamp": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "component": {
-                "type": "application",
-                "name": project.name,
-                "version": project.default_branch or "main",
-                "bom-ref": f"project:{project.id}",
-                "properties": [
-                    property_item("project:id", str(project.id)),
-                    property_item("project:repository_url", project.repository_url),
-                    property_item("project:source_path", project.source_path),
-                ],
-            },
+            "timestamp": timestamp,
+            "component": project_component,
             "tools": [
                 {
-                    "vendor": "AI Security Platform",
-                    "name": "SCA Module",
-                    "version": "0.1.0",
+                    "vendor": SCA_TOOL_VENDOR,
+                    "name": SCA_TOOL_NAME,
+                    "version": SCA_TOOL_VERSION,
                 }
+            ],
+            "properties": [
+                property_item("sca:sbom_profile", "local-platform-sca"),
+                property_item("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
+                property_item("sca:dependency_edge_quality", "inferred from dependency type, source file, and package manager"),
             ],
         },
         "components": bom_components,
@@ -46,7 +57,7 @@ def build_cyclonedx_sbom(project: ProjectRecord, components: list[ComponentRecor
 
 
 def build_spdx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, object]:
-    created_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    created_at = utc_timestamp()
     project_spdx_id = spdx_id(f"project-{project.id}")
     packages = [project_to_spdx_package(project, project_spdx_id)]
     packages.extend(component_to_spdx_package(component) for component in components)
@@ -78,9 +89,10 @@ def build_spdx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": f"{project.name} SCA SBOM",
         "documentNamespace": f"https://ai-security-platform.local/spdx/{project.id}/{uuid4()}",
+        "documentDescribes": [project_spdx_id],
         "creationInfo": {
             "created": created_at,
-            "creators": ["Tool: AI Security Platform SCA Module-0.1.0"],
+            "creators": [f"Tool: {SCA_TOOL_VENDOR} {SCA_TOOL_NAME}-{SCA_TOOL_VERSION}"],
         },
         "packages": packages,
         "relationships": relationships,
@@ -88,11 +100,11 @@ def build_spdx_sbom(project: ProjectRecord, components: list[ComponentRecord]) -
 
 
 def build_dependencies(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, object]]:
-    project_ref = f"project:{project.id}"
+    root_ref = project_ref(project)
     direct_components = [component for component in components if component.dependency_type != "transitive"]
     transitive_components = [component for component in components if component.dependency_type == "transitive"]
     direct_refs = sorted(component_ref(component) for component in direct_components)
-    dependencies: list[dict[str, object]] = [{"ref": project_ref, "dependsOn": direct_refs}]
+    dependencies: list[dict[str, object]] = [{"ref": root_ref, "dependsOn": direct_refs}]
 
     for direct in direct_components:
         related_transitives = [
@@ -158,12 +170,22 @@ def component_to_cyclonedx(component: ComponentRecord) -> dict[str, object]:
         "bom-ref": bom_ref,
         "scope": dependency_scope(component.dependency_type),
         "properties": [
+            property_item("sca:component_id", str(component.id)),
+            property_item("sca:project_id", str(component.project_id)),
+            property_item("sca:scan_task_id", component.scan_task_id),
             property_item("sca:ecosystem", component.ecosystem),
             property_item("sca:dependency_type", component.dependency_type),
             property_item("sca:source_file", component.source_file),
+            property_item("sca:source_count", len(split_sources(component.source_file))),
             property_item("sca:package_manager", component.package_manager),
             property_item("sca:risk_status", component.risk_status),
             property_item("sca:risk_source", component.risk_source),
+            property_item("sca:severity", component.severity),
+            property_item("sca:license_policy", component.license_risk),
+            property_item("sca:vulnerability_ids", ",".join(str(item) for item in component.vulnerability_ids or [])),
+            property_item("sca:osv_checked", component.osv_checked),
+            property_item("sca:osv_error", component.osv_error),
+            property_item("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
         ],
     }
     if component.version:
@@ -186,6 +208,16 @@ def project_to_spdx_package(project: ProjectRecord, package_spdx_id: str) -> dic
         "licenseConcluded": "NOASSERTION",
         "licenseDeclared": "NOASSERTION",
         "copyrightText": "NOASSERTION",
+        "annotations": [
+            spdx_annotation("project:id", str(project.id)),
+            spdx_annotation("project:repository_url", project.repository_url),
+            spdx_annotation("project:source_path", project.source_path),
+            spdx_annotation("project:business_owner", project.business_owner),
+            spdx_annotation("project:security_owner", project.security_owner),
+            spdx_annotation("project:runtime_url", project.runtime_url),
+            spdx_annotation("project:api_base_url", project.api_base_url),
+            spdx_annotation("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
+        ],
     }
 
 
@@ -201,12 +233,22 @@ def component_to_spdx_package(component: ComponentRecord) -> dict[str, object]:
         "supplier": "NOASSERTION",
         "primaryPackagePurpose": "LIBRARY",
         "annotations": [
+            spdx_annotation("sca:component_id", str(component.id)),
+            spdx_annotation("sca:project_id", str(component.project_id)),
+            spdx_annotation("sca:scan_task_id", component.scan_task_id),
             spdx_annotation("sca:ecosystem", component.ecosystem),
             spdx_annotation("sca:dependency_type", component.dependency_type),
             spdx_annotation("sca:source_file", component.source_file),
+            spdx_annotation("sca:source_count", len(split_sources(component.source_file))),
             spdx_annotation("sca:package_manager", component.package_manager),
             spdx_annotation("sca:risk_status", component.risk_status),
             spdx_annotation("sca:risk_source", component.risk_source),
+            spdx_annotation("sca:severity", component.severity),
+            spdx_annotation("sca:license_policy", component.license_risk),
+            spdx_annotation("sca:vulnerability_ids", ",".join(str(item) for item in component.vulnerability_ids or [])),
+            spdx_annotation("sca:osv_checked", component.osv_checked),
+            spdx_annotation("sca:osv_error", component.osv_error),
+            spdx_annotation("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
         ],
     }
     if component.version:
@@ -244,6 +286,34 @@ def build_vulnerabilities(components: list[ComponentRecord]) -> list[dict[str, o
                 vulnerability["recommendation"] = component.remediation
             vulnerabilities.append(vulnerability)
     return vulnerabilities
+
+
+def project_properties(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, str]]:
+    direct_count = sum(1 for component in components if component.dependency_type != "transitive")
+    transitive_count = sum(1 for component in components if component.dependency_type == "transitive")
+    risky_count = sum(1 for component in components if component.risk_status not in {None, "clean", "not_checked"})
+    ecosystems = ",".join(sorted({component.ecosystem for component in components if component.ecosystem}))
+    return [
+        property_item("project:id", str(project.id)),
+        property_item("project:repository_url", project.repository_url),
+        property_item("project:source_path", project.source_path),
+        property_item("project:business_owner", project.business_owner),
+        property_item("project:security_owner", project.security_owner),
+        property_item("project:runtime_url", project.runtime_url),
+        property_item("project:api_base_url", project.api_base_url),
+        property_item("project:default_branch", project.default_branch),
+        property_item("project:created_at", project.created_at.isoformat() if project.created_at else None),
+        property_item("sca:component_count", len(components)),
+        property_item("sca:direct_dependency_count", direct_count),
+        property_item("sca:transitive_dependency_count", transitive_count),
+        property_item("sca:risky_component_count", risky_count),
+        property_item("sca:ecosystems", ecosystems),
+        property_item("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
+    ]
+
+
+def project_ref(project: ProjectRecord) -> str:
+    return f"project:{project.id}"
 
 
 def component_ref(component: ComponentRecord) -> str:
@@ -298,8 +368,8 @@ def normalize_spdx_license(license_value: str | None) -> str:
 def spdx_annotation(key: str, value: object | None) -> dict[str, str]:
     return {
         "annotationType": "OTHER",
-        "annotator": "Tool: AI Security Platform SCA Module-0.1.0",
-        "annotationDate": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "annotator": f"Tool: {SCA_TOOL_VENDOR} {SCA_TOOL_NAME}-{SCA_TOOL_VERSION}",
+        "annotationDate": utc_timestamp(),
         "comment": f"{key}={'' if value is None else value}",
     }
 
@@ -312,3 +382,7 @@ def cyclonedx_severity(severity: str | None) -> str:
 
 def property_item(name: str, value: object | None) -> dict[str, str]:
     return {"name": name, "value": "" if value is None else str(value)}
+
+
+def utc_timestamp() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
