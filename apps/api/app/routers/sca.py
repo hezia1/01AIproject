@@ -297,6 +297,7 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         status=status,
         syft_component_count=len(tool_scan.components),
         grype_vulnerability_count=len(tool_scan.vulnerabilities),
+        grype_input=tool_scan.grype_input,
         errors=tool_scan.errors,
     )
 

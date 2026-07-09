@@ -245,6 +245,7 @@ class ScaToolStatus(BaseModel):
     status: str = "disabled"
     syft_component_count: int = 0
     grype_vulnerability_count: int = 0
+    grype_input: str | None = None
     errors: list[str] = Field(default_factory=list)
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
@@ -31,6 +32,7 @@ class ToolScanResult:
     components: list[ParsedComponent]
     vulnerabilities: list[ToolVulnerability]
     errors: list[str]
+    grype_input: str | None = None
 
 
 def scan_with_syft_grype(source_path: str) -> ToolScanResult:
@@ -43,6 +45,7 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
     errors: list[str] = []
     syft_components: list[ParsedComponent] = []
     grype_vulnerabilities: list[ToolVulnerability] = []
+    grype_input: str | None = None
 
     syft_payload, syft_error = run_tool_json(root, SYFT_IMAGE, ["dir:/workspace", "-o", "cyclonedx-json"])
     if syft_error:
@@ -50,7 +53,7 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
     elif syft_payload:
         syft_components = parse_syft_cyclonedx(syft_payload)
 
-    grype_payload, grype_error = run_tool_json(root, GRYPE_IMAGE, ["dir:/workspace", "-o", "json"])
+    grype_payload, grype_error, grype_input = run_grype(root, syft_payload)
     if grype_error:
         errors.append(f"Grype failed: {grype_error}")
     elif grype_payload:
@@ -60,10 +63,40 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
         components=syft_components,
         vulnerabilities=grype_vulnerabilities,
         errors=errors,
+        grype_input=grype_input,
     )
 
 
-def run_tool_json(root: Path, image: str, args: list[str]) -> tuple[dict | None, str | None]:
+def run_grype(root: Path, syft_payload: dict | None) -> tuple[dict | None, str | None, str]:
+    if syft_payload:
+        with temporary_sbom_dir(root) as temp_dir:
+            sbom_path = Path(temp_dir) / "syft.cdx.json"
+            sbom_path.write_text(json.dumps(syft_payload), encoding="utf-8")
+            payload, error = run_tool_json(
+                root,
+                GRYPE_IMAGE,
+                ["sbom:/tmp/sca/syft.cdx.json", "-o", "json"],
+                extra_mounts=[(Path(temp_dir), "/tmp/sca")],
+            )
+            return payload, error, "syft-sbom"
+
+    payload, error = run_tool_json(root, GRYPE_IMAGE, ["dir:/workspace", "-o", "json"])
+    return payload, error, "directory"
+
+
+def temporary_sbom_dir(root: Path) -> tempfile.TemporaryDirectory:
+    try:
+        return tempfile.TemporaryDirectory(prefix="sca-sbom-", dir=str(root.parent))
+    except OSError:
+        return tempfile.TemporaryDirectory(prefix="sca-sbom-")
+
+
+def run_tool_json(
+    root: Path,
+    image: str,
+    args: list[str],
+    extra_mounts: list[tuple[Path, str]] | None = None,
+) -> tuple[dict | None, str | None]:
     command = [
         "docker",
         "run",
@@ -72,9 +105,10 @@ def run_tool_json(root: Path, image: str, args: list[str]) -> tuple[dict | None,
         f"{root}:/workspace:ro",
         "-w",
         "/workspace",
-        image,
-        *args,
     ]
+    for host_path, container_path in extra_mounts or []:
+        command.extend(["-v", f"{host_path}:{container_path}:ro"])
+    command.extend([image, *args])
     try:
         completed = subprocess.run(
             command,

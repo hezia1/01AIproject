@@ -15,7 +15,7 @@ type ProjectAssetDraft = Pick<ProjectDraft, "runtime_url" | "api_base_url" | "sa
 type ProjectModule = { project_id: string; module_key: ModuleKey; enabled: boolean; config: Record<string, unknown> };
 type ProjectAssetProbe = { project_id: string; source_path: string | null; path_exists: boolean; sca_files: string[]; source_files: string[]; agent_files: string[]; recommended_tasks: ("sca" | "sast" | "agent")[]; message: string };
 type Component = { id: string; ecosystem: string; name: string; version: string | null; dependency_type: string; source_file: string; package_manager: string | null; license?: string | null; risk_status?: string; vulnerability_ids?: string[]; severity?: Severity | null; risk_summary?: string | null; remediation?: string | null; license_risk?: string | null; risk_source?: string | null; osv_checked?: boolean; osv_error?: string | null };
-type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: number; grype_vulnerability_count: number; errors: string[] };
+type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: number; grype_vulnerability_count: number; grype_input?: string | null; errors: string[] };
 type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[]; tool_status?: ScaToolStatus | null };
 type ScaScanHistoryItem = { scan_task_id: string; status: string; started_at: string | null; finished_at: string | null; created_at: string; component_count: number; direct_dependency_count: number; transitive_dependency_count: number; critical_count: number; high_count: number; vulnerable_count: number; license_risk_count: number; tool_status?: ScaToolStatus | null };
 type ScaScanDiffItem = { ecosystem: string; name: string; change_type: string; base_version: string | null; target_version: string | null; base_risk_status: string | null; target_risk_status: string | null; base_severity: Severity | null; target_severity: Severity | null; base_license_risk: string | null; target_license_risk: string | null; base_vulnerability_ids: string[]; target_vulnerability_ids: string[]; summary: string };
@@ -684,7 +684,28 @@ function AspmView({ summary, findings, validations, evidence, onUpdateFinding }:
 }
 function ScaGovernancePanel({ summary }: { summary?: ScaGovernanceSummary }) {
   const toolStatus = summary?.tool_status;
-  return <div className="panel full sca-governance-panel"><div className="panel-header"><h2>SCA 供应链治理</h2><span>{summary?.latest_scan_id ? `最近扫描 ${formatDateTime(summary.latest_scan_finished_at)}` : "暂无 SCA 扫描"}</span></div><section className="sca-governance-grid"><Metric label="最新扫描组件" value={summary?.component_count ?? 0} /><Metric label="风险组件" value={summary?.risky_component_count ?? 0} /><Metric label="漏洞组件" value={summary?.vulnerable_component_count ?? 0} /><Metric label="高危/严重组件" value={summary?.critical_high_component_count ?? 0} /><Metric label="最新扫描 Finding" value={summary?.latest_scan_finding_count ?? 0} /><Metric label="全部 SCA Finding" value={summary?.total_finding_count ?? 0} /><Metric label="漏洞 Finding" value={summary?.vulnerability_finding_count ?? 0} /><Metric label="许可证/版本复核" value={`${summary?.license_finding_count ?? 0}/${summary?.version_review_finding_count ?? 0}`} /></section><div className="sca-tool-status"><div><span>增强引擎</span><strong>{toolStatus ? toolStatusLabel(toolStatus.status) : "未启用"}</strong></div><div><span>Syft 组件</span><strong>{toolStatus?.syft_component_count ?? 0}</strong></div><div><span>Grype 漏洞</span><strong>{toolStatus?.grype_vulnerability_count ?? 0}</strong></div><div><span>扫描状态</span><strong>{scanStatusLabel(summary?.latest_scan_status)}</strong></div></div>{toolStatus?.errors?.length ? <div className="sca-tool-errors">{toolStatus.errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div> : null}<table><thead><tr><th>Top 风险组件</th><th>风险</th><th>漏洞数</th><th>许可证</th><th>来源/建议</th></tr></thead><tbody>{summary?.top_components?.length ? summary.top_components.map((component) => <tr key={`${component.ecosystem}-${component.name}-${component.version ?? "unknown"}`}><td><strong>{component.name}</strong><span className="cell-subtext">{component.ecosystem} · {component.version ?? "-"}</span></td><td><RiskBadge status={component.risk_status} severity={component.severity} /></td><td>{component.vulnerability_count}</td><td>{licensePolicyLabel(component.license_risk)}</td><td>{sourceLabel(component.risk_source)}<span className="cell-subtext">{component.remediation ?? "-"}</span></td></tr>) : <tr><td colSpan={5} className="empty-cell">暂无 SCA 风险组件。</td></tr>}</tbody></table></div>;
+  return <div className="panel full sca-governance-panel">
+    <div className="panel-header"><h2>SCA 供应链治理</h2><span>{summary?.latest_scan_id ? `最近扫描 ${formatDateTime(summary.latest_scan_finished_at)}` : "暂无 SCA 扫描"}</span></div>
+    <section className="sca-governance-grid">
+      <Metric label="最新扫描组件" value={summary?.component_count ?? 0} />
+      <Metric label="风险组件" value={summary?.risky_component_count ?? 0} />
+      <Metric label="漏洞组件" value={summary?.vulnerable_component_count ?? 0} />
+      <Metric label="高危/严重组件" value={summary?.critical_high_component_count ?? 0} />
+      <Metric label="最新扫描 Finding" value={summary?.latest_scan_finding_count ?? 0} />
+      <Metric label="全部 SCA Finding" value={summary?.total_finding_count ?? 0} />
+      <Metric label="漏洞 Finding" value={summary?.vulnerability_finding_count ?? 0} />
+      <Metric label="许可证/版本复核" value={`${summary?.license_finding_count ?? 0}/${summary?.version_review_finding_count ?? 0}`} />
+    </section>
+    <div className="sca-tool-status">
+      <div><span>增强引擎</span><strong>{toolStatus ? toolStatusLabel(toolStatus.status) : "未启用"}</strong></div>
+      <div><span>Syft 组件</span><strong>{toolStatus?.syft_component_count ?? 0}</strong></div>
+      <div><span>Grype 漏洞</span><strong>{toolStatus?.grype_vulnerability_count ?? 0}</strong></div>
+      <div><span>Grype 输入</span><strong>{grypeInputLabel(toolStatus?.grype_input)}</strong></div>
+      <div><span>扫描状态</span><strong>{scanStatusLabel(summary?.latest_scan_status)}</strong></div>
+    </div>
+    {toolStatus?.errors?.length ? <div className="sca-tool-errors">{toolStatus.errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div> : null}
+    <table><thead><tr><th>Top 风险组件</th><th>风险</th><th>漏洞数</th><th>许可证</th><th>来源/建议</th></tr></thead><tbody>{summary?.top_components?.length ? summary.top_components.map((component) => <tr key={`${component.ecosystem}-${component.name}-${component.version ?? "unknown"}`}><td><strong>{component.name}</strong><span className="cell-subtext">{component.ecosystem} · {component.version ?? "-"}</span></td><td><RiskBadge status={component.risk_status} severity={component.severity} /></td><td>{component.vulnerability_count}</td><td>{licensePolicyLabel(component.license_risk)}</td><td>{sourceLabel(component.risk_source)}<span className="cell-subtext">{component.remediation ?? "-"}</span></td></tr>) : <tr><td colSpan={5} className="empty-cell">暂无 SCA 风险组件。</td></tr>}</tbody></table>
+  </div>;
 }
 function KeyValue({ data, formatKey = (key) => key }: { data: Record<string, number>; formatKey?: (key: string) => string }) { const entries = Object.entries(data); return <div className="kv-list">{entries.length === 0 ? <span className="empty-inline">暂无数据</span> : entries.map(([key, value]) => <div key={key}><span>{formatKey(key)}</span><strong>{value}</strong></div>)}</div>; }
 function Metric({ label, value }: { label: string; value: string | number }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
@@ -698,6 +719,7 @@ function dependencyTypeLabel(value?: string | null) { return value === "runtime"
 function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需合规复核" : value === "restricted" ? "受限需审批" : value === "unknown" ? "未知需确认" : value ?? "-"; }
 function scanStatusLabel(value?: string | null) { return value === "queued" ? "排队中" : value === "running" ? "运行中" : value === "completed" ? "已完成" : value === "failed" ? "失败" : value ?? "-"; }
 function toolStatusLabel(value?: string | null) { return value === "disabled" ? "未启用" : value === "success" ? "成功" : value === "partial_failed" ? "部分失败" : value === "failed" ? "失败" : value ?? "未知"; }
+function grypeInputLabel(value?: string | null) { return value === "syft-sbom" ? "Syft SBOM" : value === "directory" ? "目录回退" : "-"; }
 function scaChangeTypeLabel(value?: string | null) { return value === "added" ? "新增组件" : value === "removed" ? "移除组件" : value === "version_changed" ? "版本变化" : value === "risk_added" ? "新增风险" : value === "risk_removed" ? "风险消失" : value === "risk_changed" ? "风险变化" : value === "license_risk_changed" ? "许可证变化" : value ?? "-"; }
 function normalizeFindingStatus(status: FindingStatus) { return status === "pending" ? "open" : status === "retest" ? "fixing" : status === "closed" ? "fixed" : status; }
 function statusLabel(status: FindingStatus) { return status === "open" ? "待确认" : status === "confirmed" ? "已确认" : status === "fixing" ? "修复中" : status === "fixed" ? "已修复" : status === "accepted_risk" ? "接受风险" : status === "false_positive" ? "误报" : status; }

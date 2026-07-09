@@ -98,6 +98,9 @@ http://localhost:5173
 - 前端组件风险清单分页，每页 10 条，并展示依赖类型分布、许可证策略分布、CycloneDX 和 SPDX 导出按钮。
 - 前端组件清单支持按生态、依赖类型、风险状态、严重等级和许可证策略筛选。
 - 前端展示直接 / 传递依赖、风险传递依赖和影响链数量概览。
+- Docker 镜像方式接入 Syft / Grype 第一版：Syft 生成 CycloneDX SBOM，Grype 优先使用 Syft SBOM 输入执行漏洞扫描，Syft 失败时才回退目录扫描。
+- 增强扫描状态持久化：记录 Syft 组件数、Grype 漏洞数、Grype 输入来源和错误摘要。
+- SCA 风险自动转为统一 Finding，并进入 ASPM 治理闭环。
 
 主要 API：
 
@@ -119,7 +122,7 @@ GET  /api/sca/projects/{project_id}/report
   - `docker pull anchore/syft:latest`
   - `docker pull anchore/grype:latest`
 - 如果 Docker 或镜像不可用，基础 SCA 扫描仍可运行。
-- 增强扫描状态会写入扫描历史和 SCA 报告，包含 Syft 组件数、Grype 漏洞数和错误信息。
+- 增强扫描状态会写入扫描历史和 SCA 报告，包含 Syft 组件数、Grype 漏洞数、Grype 输入来源和错误信息。
 - SCA 高危/严重漏洞、漏洞编号命中、许可证风险和版本缺失风险会自动转为统一 Finding，进入 ASPM 治理闭环。
 
 还缺少：
@@ -128,7 +131,8 @@ GET  /api/sca/projects/{project_id}/report
 - 更深度的传递影响分析、真实父子依赖树和跨模块攻击链联动。
 - 更完整的组织级许可证策略配置、策略启停、审批流持久化和例外记录管理。
 - 更完整的本地漏洞规则来源、规则覆盖面、规则启停和组织级规则管理。
-- Syft / Trivy / Grype 等专业工具接入。
+- Trivy 等更多专业工具接入。
+- Syft / Grype 镜像预检、漏洞库更新时间展示和离线模式。
 - 离线漏洞库缓存。
 
 ### 2. SAST 智能静态审计
@@ -275,6 +279,8 @@ PATCH /api/sandbox/evidence/{evidence_id}
 - Finding 治理字段：状态、负责人、备注、到期时间。
 - 攻击链第一版：从 Finding、DAST、SANDBOX 证据中生成简单攻击链视图。
 - 前端治理总览展示项目摘要、风险分、统计和风险列表。
+- 治理总览新增 SCA 供应链治理卡片：区分最新扫描组件数、风险组件数、漏洞组件数、SCA Finding 数和 Top 风险组件。
+- 治理总览展示 Syft / Grype 增强状态、Grype 输入来源和错误摘要。
 
 主要 API：
 
@@ -293,6 +299,7 @@ PATCH /api/findings/{finding_id}/status
 - 没有整改闭环流程。
 - 没有合规报告。
 - 没有管理层报表导出。
+- SCA 与 DAST / SANDBOX 的跨模块攻击链仍是规则化关联，尚未形成完整图谱推理。
 
 ## 当前关键限制
 
