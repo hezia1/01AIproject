@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from app.db_models import ComponentRecord, ProjectRecord
 from app.services.sca_sbom import build_dependency_edge_records, component_ref, project_ref
+from app.services.sca_native_tree import build_native_dependency_edge_records
 
 
 SEVERITY_WEIGHT = {
@@ -19,15 +20,16 @@ SEVERITY_WEIGHT = {
 def build_dependency_graph(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, object]:
     nodes = [project_node(project)]
     nodes.extend(component_node(component) for component in components)
+    dependency_edges = graph_dependency_edges(project, components)
     edges = [
         {
             "source": edge["source"],
             "target": edge["target"],
             "quality": edge["quality"],
         }
-        for edge in build_dependency_edge_records(project, components)
+        for edge in dependency_edges
     ]
-    upgrade_levers = build_upgrade_levers(project, components)
+    upgrade_levers = build_upgrade_levers(project, components, dependency_edges)
     return {
         "project_id": str(project.id),
         "nodes": nodes,
@@ -69,11 +71,27 @@ def component_node(component: ComponentRecord) -> dict[str, object]:
     }
 
 
-def build_upgrade_levers(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, object]]:
+def graph_dependency_edges(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, str]]:
+    inferred_edges = build_dependency_edge_records(project, components)
+    native_edges = build_native_dependency_edge_records(project, components)
+    if not native_edges:
+        return inferred_edges
+
+    manifest_edges = [edge for edge in inferred_edges if edge["quality"] == "manifest_direct"]
+    return dedupe_edges([*manifest_edges, *native_edges])
+
+
+def build_upgrade_levers(
+    project: ProjectRecord,
+    components: list[ComponentRecord],
+    dependency_edges: list[dict[str, str]] | None = None,
+) -> list[dict[str, object]]:
     by_ref = {component_ref(component): component for component in components}
     risky_transitives_by_parent: dict[str, list[ComponentRecord]] = defaultdict(list)
-    for edge in build_dependency_edge_records(project, components):
-        if edge["quality"] != "lockfile_inferred":
+    edges = dependency_edges or graph_dependency_edges(project, components)
+    preferred_quality = "native_tree" if any(edge["quality"] == "native_tree" for edge in edges) else "lockfile_inferred"
+    for edge in edges:
+        if edge["quality"] != preferred_quality:
             continue
         child = by_ref.get(edge["target"])
         if child and is_risky_component(child):
@@ -113,7 +131,19 @@ def graph_summary(nodes: list[dict[str, object]], edges: list[dict[str, object]]
         "transitive_risk_count": sum(1 for component in components if component.dependency_type == "transitive" and is_risky_component(component)),
         "manifest_direct_edge_count": sum(1 for edge in edges if edge["quality"] == "manifest_direct"),
         "lockfile_inferred_edge_count": sum(1 for edge in edges if edge["quality"] == "lockfile_inferred"),
+        "native_tree_edge_count": sum(1 for edge in edges if edge["quality"] == "native_tree"),
     }
+
+
+def dedupe_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:
+    priority = {"manifest_direct": 0, "native_tree": 2, "lockfile_inferred": 1}
+    deduped: dict[tuple[str, str], dict[str, str]] = {}
+    for edge in edges:
+        key = (edge["source"], edge["target"])
+        current = deduped.get(key)
+        if current is None or priority.get(edge["quality"], 0) > priority.get(current["quality"], 0):
+            deduped[key] = edge
+    return sorted(deduped.values(), key=lambda edge: (edge["source"], edge["target"]))
 
 
 def is_risky_component(component: ComponentRecord) -> bool:

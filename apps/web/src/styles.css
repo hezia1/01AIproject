@@ -1380,6 +1380,11 @@ th {
   stroke-width: 1.6;
 }
 
+.graph-edge.native_tree {
+  stroke: #2563eb;
+  stroke-width: 2;
+}
+
 .graph-edge.lockfile_inferred {
   stroke-dasharray: 6 5;
 }
