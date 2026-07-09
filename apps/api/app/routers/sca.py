@@ -19,6 +19,8 @@ from app.models import (
     ScaScanHistoryItem,
     ScaScanRequest,
     ScaScanResult,
+    ScaToolHealth,
+    ScaToolHealthCheck,
     ScaToolStatus,
     ScanStatus,
 )
@@ -27,9 +29,27 @@ from app.services.sca_parser import ParsedComponent, dedupe_components, parse_de
 from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
-from app.services.sca_tool_scanner import ToolScanResult, scan_with_syft_grype
+from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
 
 router = APIRouter()
+
+
+@router.get("/tool-health", response_model=ScaToolHealth)
+def get_sca_tool_health() -> ScaToolHealth:
+    health = check_syft_grype_health()
+    return ScaToolHealth(
+        status=health.status,
+        recommended_grype_input=health.recommended_grype_input,
+        checks=[
+            ScaToolHealthCheck(
+                name=check.name,
+                status=check.status,
+                detail=check.detail,
+                remediation=check.remediation,
+            )
+            for check in health.checks
+        ],
+    )
 
 
 @router.post("/scan", response_model=ScaScanResult)

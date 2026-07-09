@@ -249,6 +249,19 @@ class ScaToolStatus(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class ScaToolHealthCheck(BaseModel):
+    name: str
+    status: str
+    detail: str | None = None
+    remediation: str | None = None
+
+
+class ScaToolHealth(BaseModel):
+    status: str
+    recommended_grype_input: str
+    checks: list[ScaToolHealthCheck] = Field(default_factory=list)
+
+
 class ScaScanResult(BaseModel):
     project_id: UUID
     scan_task_id: UUID

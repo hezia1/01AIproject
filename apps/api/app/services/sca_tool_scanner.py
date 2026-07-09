@@ -14,6 +14,7 @@ from app.services.sca_parser import ParsedComponent
 SYFT_IMAGE = "anchore/syft:latest"
 GRYPE_IMAGE = "anchore/grype:latest"
 TOOL_TIMEOUT_SECONDS = 120
+HEALTH_TIMEOUT_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,107 @@ class ToolScanResult:
     vulnerabilities: list[ToolVulnerability]
     errors: list[str]
     grype_input: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolHealthCheck:
+    name: str
+    status: str
+    detail: str | None = None
+    remediation: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolHealthResult:
+    status: str
+    recommended_grype_input: str
+    checks: list[ToolHealthCheck]
+
+
+def check_syft_grype_health() -> ToolHealthResult:
+    checks: list[ToolHealthCheck] = []
+    docker_path = shutil.which("docker")
+    if docker_path is None:
+        return ToolHealthResult(
+            status="failed",
+            recommended_grype_input="unavailable",
+            checks=[
+                ToolHealthCheck(
+                    name="docker_cli",
+                    status="failed",
+                    detail="Docker CLI was not found",
+                    remediation="安装 Docker Desktop，并确认 docker 命令在 PATH 中可用。",
+                )
+            ],
+        )
+
+    checks.append(ToolHealthCheck(name="docker_cli", status="success", detail=docker_path))
+    docker_info = run_health_command(["docker", "info", "--format", "{{.ServerVersion}}"])
+    if docker_info[0] != 0:
+        checks.append(
+            ToolHealthCheck(
+                name="docker_engine",
+                status="failed",
+                detail=docker_info[1],
+                remediation="启动 Docker Desktop，等待 Docker Engine 进入 Running 状态后重试。",
+            )
+        )
+        return ToolHealthResult(status="failed", recommended_grype_input="unavailable", checks=checks)
+
+    checks.append(ToolHealthCheck(name="docker_engine", status="success", detail=f"server {docker_info[1]}"))
+    checks.append(check_image("syft_image", SYFT_IMAGE, "docker pull anchore/syft:latest"))
+    checks.append(check_image("grype_image", GRYPE_IMAGE, "docker pull anchore/grype:latest"))
+
+    grype_db = run_health_command(["docker", "run", "--rm", GRYPE_IMAGE, "db", "status"])
+    if grype_db[0] == 0:
+        checks.append(ToolHealthCheck(name="grype_db", status="success", detail=grype_db[1]))
+    else:
+        checks.append(
+            ToolHealthCheck(
+                name="grype_db",
+                status="warning",
+                detail=grype_db[1],
+                remediation="首次运行可能需要联网下载 Grype 漏洞库；如处于离线环境，需要提前准备 Grype DB。",
+            )
+        )
+
+    failed = any(check.status == "failed" for check in checks)
+    warning = any(check.status == "warning" for check in checks)
+    status = "failed" if failed else "warning" if warning else "success"
+    recommended_input = "syft-sbom" if not failed else "directory"
+    return ToolHealthResult(status=status, recommended_grype_input=recommended_input, checks=checks)
+
+
+def check_image(name: str, image: str, pull_command: str) -> ToolHealthCheck:
+    result = run_health_command(["docker", "image", "inspect", image])
+    if result[0] == 0:
+        return ToolHealthCheck(name=name, status="success", detail=image)
+    return ToolHealthCheck(
+        name=name,
+        status="failed",
+        detail=result[1],
+        remediation=f"拉取镜像：{pull_command}",
+    )
+
+
+def run_health_command(command: list[str]) -> tuple[int, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=HEALTH_TIMEOUT_SECONDS,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {HEALTH_TIMEOUT_SECONDS}s"
+    except OSError as exc:
+        return 1, str(exc)
+
+    output = output_excerpt(completed.stdout) or output_excerpt(completed.stderr)
+    return completed.returncode, output or f"exit code {completed.returncode}"
 
 
 def scan_with_syft_grype(source_path: str) -> ToolScanResult:

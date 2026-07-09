@@ -112,11 +112,13 @@ GET  /api/sca/projects/{project_id}/dependency-graph
 GET  /api/sca/projects/{project_id}/scan-history
 GET  /api/sca/projects/{project_id}/scan-diff
 GET  /api/sca/projects/{project_id}/report
+GET  /api/sca/tool-health
 ```
 
 可选增强：
 
 - SCA 扫描支持通过 Docker 镜像 `anchore/syft:latest` 和 `anchore/grype:latest` 做专业工具增强。
+- SCA 页面提供工具链预检，检查 Docker CLI、Docker Engine、Syft 镜像、Grype 镜像和 Grype 漏洞库状态。
 - 前端可勾选“Syft/Grype 增强”后执行扫描。
 - 需要本机 Docker 可用，并提前拉取镜像或允许首次扫描时自动拉取：
   - `docker pull anchore/syft:latest`
@@ -132,7 +134,7 @@ GET  /api/sca/projects/{project_id}/report
 - 更完整的组织级许可证策略配置、策略启停、审批流持久化和例外记录管理。
 - 更完整的本地漏洞规则来源、规则覆盖面、规则启停和组织级规则管理。
 - Trivy 等更多专业工具接入。
-- Syft / Grype 镜像预检、漏洞库更新时间展示和离线模式。
+- Syft / Grype 漏洞库更新时间展示和离线模式。
 - 离线漏洞库缓存。
 
 ### 2. SAST 智能静态审计
