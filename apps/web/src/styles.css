@@ -439,6 +439,61 @@ h2 {
   font-size: 13px;
 }
 
+.sca-governance-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.sca-governance-grid,
+.sca-tool-status {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sca-governance-grid > div,
+.sca-tool-status > div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.sca-governance-grid span,
+.sca-tool-status span {
+  color: #64748b;
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.sca-governance-grid strong,
+.sca-tool-status strong {
+  color: #172033;
+  display: block;
+  font-size: 20px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.sca-tool-errors {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.sca-tool-errors p {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .project-list {
   display: grid;
   gap: 10px;
@@ -635,6 +690,8 @@ th {
 
   .metric-grid,
   .content-grid,
+  .sca-governance-grid,
+  .sca-tool-status,
   .module-summary,
   .module-layout,
   .module-grid {

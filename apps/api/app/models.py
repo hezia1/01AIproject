@@ -474,6 +474,35 @@ class AttackChain(BaseModel):
     steps: list[AttackChainStep] = Field(default_factory=list)
 
 
+class ScaGovernanceComponent(BaseModel):
+    ecosystem: str
+    name: str
+    version: str | None = None
+    risk_status: str
+    severity: str | None = None
+    vulnerability_count: int = 0
+    license_risk: str | None = None
+    risk_source: str | None = None
+    remediation: str | None = None
+
+
+class ScaGovernanceSummary(BaseModel):
+    latest_scan_id: UUID | None = None
+    latest_scan_status: str | None = None
+    latest_scan_finished_at: datetime | None = None
+    component_count: int = 0
+    risky_component_count: int = 0
+    vulnerable_component_count: int = 0
+    critical_high_component_count: int = 0
+    total_finding_count: int = 0
+    latest_scan_finding_count: int = 0
+    vulnerability_finding_count: int = 0
+    license_finding_count: int = 0
+    version_review_finding_count: int = 0
+    tool_status: ScaToolStatus | None = None
+    top_components: list[ScaGovernanceComponent] = Field(default_factory=list)
+
+
 class AspmProjectSummary(BaseModel):
     project_id: UUID
     project_name: str
@@ -488,6 +517,7 @@ class AspmProjectSummary(BaseModel):
     findings_by_severity: dict[str, int]
     findings_by_status: dict[str, int]
     dast_by_verdict: dict[str, int]
+    sca_governance: ScaGovernanceSummary = Field(default_factory=ScaGovernanceSummary)
     attack_chains: list[AttackChain] = Field(default_factory=list)
 
 

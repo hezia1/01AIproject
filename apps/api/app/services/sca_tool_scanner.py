@@ -92,7 +92,8 @@ def run_tool_json(root: Path, image: str, args: list[str]) -> tuple[dict | None,
         return None, str(exc)
 
     if completed.returncode != 0:
-        return None, first_line(completed.stderr) or first_line(completed.stdout) or f"exit code {completed.returncode}"
+        details = command_error_summary(completed.returncode, completed.stderr, completed.stdout)
+        return None, details or f"exit code {completed.returncode}"
     try:
         return json.loads(completed.stdout), None
     except json.JSONDecodeError as exc:
@@ -219,12 +220,28 @@ def normalize_severity(value: object) -> str | None:
     return None
 
 
-def first_line(value: str) -> str:
-    for line in value.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped[:260]
-    return ""
+def command_error_summary(returncode: int, stderr: str, stdout: str) -> str:
+    parts = [f"exit code {returncode}"]
+    stderr_excerpt = output_excerpt(stderr)
+    stdout_excerpt = output_excerpt(stdout)
+    if stderr_excerpt:
+        parts.append(f"stderr: {stderr_excerpt}")
+    if stdout_excerpt:
+        parts.append(f"stdout: {stdout_excerpt}")
+    return "; ".join(parts)[:900]
+
+
+def output_excerpt(value: str, limit: int = 6) -> str:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    if len(lines) <= limit:
+        selected = lines
+    else:
+        head_count = max(1, limit // 2)
+        tail_count = max(1, limit - head_count)
+        selected = [*lines[:head_count], "...", *lines[-tail_count:]]
+    return " | ".join(selected)[:760]
 
 
 def purl_name(purl: str | None) -> str | None:
