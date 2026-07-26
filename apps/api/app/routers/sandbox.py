@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord
+from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord
 from app.models import ModuleKey, SandboxCommandTemplate, SandboxEvidence, SandboxEvidenceCreate, SandboxEvidenceUpdate, SandboxRunRequest
 from app.repositories.mappers import sandbox_evidence_to_schema
 from app.services.sandbox_runner import SandboxCommandRejected, run_sandbox_command
@@ -18,11 +18,28 @@ router = APIRouter()
 @router.post("/evidence", response_model=SandboxEvidence, status_code=201)
 def create_evidence(payload: SandboxEvidenceCreate, db: Session = Depends(get_db)) -> SandboxEvidence:
     _require_sandbox_project(db, payload.project_id)
-    _validate_finding(db, payload.project_id, payload.finding_id)
+    finding_id, component_id, validation_id = _validate_links(
+        db,
+        payload.project_id,
+        payload.finding_id,
+        payload.component_id,
+        payload.validation_id,
+    )
+    link_source, link_confidence = _link_metadata(
+        finding_id,
+        component_id,
+        validation_id,
+        payload.link_source,
+        payload.link_confidence,
+    )
 
     record = SandboxEvidenceRecord(
         project_id=str(payload.project_id),
-        finding_id=str(payload.finding_id) if payload.finding_id else None,
+        finding_id=finding_id,
+        component_id=component_id,
+        validation_id=validation_id,
+        link_source=link_source,
+        link_confidence=link_confidence,
         run_command=payload.run_command,
         runtime_profile=payload.runtime_profile,
         network_policy=payload.network_policy,
@@ -43,7 +60,14 @@ def create_evidence(payload: SandboxEvidenceCreate, db: Session = Depends(get_db
 @router.post("/run", response_model=SandboxEvidence, status_code=201)
 def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> SandboxEvidence:
     project = _require_sandbox_project(db, payload.project_id)
-    _validate_finding(db, payload.project_id, payload.finding_id)
+    finding_id, component_id, validation_id = _validate_links(
+        db,
+        payload.project_id,
+        payload.finding_id,
+        payload.component_id,
+        payload.validation_id,
+    )
+    link_source, link_confidence = _link_metadata(finding_id, component_id, validation_id)
 
     try:
         result = run_sandbox_command(payload.run_command, project.source_path, payload.timeout_seconds, payload.image)
@@ -54,7 +78,11 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
     execution_policy = build_execution_policy(result)
     record = SandboxEvidenceRecord(
         project_id=str(payload.project_id),
-        finding_id=str(payload.finding_id) if payload.finding_id else None,
+        finding_id=finding_id,
+        component_id=component_id,
+        validation_id=validation_id,
+        link_source=link_source,
+        link_confidence=link_confidence,
         run_command=result.command,
         runtime_profile=result.runtime_profile,
         network_policy="docker-network-none",
@@ -128,8 +156,32 @@ def update_evidence(
         raise HTTPException(status_code=404, detail="SANDBOX evidence not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    next_finding_id = updates.get("finding_id", record.finding_id)
+    next_component_id = updates.get("component_id", record.component_id)
+    next_validation_id = updates.get("validation_id", record.validation_id)
+    finding_id, component_id, validation_id = _validate_links(
+        db,
+        UUID(str(record.project_id)),
+        UUID(str(next_finding_id)) if next_finding_id else None,
+        UUID(str(next_component_id)) if next_component_id else None,
+        UUID(str(next_validation_id)) if next_validation_id else None,
+    )
     for field, value in updates.items():
-        setattr(record, field, value)
+        if field in {"finding_id", "component_id", "validation_id"}:
+            setattr(record, field, str(value) if value else None)
+        else:
+            setattr(record, field, value)
+    if {"finding_id", "component_id", "validation_id"} & updates.keys():
+        record.finding_id = finding_id
+        record.component_id = component_id
+        record.validation_id = validation_id
+        record.link_source, record.link_confidence = _link_metadata(
+            finding_id,
+            component_id,
+            validation_id,
+            record.link_source,
+            record.link_confidence,
+        )
     record.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(record)
@@ -227,9 +279,45 @@ def _require_sandbox_project(db: Session, project_id: UUID) -> ProjectRecord:
     return project
 
 
-def _validate_finding(db: Session, project_id: UUID, finding_id: UUID | None) -> None:
-    if finding_id is None:
-        return
-    finding = db.get(FindingRecord, str(finding_id))
-    if finding is None or finding.project_id != str(project_id):
+def _validate_links(
+    db: Session,
+    project_id: UUID,
+    finding_id: UUID | None,
+    component_id: UUID | None,
+    validation_id: UUID | None,
+) -> tuple[str | None, str | None, str | None]:
+    project_key = str(project_id)
+    finding = db.get(FindingRecord, str(finding_id)) if finding_id else None
+    component = db.get(ComponentRecord, str(component_id)) if component_id else None
+    validation = db.get(DastValidationRecord, str(validation_id)) if validation_id else None
+    if finding_id and (finding is None or finding.project_id != project_key):
         raise HTTPException(status_code=400, detail="finding_id does not belong to this project")
+    if component_id and (component is None or component.project_id != project_key):
+        raise HTTPException(status_code=400, detail="component_id does not belong to this project")
+    if validation_id and (validation is None or validation.project_id != project_key):
+        raise HTTPException(status_code=400, detail="validation_id does not belong to this project")
+
+    resolved_finding_id = str(finding_id) if finding_id else validation.finding_id if validation else None
+    resolved_component_id = str(component_id) if component_id else validation.component_id if validation else None
+    if validation and validation.finding_id and resolved_finding_id and validation.finding_id != resolved_finding_id:
+        raise HTTPException(status_code=400, detail="validation_id and finding_id refer to different risks")
+    if validation and validation.component_id and resolved_component_id and validation.component_id != resolved_component_id:
+        raise HTTPException(status_code=400, detail="validation_id and component_id refer to different components")
+    if finding and finding.component_id and resolved_component_id and finding.component_id != resolved_component_id:
+        raise HTTPException(status_code=400, detail="finding_id and component_id refer to different components")
+    return resolved_finding_id, resolved_component_id, str(validation_id) if validation_id else None
+
+
+def _link_metadata(
+    finding_id: str | None,
+    component_id: str | None,
+    validation_id: str | None,
+    requested_source: str = "unlinked",
+    requested_confidence: int = 0,
+) -> tuple[str, int]:
+    if not any((finding_id, component_id, validation_id)):
+        return "unlinked", 0
+    return (
+        requested_source if requested_source != "unlinked" else "explicit-selection",
+        requested_confidence if requested_confidence > 0 else 100,
+    )

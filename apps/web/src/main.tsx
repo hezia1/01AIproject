@@ -28,12 +28,15 @@ type DependencyGraphEdge = { source: string; target: string; quality: string };
 type UpgradeLever = { component_id: string; component: string; ecosystem: string; version: string | null; risk_transitive_count: number; highest_severity: Severity | null; affected_components: string[]; recommendation: string };
 type DependencyGraph = { project_id: string; nodes: DependencyGraphNode[]; edges: DependencyGraphEdge[]; upgrade_levers: UpgradeLever[]; summary: Record<string, number> };
 type AiReview = { summary: string; false_positive_likelihood: string; remediation: string; category?: string | null; cwe?: string | null; owasp?: string | null; language?: string | null; description?: string | null; trust_impact?: string | null; agent_pipeline?: string[]; review_verdict?: string | null; evidence_summary?: string | null; fix_strategy?: string | null; priority?: string | null };
-type Finding = { id: string; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
-type DastValidation = { id: string; target_url: string; verdict: string; validator: string | null; evidence_summary: string | null; request_summary?: string | null; response_summary?: string | null; reproduction_steps?: string | null; remediation_hint?: string | null; created_at: string };
-type SandboxEvidence = { id: string; run_command: string; runtime_profile: string | null; network_policy: string; filesystem_policy: string; observed_files: Record<string, unknown>[]; observed_network: Record<string, unknown>[]; observed_processes: Record<string, unknown>[]; observed_tool_calls: Record<string, unknown>[]; evidence_summary: string | null; operator: string | null; created_at: string };
+type Finding = { id: string; component_id?: string | null; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
+type DastValidation = { id: string; finding_id?: string | null; component_id?: string | null; link_source: string; link_confidence: number; target_url: string; verdict: string; validator: string | null; evidence_summary: string | null; request_summary?: string | null; response_summary?: string | null; reproduction_steps?: string | null; remediation_hint?: string | null; created_at: string };
+type SandboxEvidence = { id: string; finding_id?: string | null; component_id?: string | null; validation_id?: string | null; link_source: string; link_confidence: number; run_command: string; runtime_profile: string | null; network_policy: string; filesystem_policy: string; observed_files: Record<string, unknown>[]; observed_network: Record<string, unknown>[]; observed_processes: Record<string, unknown>[]; observed_tool_calls: Record<string, unknown>[]; evidence_summary: string | null; operator: string | null; created_at: string };
 type SandboxTemplate = { name: string; command: string; command_type: string; image: string; risk_level: string; description: string };
-type AttackChainStep = { module: string; title: string; evidence: string | null };
-type AttackChain = { id: string; name: string; severity: Severity; modules: string[]; evidence_count: number; summary: string; recommended_action: string; steps: AttackChainStep[] };
+type AttackChainStep = { module: string; title: string; evidence: string | null; node_id?: string | null; relation_type?: string | null; confidence?: number | null; created_at?: string | null };
+type AttackChain = { id: string; name: string; severity: Severity; modules: string[]; evidence_count: number; confidence: number; correlation_basis: string[]; summary: string; recommended_action: string; steps: AttackChainStep[] };
+type EvidenceGraphNode = { id: string; kind: string; module: string; label: string; severity?: Severity | null; status?: string | null; detail?: string | null; created_at?: string | null };
+type EvidenceGraphEdge = { id: string; source: string; target: string; relation_type: string; basis: string; confidence: number; created_at?: string | null };
+type EvidenceGraph = { project_id: string; nodes: EvidenceGraphNode[]; edges: EvidenceGraphEdge[]; summary: Record<string, number> };
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
@@ -76,6 +79,7 @@ function App() {
   const [evidence, setEvidence] = useState<SandboxEvidence[]>([]);
   const [sandboxTemplates, setSandboxTemplates] = useState<SandboxTemplate[]>([]);
   const [summary, setSummary] = useState<AspmSummary | null>(null);
+  const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraph | null>(null);
   const [sourcePath, setSourcePath] = useState(DEFAULT_SOURCE_PATH);
   const [scaToolScanEnabled, setScaToolScanEnabled] = useState(false);
   const [sastPath, setSastPath] = useState(DEFAULT_SAST_PATH);
@@ -83,6 +87,9 @@ function App() {
   const [targetUrl, setTargetUrl] = useState("https://example.com/login");
   const [runCommand, setRunCommand] = useState("python agent_runner.py");
   const [sandboxImage, setSandboxImage] = useState("python:3.12-slim");
+  const [correlationFindingId, setCorrelationFindingId] = useState("");
+  const [correlationComponentId, setCorrelationComponentId] = useState("");
+  const [correlationValidationId, setCorrelationValidationId] = useState("");
   const [status, setStatus] = useState("正在连接 API...");
   const [loading, setLoading] = useState(false);
   const [savingKey, setSavingKey] = useState<ModuleKey | null>(null);
@@ -134,6 +141,10 @@ function App() {
     setEvidence([]);
     setSandboxTemplates([]);
     setSummary(null);
+    setEvidenceGraph(null);
+    setCorrelationFindingId("");
+    setCorrelationComponentId("");
+    setCorrelationValidationId("");
     setAssetProbe(null);
   }
 
@@ -182,7 +193,7 @@ function App() {
     const effectiveScaScanId = scaScanId ?? historyData[0]?.scan_task_id ?? null;
     const scaQuery = effectiveScaScanId ? `?scan_task_id=${effectiveScaScanId}` : "";
     const diffQuery = effectiveScaScanId ? `?target_scan_id=${effectiveScaScanId}` : "";
-    const [componentData, graphData, diffData, findingData, validationData, evidenceData, templateData, summaryData] = await Promise.all([
+    const [componentData, graphData, diffData, findingData, validationData, evidenceData, templateData, summaryData, evidenceGraphData] = await Promise.all([
       request<Component[]>(`/sca/projects/${projectId}/components${scaQuery}`),
       request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph${scaQuery}`).catch(() => null),
       request<ScaScanDiff>(`/sca/projects/${projectId}/scan-diff${diffQuery}`).catch(() => null),
@@ -191,6 +202,7 @@ function App() {
       request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`),
       request<SandboxTemplate[]>(`/sandbox/projects/${projectId}/templates`),
       request<AspmSummary>(`/aspm/projects/${projectId}/summary`),
+      request<EvidenceGraph>(`/aspm/projects/${projectId}/evidence-graph`),
     ]);
     setScaScanHistory(historyData);
     setSelectedScaScanId(effectiveScaScanId);
@@ -202,6 +214,7 @@ function App() {
     setEvidence(evidenceData);
     setSandboxTemplates(templateData);
     setSummary(summaryData);
+    setEvidenceGraph(evidenceGraphData);
   }
 
   async function createProject(event: React.FormEvent<HTMLFormElement>) {
@@ -342,7 +355,13 @@ function App() {
     if (!project) return;
     setLoading(true);
     try {
-      await request("/dast/probe", { method: "POST", body: JSON.stringify({ project_id: project.id, target_url: targetUrl, validator: "auto-dast" }) });
+      await request("/dast/probe", { method: "POST", body: JSON.stringify({
+        project_id: project.id,
+        target_url: targetUrl,
+        validator: "auto-dast",
+        finding_id: emptyToNull(correlationFindingId),
+        component_id: emptyToNull(correlationComponentId),
+      }) });
       await refreshProjectContext(project.id);
       setStatus("DAST 自动验证已完成");
     } catch (error) { console.error(error); setStatus("DAST 记录创建失败，请确认模块已启用"); } finally { setLoading(false); }
@@ -352,7 +371,16 @@ function App() {
     if (!project) return;
     setLoading(true);
     try {
-      await request("/sandbox/run", { method: "POST", body: JSON.stringify({ project_id: project.id, run_command: runCommand, image: sandboxImage, timeout_seconds: 10, operator: "security-user" }) });
+      await request("/sandbox/run", { method: "POST", body: JSON.stringify({
+        project_id: project.id,
+        run_command: runCommand,
+        image: sandboxImage,
+        timeout_seconds: 10,
+        operator: "security-user",
+        finding_id: emptyToNull(correlationFindingId),
+        component_id: emptyToNull(correlationComponentId),
+        validation_id: emptyToNull(correlationValidationId),
+      }) });
       await refreshProjectContext(project.id);
       setStatus("SANDBOX 受控执行已完成");
     } catch (error) { console.error(error); setStatus("SANDBOX 执行失败，请确认模块已启用且命令未被安全策略阻止"); } finally { setLoading(false); }
@@ -487,9 +515,9 @@ function App() {
         {activeView === "sca" && <ScaView project={project} components={components} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} sourcePath={sourcePath} toolScanEnabled={scaToolScanEnabled} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onToolScanChange={setScaToolScanEnabled} onRunScan={() => runScan("sca")} onExportSbom={exportScaSbom} onExportReport={exportScaReport} onSelectScan={selectScaScanSnapshot} />}
         {activeView === "sast" && <SastView project={project} findings={sastFindings} categorySummary={sastCategorySummary} sourcePath={sastPath} loading={loading} onSourcePathChange={setSastPath} onRunScan={() => runScan("sast")} onAgentReview={runSastAgentReview} />}
         {activeView === "agent" && <AgentView project={project} findings={agentFindings} categorySummary={agentCategorySummary} sourcePath={agentPath} loading={loading} onSourcePathChange={setAgentPath} onRunScan={() => runScan("agent")} />}
-        {activeView === "dast" && <DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} />}
-        {activeView === "sandbox" && <SandboxView project={project} evidence={evidence} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} loading={loading} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={createSandboxEvidence} />}
-        {activeView === "aspm" && <AspmView summary={summary} findings={findings} validations={validations} evidence={evidence} onUpdateFinding={updateFindingGovernance} />}
+        {activeView === "dast" && <><EvidenceLinkSelector title="选择本次验证对应的风险对象" findings={findings} components={components} validations={[]} selectedFindingId={correlationFindingId} selectedComponentId={correlationComponentId} selectedValidationId="" onFindingChange={(value) => { setCorrelationFindingId(value); const linkedComponentId = findings.find((item) => item.id === value)?.component_id; if (linkedComponentId) setCorrelationComponentId(linkedComponentId); }} onComponentChange={(value) => { setCorrelationComponentId(value); const findingComponentId = findings.find((item) => item.id === correlationFindingId)?.component_id; if (findingComponentId && findingComponentId !== value) setCorrelationFindingId(""); }} onValidationChange={() => undefined} /><DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} /></>}
+        {activeView === "sandbox" && <><EvidenceLinkSelector title="选择本次运行对应的风险或验证" findings={findings} components={components} validations={validations} selectedFindingId={correlationFindingId} selectedComponentId={correlationComponentId} selectedValidationId={correlationValidationId} onFindingChange={(value) => { setCorrelationFindingId(value); const linkedComponentId = findings.find((item) => item.id === value)?.component_id; if (linkedComponentId) setCorrelationComponentId(linkedComponentId); }} onComponentChange={(value) => { setCorrelationComponentId(value); const findingComponentId = findings.find((item) => item.id === correlationFindingId)?.component_id; if (findingComponentId && findingComponentId !== value) setCorrelationFindingId(""); }} onValidationChange={(value) => { setCorrelationValidationId(value); const selectedValidation = validations.find((item) => item.id === value); if (selectedValidation?.finding_id) setCorrelationFindingId(selectedValidation.finding_id); if (selectedValidation?.component_id) setCorrelationComponentId(selectedValidation.component_id); }} /><SandboxView project={project} evidence={evidence} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} loading={loading} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={createSandboxEvidence} /></>}
+        {activeView === "aspm" && <><EvidenceGraphPanel graph={evidenceGraph} /><AspmView summary={summary} findings={findings} validations={validations} evidence={evidence} onUpdateFinding={updateFindingGovernance} /></>}
       </section>
     </main>
   );
@@ -536,6 +564,64 @@ function ModulesView({ modules, project, enabledModules, selectedModules, saving
 
 function TaskCenter(props: { project: Project | null; assetProbe: ProjectAssetProbe | null; enabledModules: Set<ModuleKey>; sourcePath: string; sastPath: string; agentPath: string; targetUrl: string; runCommand: string; loading: boolean; onSourcePathChange: (value: string) => void; onSastPathChange: (value: string) => void; onAgentPathChange: (value: string) => void; onTargetUrlChange: (value: string) => void; onRunCommandChange: (value: string) => void; onScan: (kind: "sca" | "sast" | "agent") => Promise<void>; onRecommended: () => Promise<void>; onDast: () => Promise<void>; onSandbox: () => Promise<void> }) { const recommended = props.assetProbe?.recommended_tasks ?? []; const runnable = recommended.filter((kind) => props.enabledModules.has(kind)); const hasTask = OPTIONAL_MODULES.some((moduleKey) => props.enabledModules.has(moduleKey)); return <section className="task-stack"><div className="panel asset-probe"><div className="panel-header"><h2>源码自动识别</h2><span>{props.assetProbe?.message ?? "未探测"}</span></div><div className="probe-summary"><Metric label="依赖清单" value={props.assetProbe?.sca_files.length ?? 0} /><Metric label="源码文件" value={props.assetProbe?.source_files.length ?? 0} /><Metric label="Agent 配置" value={props.assetProbe?.agent_files.length ?? 0} /><Metric label="可执行推荐" value={runnable.length} /></div><div className="probe-actions"><div><strong>{props.project?.source_path ?? "未配置本地源码路径"}</strong><span>{runnable.length ? `可执行推荐：${runnable.map((item) => item.toUpperCase()).join(" + ")}` : "推荐任务会同时受源码识别和模块启用状态影响"}</span></div><button className="primary-action" disabled={props.loading || runnable.length === 0} onClick={() => void props.onRecommended()}>执行推荐任务</button></div></div>{hasTask ? <section className="task-grid">{props.enabledModules.has("sca") && <TaskCard title="SCA 组件清单" desc="解析依赖文件并写入 components。" value={props.sourcePath} onChange={props.onSourcePathChange} button="执行 SCA" disabled={props.loading} onClick={() => props.onScan("sca")} />}{props.enabledModules.has("sast") && <TaskCard title="SAST 基础扫描" desc="扫描硬编码密钥、命令执行、SQL 拼接等模式。" value={props.sastPath} onChange={props.onSastPathChange} button="执行 SAST" disabled={props.loading} onClick={() => props.onScan("sast")} />}{props.enabledModules.has("agent") && <TaskCard title="AGENT 配置扫描" desc="扫描 Agent/MCP/插件配置中的危险权限。" value={props.agentPath} onChange={props.onAgentPathChange} button="执行 AGENT" disabled={props.loading} onClick={() => props.onScan("agent")} />}{props.enabledModules.has("dast") && <TaskCard title="DAST 验证记录" desc="创建一条人工动态验证裁决。" value={props.targetUrl} onChange={props.onTargetUrlChange} button="记录 DAST" disabled={props.loading} onClick={props.onDast} />}{props.enabledModules.has("sandbox") && <TaskCard title="SANDBOX 受控执行" desc="执行受控命令并采集进程输出、耗时和策略证据。" value={props.runCommand} onChange={props.onRunCommandChange} button="执行 SANDBOX" disabled={props.loading} onClick={props.onSandbox} />}</section> : <div className="panel empty-project">当前项目未启用可执行模块。请先到模块接入启用 SCA、SAST、AGENT、DAST 或 SANDBOX。</div>}</section>; }
 function TaskCard({ title, desc, value, button, disabled, onChange, onClick }: { title: string; desc: string; value: string; button: string; disabled: boolean; onChange: (value: string) => void; onClick: () => void }) { return <div className="panel task-card"><h2>{title}</h2><p>{desc}</p><div className="path-control"><input value={value} onChange={(event) => onChange(event.target.value)} /><button className="primary-action" disabled={disabled} onClick={onClick}>{button}</button></div></div>; }
+
+function EvidenceLinkSelector({
+  title,
+  findings,
+  components,
+  validations,
+  selectedFindingId,
+  selectedComponentId,
+  selectedValidationId,
+  onFindingChange,
+  onComponentChange,
+  onValidationChange,
+}: {
+  title: string;
+  findings: Finding[];
+  components: Component[];
+  validations: DastValidation[];
+  selectedFindingId: string;
+  selectedComponentId: string;
+  selectedValidationId: string;
+  onFindingChange: (value: string) => void;
+  onComponentChange: (value: string) => void;
+  onValidationChange: (value: string) => void;
+}) {
+  return (
+    <section className="panel full evidence-link-selector">
+      <div className="panel-header">
+        <h2>{title}</h2>
+        <span>显式关联用于生成可追溯攻击链；不选择则记录为未关联</span>
+      </div>
+      <div className="evidence-link-grid">
+        <label>
+          Finding
+          <select value={selectedFindingId} onChange={(event) => onFindingChange(event.target.value)}>
+            <option value="">不关联 Finding</option>
+            {findings.map((finding) => <option key={finding.id} value={finding.id}>{finding.source} · {finding.severity} · {finding.title}</option>)}
+          </select>
+        </label>
+        <label>
+          SCA 组件
+          <select value={selectedComponentId} onChange={(event) => onComponentChange(event.target.value)}>
+            <option value="">不关联组件</option>
+            {components.map((component) => <option key={component.id} value={component.id}>{component.ecosystem} · {component.name} {component.version ?? ""}</option>)}
+          </select>
+        </label>
+        {validations.length > 0 ? (
+          <label>
+            DAST 验证
+            <select value={selectedValidationId} onChange={(event) => onValidationChange(event.target.value)}>
+              <option value="">不关联 DAST 验证</option>
+              {validations.map((validation) => <option key={validation.id} value={validation.id}>{validation.verdict} · {validation.target_url}</option>)}
+            </select>
+          </label>
+        ) : null}
+      </div>
+    </section>
+  );
+}
 
 function AgentView({ project, findings, categorySummary, sourcePath, loading, onSourcePathChange, onRunScan }: { project: Project | null; findings: Finding[]; categorySummary: Record<string, number>; sourcePath: string; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void> }) {
   const [page, setPage] = useState(1);
@@ -702,6 +788,35 @@ function RiskBadge({ status, severity }: { status: string; severity: Severity | 
 function FilterSelect({ label, value, options, onChange, formatOption = (option) => option }: { label: string; value: string; options: string[]; onChange: (value: string) => void; formatOption?: (value: string) => string }) {
   return <label className="filter-control"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="all">全部</option>{options.map((option) => <option key={option} value={option}>{formatOption(option)}</option>)}</select></label>;
 }
+function EvidenceGraphPanel({ graph }: { graph: EvidenceGraph | null }) {
+  const nodeMap = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
+  const relationEdges = (graph?.edges ?? []).filter((edge) => edge.relation_type !== "contains");
+  return (
+    <section className="panel full evidence-graph-panel">
+      <div className="panel-header">
+        <h2>跨模块证据图谱</h2>
+        <span>{relationEdges.length ? `${relationEdges.length} 条可信关系` : "等待显式关联证据"}</span>
+      </div>
+      <section className="module-summary inline-summary">
+        <Metric label="图谱节点" value={graph?.summary.node_count ?? 0} />
+        <Metric label="关联关系" value={graph?.summary.relation_edge_count ?? 0} />
+        <Metric label="已关联 DAST" value={graph?.summary.linked_validation_count ?? 0} />
+        <Metric label="已关联 SANDBOX" value={graph?.summary.linked_evidence_count ?? 0} />
+      </section>
+      {relationEdges.length === 0 ? <div className="empty-project">请在 DAST 或 SANDBOX 页面选择原始 Finding、SCA 组件或验证记录后执行任务。未关联记录不会生成攻击链。</div> : (
+        <table className="compact-table">
+          <thead><tr><th>来源</th><th>关系</th><th>目标</th><th>依据</th><th>可信度</th></tr></thead>
+          <tbody>{relationEdges.slice(0, 20).map((edge) => {
+            const source = nodeMap.get(edge.source);
+            const target = nodeMap.get(edge.target);
+            return <tr key={edge.id}><td><strong>{source?.module ?? "-"}</strong><span className="cell-subtext">{source?.label ?? edge.source}</span></td><td>{relationTypeLabel(edge.relation_type)}</td><td><strong>{target?.module ?? "-"}</strong><span className="cell-subtext">{target?.label ?? edge.target}</span></td><td>{edge.basis}</td><td>{edge.confidence}%</td></tr>;
+          })}</tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function AspmView({ summary, findings, validations, evidence, onUpdateFinding }: { summary: AspmSummary | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status" | "remediation_owner" | "remediation_note" | "remediation_due_at">>) => Promise<void> }) {
   const [page, setPage] = useState(1);
   const pageSize = 10;
@@ -754,6 +869,7 @@ function scanStatusLabel(value?: string | null) { return value === "queued" ? "�
 function toolStatusLabel(value?: string | null) { return value === "disabled" ? "未启用" : value === "success" ? "成功" : value === "partial_failed" ? "部分失败" : value === "failed" ? "失败" : value ?? "未知"; }
 function grypeInputLabel(value?: string | null) { return value === "syft-sbom" ? "Syft SBOM" : value === "directory" ? "目录回退" : "-"; }
 function toolHealthStatusLabel(value?: string | null) { return value === "success" ? "可用" : value === "warning" ? "有警告" : value === "failed" ? "不可用" : value ?? "未检查"; }
+function relationTypeLabel(value: string) { return value === "reported_by" ? "产生风险" : value === "validated_by" ? "动态验证" : value === "observed_by" ? "运行时取证" : value; }
 function toolHealthNameLabel(value?: string | null) { return value === "docker_cli" ? "Docker CLI" : value === "docker_engine" ? "Docker Engine" : value === "syft_image" ? "Syft 镜像" : value === "grype_image" ? "Grype 镜像" : value === "grype_db" ? "Grype 漏洞库" : value === "api" ? "后端 API" : value ?? "-"; }
 function scaChangeTypeLabel(value?: string | null) { return value === "added" ? "新增组件" : value === "removed" ? "移除组件" : value === "version_changed" ? "版本变化" : value === "risk_added" ? "新增风险" : value === "risk_removed" ? "风险消失" : value === "risk_changed" ? "风险变化" : value === "license_risk_changed" ? "许可证变化" : value ?? "-"; }
 function normalizeFindingStatus(status: FindingStatus) { return status === "pending" ? "open" : status === "retest" ? "fixing" : status === "closed" ? "fixed" : status; }

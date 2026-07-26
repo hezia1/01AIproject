@@ -92,6 +92,7 @@ class ScanTask(ScanCreate):
 class FindingCreate(BaseModel):
     project_id: UUID
     scan_task_id: UUID | None = None
+    component_id: UUID | None = None
     source: str
     rule_id: str
     title: str
@@ -390,6 +391,9 @@ class DastValidationCreate(BaseModel):
     target_url: str = Field(min_length=1, max_length=1000)
     verdict: DastVerdict
     finding_id: UUID | None = None
+    component_id: UUID | None = None
+    link_source: str = "unlinked"
+    link_confidence: int = Field(default=0, ge=0, le=100)
     validator: str | None = None
     evidence_summary: str | None = None
     request_summary: str | None = None
@@ -402,6 +406,7 @@ class DastProbeRequest(BaseModel):
     project_id: UUID
     target_url: str = Field(min_length=1, max_length=1000)
     finding_id: UUID | None = None
+    component_id: UUID | None = None
     validator: str | None = "auto-dast"
 
 
@@ -412,6 +417,10 @@ class DastValidation(DastValidationCreate):
 
 
 class DastValidationUpdate(BaseModel):
+    finding_id: UUID | None = None
+    component_id: UUID | None = None
+    link_source: str | None = None
+    link_confidence: int | None = Field(default=None, ge=0, le=100)
     verdict: DastVerdict | None = None
     validator: str | None = None
     evidence_summary: str | None = None
@@ -424,6 +433,10 @@ class SandboxEvidenceCreate(BaseModel):
     project_id: UUID
     run_command: str = Field(min_length=1, max_length=1000)
     finding_id: UUID | None = None
+    component_id: UUID | None = None
+    validation_id: UUID | None = None
+    link_source: str = "unlinked"
+    link_confidence: int = Field(default=0, ge=0, le=100)
     runtime_profile: str | None = None
     network_policy: str = "restricted"
     filesystem_policy: str = "readonly"
@@ -439,6 +452,8 @@ class SandboxRunRequest(BaseModel):
     project_id: UUID
     run_command: str = Field(min_length=1, max_length=1000)
     finding_id: UUID | None = None
+    component_id: UUID | None = None
+    validation_id: UUID | None = None
     timeout_seconds: int = Field(default=10, ge=1, le=30)
     operator: str | None = "sandbox-runner"
     image: str | None = None
@@ -451,6 +466,11 @@ class SandboxEvidence(SandboxEvidenceCreate):
 
 
 class SandboxEvidenceUpdate(BaseModel):
+    finding_id: UUID | None = None
+    component_id: UUID | None = None
+    validation_id: UUID | None = None
+    link_source: str | None = None
+    link_confidence: int | None = Field(default=None, ge=0, le=100)
     runtime_profile: str | None = None
     network_policy: str | None = None
     filesystem_policy: str | None = None
@@ -475,6 +495,10 @@ class AttackChainStep(BaseModel):
     module: str
     title: str
     evidence: str | None = None
+    node_id: str | None = None
+    relation_type: str | None = None
+    confidence: int | None = None
+    created_at: datetime | None = None
 
 
 class AttackChain(BaseModel):
@@ -483,9 +507,39 @@ class AttackChain(BaseModel):
     severity: Severity
     modules: list[str]
     evidence_count: int
+    confidence: int
+    correlation_basis: list[str] = Field(default_factory=list)
     summary: str
     recommended_action: str
     steps: list[AttackChainStep] = Field(default_factory=list)
+
+
+class EvidenceGraphNode(BaseModel):
+    id: str
+    kind: str
+    module: str
+    label: str
+    severity: Severity | None = None
+    status: str | None = None
+    detail: str | None = None
+    created_at: datetime | None = None
+
+
+class EvidenceGraphEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    relation_type: str
+    basis: str
+    confidence: int = Field(ge=0, le=100)
+    created_at: datetime | None = None
+
+
+class EvidenceGraph(BaseModel):
+    project_id: UUID
+    nodes: list[EvidenceGraphNode] = Field(default_factory=list)
+    edges: list[EvidenceGraphEdge] = Field(default_factory=list)
+    summary: dict[str, int] = Field(default_factory=dict)
 
 
 class ScaGovernanceComponent(BaseModel):

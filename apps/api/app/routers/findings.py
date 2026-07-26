@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import FindingRecord, ProjectRecord
+from app.db_models import ComponentRecord, FindingRecord, ProjectRecord
 from app.models import AiReview, Finding, FindingCreate, FindingGovernanceUpdate, FindingStatusUpdate
 from app.repositories.mappers import finding_to_schema
 
@@ -28,10 +28,15 @@ def list_findings(
 def create_finding(payload: FindingCreate, db: Session = Depends(get_db)) -> Finding:
     if db.get(ProjectRecord, str(payload.project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    if payload.component_id is not None:
+        component = db.get(ComponentRecord, str(payload.component_id))
+        if component is None or component.project_id != str(payload.project_id):
+            raise HTTPException(status_code=400, detail="component_id does not belong to this project")
 
     record = FindingRecord(
         project_id=str(payload.project_id),
         scan_task_id=str(payload.scan_task_id) if payload.scan_task_id else None,
+        component_id=str(payload.component_id) if payload.component_id else None,
         source=payload.source,
         rule_id=payload.rule_id,
         title=payload.title,

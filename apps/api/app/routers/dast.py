@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
+from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
 from app.models import DastProbeRequest, DastValidation, DastValidationCreate, DastValidationUpdate, ModuleKey
 from app.repositories.mappers import dast_validation_to_schema
 from app.services.dast_probe import probe_target_url
@@ -29,22 +29,57 @@ def ensure_dast_enabled(project_id: UUID, db: Session) -> None:
         raise HTTPException(status_code=400, detail="DAST module is not enabled for this project")
 
 
-def ensure_finding_belongs_to_project(project_id: UUID, finding_id: UUID | None, db: Session) -> None:
+def ensure_links_belong_to_project(
+    project_id: UUID,
+    finding_id: UUID | None,
+    component_id: UUID | None,
+    db: Session,
+) -> None:
     if finding_id is None:
-        return
-    finding = db.get(FindingRecord, str(finding_id))
-    if finding is None or finding.project_id != str(project_id):
-        raise HTTPException(status_code=400, detail="finding_id does not belong to this project")
+        finding = None
+    else:
+        finding = db.get(FindingRecord, str(finding_id))
+        if finding is None or finding.project_id != str(project_id):
+            raise HTTPException(status_code=400, detail="finding_id does not belong to this project")
+    if component_id is not None:
+        component = db.get(ComponentRecord, str(component_id))
+        if component is None or component.project_id != str(project_id):
+            raise HTTPException(status_code=400, detail="component_id does not belong to this project")
+        if finding is not None and finding.component_id and finding.component_id != str(component_id):
+            raise HTTPException(status_code=400, detail="finding_id and component_id refer to different components")
+
+
+def link_metadata(
+    finding_id: UUID | None,
+    component_id: UUID | None,
+    requested_source: str = "unlinked",
+    requested_confidence: int = 0,
+) -> tuple[str, int]:
+    if finding_id is None and component_id is None:
+        return "unlinked", 0
+    return (
+        requested_source if requested_source != "unlinked" else "explicit-selection",
+        requested_confidence if requested_confidence > 0 else 100,
+    )
 
 
 @router.post("/validations", response_model=DastValidation, status_code=201)
 def create_validation(payload: DastValidationCreate, db: Session = Depends(get_db)) -> DastValidation:
     ensure_dast_enabled(payload.project_id, db)
-    ensure_finding_belongs_to_project(payload.project_id, payload.finding_id, db)
+    ensure_links_belong_to_project(payload.project_id, payload.finding_id, payload.component_id, db)
+    link_source, link_confidence = link_metadata(
+        payload.finding_id,
+        payload.component_id,
+        payload.link_source,
+        payload.link_confidence,
+    )
 
     record = DastValidationRecord(
         project_id=str(payload.project_id),
         finding_id=str(payload.finding_id) if payload.finding_id else None,
+        component_id=str(payload.component_id) if payload.component_id else None,
+        link_source=link_source,
+        link_confidence=link_confidence,
         target_url=payload.target_url,
         verdict=payload.verdict.value,
         validator=payload.validator,
@@ -63,7 +98,8 @@ def create_validation(payload: DastValidationCreate, db: Session = Depends(get_d
 @router.post("/probe", response_model=DastValidation, status_code=201)
 def probe_target(payload: DastProbeRequest, db: Session = Depends(get_db)) -> DastValidation:
     ensure_dast_enabled(payload.project_id, db)
-    ensure_finding_belongs_to_project(payload.project_id, payload.finding_id, db)
+    ensure_links_belong_to_project(payload.project_id, payload.finding_id, payload.component_id, db)
+    link_source, link_confidence = link_metadata(payload.finding_id, payload.component_id)
 
     try:
         probe = probe_target_url(payload.target_url)
@@ -73,6 +109,9 @@ def probe_target(payload: DastProbeRequest, db: Session = Depends(get_db)) -> Da
     record = DastValidationRecord(
         project_id=str(payload.project_id),
         finding_id=str(payload.finding_id) if payload.finding_id else None,
+        component_id=str(payload.component_id) if payload.component_id else None,
+        link_source=link_source,
+        link_confidence=link_confidence,
         target_url=probe.target_url,
         verdict=probe.verdict.value,
         validator=payload.validator or "auto-dast",
@@ -110,11 +149,28 @@ def update_validation(
         raise HTTPException(status_code=404, detail="DAST validation not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    next_finding_id = updates.get("finding_id", record.finding_id)
+    next_component_id = updates.get("component_id", record.component_id)
+    ensure_links_belong_to_project(
+        UUID(str(record.project_id)),
+        UUID(str(next_finding_id)) if next_finding_id else None,
+        UUID(str(next_component_id)) if next_component_id else None,
+        db,
+    )
     for field, value in updates.items():
         if field == "verdict" and value is not None:
             setattr(record, field, value.value)
+        elif field in {"finding_id", "component_id"}:
+            setattr(record, field, str(value) if value else None)
         else:
             setattr(record, field, value)
+    if "finding_id" in updates or "component_id" in updates:
+        record.link_source, record.link_confidence = link_metadata(
+            UUID(str(record.finding_id)) if record.finding_id else None,
+            UUID(str(record.component_id)) if record.component_id else None,
+            record.link_source,
+            record.link_confidence,
+        )
     record.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(record)

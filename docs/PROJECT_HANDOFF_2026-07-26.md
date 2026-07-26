@@ -7,8 +7,8 @@
 - 本地项目路径：`D:\project\PYproject\AI网安项目`
 - GitHub 仓库：`https://github.com/hezia1/01AIproject.git`
 - 当前分支：`main`
-- 当前最新提交：`bc29958 Add npm native SCA dependency tree`
-- 当前状态：用户已说明该提交已经推送 GitHub；本次交接前确认 `main...origin/main` 已对齐。
+- 本文档最初创建提交：`0eaf28b Add project handoff document`
+- 当前最新提交应以 `git log -1 --oneline` 为准；本文档已补充 ASPM 跨模块证据关联第二版。
 - 重要规则：后续继续遵守用户要求，每次写代码前先说明要实现的功能，得到确认后再修改代码；每次代码更新后同步 GitHub。
 
 最近关键提交：
@@ -47,11 +47,11 @@ Get-Content README.md -Encoding utf8
 - 项目资产探测：根据源码目录识别 SCA、SAST、AGENT 可执行任务。
 - 统一任务中心：可触发 SCA、SAST、AGENT、DAST、SANDBOX。
 - PostgreSQL 持久化：项目、模块配置、扫描任务、组件、Finding、DAST 记录、SANDBOX 证据。
+- Alembic 正式迁移基线和跨模块证据关联首个版本：`20260726_0001`。
 - 前端多页面视图：项目管理、项目资产、模块接入、任务中心、SCA、SAST、AGENT、DAST、SANDBOX、ASPM。
 
 ### 还未完成
 
-- 正式 Alembic 数据库迁移。
 - 用户登录、权限、租户隔离。
 - 扫描任务队列和后台 Worker。
 - CI/CD 接入。
@@ -150,7 +150,7 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
 - 真实组件包文件哈希采集。
 - Python / Maven / Go 原生完整依赖树。
 - 更深度的传递影响分析和真实父子依赖树。
-- 跨模块攻击链联动。
+- 基于图数据库或 AI 推理的深层跨模块攻击链。
 - 组织级许可证策略配置、策略启停、审批流持久化、例外记录管理。
 - 本地漏洞规则来源扩展、规则覆盖面、规则启停、组织级规则管理。
 - Trivy 等更多专业工具接入。
@@ -260,6 +260,7 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
   - `uncertain`
   - `not_exploitable`
 - 支持项目运行地址作为默认目标。
+- DAST 验证可显式关联 Finding 或 SCA 组件，关联信息包含来源与可信度。
 - 前端 DAST 页面可查看验证记录。
 
 ### 还未完成
@@ -298,6 +299,7 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
 - 采集退出码、标准输出、错误输出、耗时、超时状态和证据摘要。
 - 输出内容会对疑似密钥字段做简单脱敏。
 - 结构化记录执行事件、隔离策略、输出摘要、运行时间线。
+- SANDBOX 证据可显式关联 Finding、SCA 组件或 DAST 验证，并继承验证链上下文。
 - 前端 SANDBOX 页面展示执行结果、输出摘要、策略账本、时间线事件。
 
 ### 还未完成
@@ -326,9 +328,15 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
   - 负责人。
   - 备注。
   - 到期时间。
-- 攻击链第一版：
-  - 从 Finding、DAST、SANDBOX 证据中生成简单攻击链视图。
+- 攻击链第二版：
+  - 只基于显式 Finding、组件、DAST、SANDBOX 关联生成。
+  - 删除“同项目第一条风险 + 第一条验证/证据”的弱关联方式。
+  - 输出关联依据、可信度、时间和可追溯证据步骤。
+- 证据图谱 API：`GET /api/aspm/projects/{project_id}/evidence-graph`。
+- 证据图谱节点覆盖项目、组件、Finding、DAST 验证和 SANDBOX 证据。
+- 证据图谱关系覆盖 `reported_by`、`validated_by`、`observed_by`。
 - 前端治理总览展示项目摘要、风险分、统计和风险列表。
+- 前端 DAST / SANDBOX 页面支持显式选择关联对象，ASPM 展示关系审计表。
 - SCA 供应链治理卡片：
   - 最新扫描组件数。
   - 风险组件数。
@@ -342,17 +350,17 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
 ### 还未完成
 
 - 风险分规则较简单，尚未接 CVSS、EPSS、资产暴露面、业务重要性。
-- 攻击链仍是规则化聚合，不是真正图谱推理。
+- 当前是显式关系图，不是真正的图数据库或 AI 图谱推理。
 - 没有 SLA 管理。
 - 没有工单系统接入。
 - 没有完整整改闭环流程。
 - 没有合规报告。
 - 没有管理层报表导出。
-- SCA 与 DAST / SANDBOX 的跨模块攻击链仍是规则化关联，尚未形成完整图谱推理。
+- 历史 DAST / SANDBOX 数据没有显式关联，需要重新执行关联验证后才会生成可信攻击链。
 
 ### 推荐后续方向
 
-- 若切换到 ASPM，建议做跨模块攻击链增强，把 SCA、SAST、AGENT、DAST、SANDBOX 的证据串联得更清晰。
+- ASPM 下一步建议增加风险趋势、复测状态和 SLA 第一版，再考虑图数据库或 AI 推理。
 
 ## 10. 当前重要技术文件
 
@@ -373,9 +381,11 @@ SCA 相关：
 ASPM 相关：
 
 - `apps/api/app/routers/aspm.py`
+- `apps/api/app/services/aspm_evidence_graph.py`
 - `apps/api/app/routers/findings.py`
 - `apps/api/app/models.py`
 - `apps/api/app/db_models.py`
+- `apps/api/migrations/versions/20260726_0001_evidence_links.py`
 
 前端主文件：
 
@@ -423,4 +433,3 @@ $env:PYTHONPATH='apps\api'
 3. 等我发送原始 PPT 后，结合 PPT、README、交接文档，重新列出每个模块已完成和未完成内容。
 4. 给出下一步最推荐推进的模块和具体实现范围，不要直接改代码，先等我确认。
 ```
-

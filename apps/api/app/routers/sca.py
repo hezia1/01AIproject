@@ -107,6 +107,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             )
             db.add(record)
             records.append(record)
+        db.flush()
         create_sca_findings(db, str(payload.project_id), scan.id, records)
 
         scan.status = ScanStatus.completed.value
@@ -366,6 +367,7 @@ def sca_findings_for_component(
             FindingRecord(
                 project_id=project_id,
                 scan_task_id=scan_task_id,
+                component_id=component.id,
                 source="SCA",
                 rule_id=f"SCA:{component.ecosystem}:{component.name}:{vulnerability_id}",
                 title=f"SCA 漏洞组件：{component.name} {vulnerability_id}",
@@ -379,6 +381,7 @@ def sca_findings_for_component(
             FindingRecord(
                 project_id=project_id,
                 scan_task_id=scan_task_id,
+                component_id=component.id,
                 source="SCA",
                 rule_id=f"SCA-LICENSE:{component.ecosystem}:{component.name}:{component.license_risk}",
                 title=f"SCA 许可证风险：{component.name} {component.license_risk}",
@@ -392,6 +395,7 @@ def sca_findings_for_component(
             FindingRecord(
                 project_id=project_id,
                 scan_task_id=scan_task_id,
+                component_id=component.id,
                 source="SCA",
                 rule_id=f"SCA-VERSION:{component.ecosystem}:{component.name}",
                 title=f"SCA 组件版本缺失：{component.name}",
@@ -405,6 +409,7 @@ def sca_findings_for_component(
             FindingRecord(
                 project_id=project_id,
                 scan_task_id=scan_task_id,
+                component_id=component.id,
                 source="SCA",
                 rule_id=f"SCA-RISK:{component.ecosystem}:{component.name}:{component.version or 'unknown'}",
                 title=f"SCA 高风险组件：{component.name}",

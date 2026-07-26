@@ -16,14 +16,13 @@ from app.db_models import (
 )
 from app.models import (
     AspmProjectSummary,
-    AttackChain,
-    AttackChainStep,
+    EvidenceGraph,
     ModuleKey,
     ScaGovernanceComponent,
     ScaGovernanceSummary,
     ScaToolStatus,
-    Severity,
 )
+from app.services.aspm_evidence_graph import build_attack_chains_v2, build_evidence_graph
 
 router = APIRouter()
 
@@ -57,10 +56,9 @@ def get_project_summary(project_id: UUID, db: Session = Depends(get_db)) -> Aspm
     findings = db.scalars(
         select(FindingRecord).where(FindingRecord.project_id == str(project_id)).order_by(FindingRecord.created_at.desc())
     ).all()
-    risky_components = db.scalars(
+    components = db.scalars(
         select(ComponentRecord)
         .where(ComponentRecord.project_id == str(project_id))
-        .where(ComponentRecord.risk_status.in_(["vulnerable", "review-required", "license-risk"]))
         .order_by(ComponentRecord.created_at.desc())
     ).all()
     validations = db.scalars(
@@ -95,7 +93,42 @@ def get_project_summary(project_id: UUID, db: Session = Depends(get_db)) -> Aspm
         findings_by_status=findings_by_status,
         dast_by_verdict=dast_by_verdict,
         sca_governance=build_sca_governance_summary(db, project_id),
-        attack_chains=build_attack_chains(findings, risky_components, validations, sandbox_evidence),
+        attack_chains=build_attack_chains_v2(findings, components, validations, sandbox_evidence),
+    )
+
+
+@router.get("/projects/{project_id}/evidence-graph", response_model=EvidenceGraph)
+def get_project_evidence_graph(project_id: UUID, db: Session = Depends(get_db)) -> EvidenceGraph:
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    findings = db.scalars(
+        select(FindingRecord)
+        .where(FindingRecord.project_id == str(project_id))
+        .order_by(FindingRecord.created_at.desc())
+    ).all()
+    components = db.scalars(
+        select(ComponentRecord)
+        .where(ComponentRecord.project_id == str(project_id))
+        .order_by(ComponentRecord.created_at.desc())
+    ).all()
+    validations = db.scalars(
+        select(DastValidationRecord)
+        .where(DastValidationRecord.project_id == str(project_id))
+        .order_by(DastValidationRecord.created_at.desc())
+    ).all()
+    evidence_records = db.scalars(
+        select(SandboxEvidenceRecord)
+        .where(SandboxEvidenceRecord.project_id == str(project_id))
+        .order_by(SandboxEvidenceRecord.created_at.desc())
+    ).all()
+    return build_evidence_graph(
+        project_id,
+        project.name,
+        findings,
+        components,
+        validations,
+        evidence_records,
     )
 
 
@@ -230,99 +263,3 @@ def sca_component_rank(component: ComponentRecord) -> tuple[int, int, int]:
     vulnerability_score = len(component.vulnerability_ids or [])
     license_score = 1 if component.license_risk in {"restricted", "review_required", "unknown"} else 0
     return severity_score, vulnerability_score, license_score
-
-
-def build_attack_chains(
-    findings: list[FindingRecord],
-    risky_components: list[ComponentRecord],
-    validations: list[DastValidationRecord],
-    sandbox_evidence: list[SandboxEvidenceRecord],
-) -> list[AttackChain]:
-    chains: list[AttackChain] = []
-    high_sast = first_finding(findings, "SAST", {"critical", "high"})
-    high_agent = first_finding(findings, "AGENT", {"critical", "high", "medium"})
-    exploitable_dast = next((item for item in validations if item.verdict == "exploitable"), None)
-    uncertain_dast = next((item for item in validations if item.verdict == "uncertain"), None)
-    sandbox = sandbox_evidence[0] if sandbox_evidence else None
-    risky_component = risky_components[0] if risky_components else None
-
-    if high_sast and (exploitable_dast or uncertain_dast):
-        dast = exploitable_dast or uncertain_dast
-        steps = [
-            finding_step("SAST", high_sast),
-            AttackChainStep(module="DAST", title=f"动态验证目标：{dast.target_url}", evidence=dast.evidence_summary),
-        ]
-        if sandbox:
-            steps.append(AttackChainStep(module="SANDBOX", title=f"运行时证据：{sandbox.run_command}", evidence=sandbox.evidence_summary))
-        chains.append(
-            AttackChain(
-                id="external-code-risk-chain",
-                name="外部可达代码风险链",
-                severity=Severity.critical if exploitable_dast and high_sast.severity in {"critical", "high"} else Severity.high,
-                modules=unique_modules(steps),
-                evidence_count=len(steps),
-                summary="静态高危代码风险已与动态验证结果关联，具备更高处置优先级。",
-                recommended_action="优先确认入口可达性，修复代码风险，并在 DAST 与 SANDBOX 中复测。",
-                steps=steps,
-            )
-        )
-
-    if high_agent and sandbox:
-        steps = [
-            finding_step("AGENT", high_agent),
-            AttackChainStep(module="SANDBOX", title=f"受控执行证据：{sandbox.run_command}", evidence=sandbox.evidence_summary),
-        ]
-        chains.append(
-            AttackChain(
-                id="agent-runtime-behavior-chain",
-                name="Agent 权限与运行时行为链",
-                severity=Severity.high if high_agent.severity in {"critical", "high"} else Severity.medium,
-                modules=unique_modules(steps),
-                evidence_count=len(steps),
-                summary="Agent 配置或工具权限风险已与运行时执行证据关联。",
-                recommended_action="收敛 Agent 工具权限，限制文件/网络/命令能力，并保留沙箱复测证据。",
-                steps=steps,
-            )
-        )
-
-    if risky_component and (exploitable_dast or uncertain_dast):
-        dast = exploitable_dast or uncertain_dast
-        steps = [
-            AttackChainStep(
-                module="SCA",
-                title=f"{risky_component.name} {risky_component.version or ''}".strip(),
-                evidence=risky_component.risk_summary or risky_component.remediation,
-            ),
-            AttackChainStep(module="DAST", title=f"动态验证目标：{dast.target_url}", evidence=dast.evidence_summary),
-        ]
-        chains.append(
-            AttackChain(
-                id="supply-chain-exposure-chain",
-                name="供应链风险暴露链",
-                severity=Severity.high if risky_component.severity in {"critical", "high"} or exploitable_dast else Severity.medium,
-                modules=unique_modules(steps),
-                evidence_count=len(steps),
-                summary="供应链组件风险已与动态目标验证结果关联，可能影响外部暴露面。",
-                recommended_action="优先升级或替换风险组件，并对暴露入口执行回归验证。",
-                steps=steps,
-            )
-        )
-
-    return chains
-
-
-def first_finding(findings: list[FindingRecord], source: str, severities: set[str]) -> FindingRecord | None:
-    return next((item for item in findings if item.source == source and item.severity in severities), None)
-
-
-def finding_step(module: str, finding: FindingRecord) -> AttackChainStep:
-    location = f"{finding.file_path or '-'}:{finding.line_start or '-'}"
-    return AttackChainStep(module=module, title=finding.title, evidence=f"{location} · {finding.evidence or finding.rule_id}")
-
-
-def unique_modules(steps: list[AttackChainStep]) -> list[str]:
-    modules: list[str] = []
-    for step in steps:
-        if step.module not in modules:
-            modules.append(step.module)
-    return modules

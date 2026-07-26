@@ -23,7 +23,14 @@ cd D:\project\PYproject\AI网安项目
 docker compose -f infra/docker-compose.yml up -d
 ```
 
-### 2. 启动后端
+### 2. 执行数据库迁移
+
+```powershell
+cd D:\project\PYproject\AI网安项目
+.\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
+```
+
+### 3. 启动后端
 
 ```powershell
 cd D:\project\PYproject\AI网安项目
@@ -38,7 +45,7 @@ cd apps\api
 http://localhost:8000/api/health
 ```
 
-### 3. 启动前端
+### 4. 启动前端
 
 ```powershell
 cd D:\project\PYproject\AI网安项目\apps\web
@@ -62,11 +69,11 @@ http://localhost:5173
 - 项目资产探测：根据源码目录识别 SCA、SAST、AGENT 可执行任务。
 - 统一任务中心：触发 SCA、SAST、AGENT、DAST、SANDBOX。
 - PostgreSQL 持久化：项目、模块配置、扫描任务、组件、Finding、DAST 记录、SANDBOX 证据。
+- Alembic 迁移基线与跨模块证据关联迁移第一版。
 - 前端多页面视图：项目管理、项目资产、模块接入、任务中心、组件清单、SAST 审计、AGENT 安全、DAST 验证、SANDBOX 证据、ASPM 治理总览。
 
 ### 还缺少
 
-- 正式 Alembic 数据库迁移。
 - 用户登录、权限、租户隔离。
 - 扫描任务队列和后台 Worker。
 - 报告导出。
@@ -132,7 +139,7 @@ GET  /api/sca/tool-health
 
 - 真实组件包文件哈希采集。
 - Python / Maven / Go 等更多包管理器原生完整依赖树。
-- 更深度的传递影响分析、真实父子依赖树和跨模块攻击链联动。
+- 更深度的传递影响分析、真实父子依赖树和基于图谱推理的跨模块攻击链。
 - 更完整的组织级许可证策略配置、策略启停、审批流持久化和例外记录管理。
 - 更完整的本地漏洞规则来源、规则覆盖面、规则启停和组织级规则管理。
 - Trivy 等更多专业工具接入。
@@ -205,6 +212,7 @@ GET  /api/agent/projects/{project_id}/findings
 - 检查 HTTP/HTTPS、状态码、响应时间、Server Header、基础安全响应头。
 - 根据轻量规则生成 `exploitable`、`uncertain`、`not_exploitable` 裁决。
 - 支持项目运行地址作为默认目标。
+- DAST 验证可显式关联 Finding 或 SCA 组件，并记录关联来源与可信度。
 - 前端 DAST 页面可查看验证记录。
 
 主要 API：
@@ -252,6 +260,7 @@ PATCH /api/dast/validations/{validation_id}
 - 结构化记录输出摘要：标准输出摘要、错误输出摘要、截断状态和脱敏状态。
 - 结构化记录运行时间线：准备、执行、完成或超时阶段。
 - 前端 SANDBOX 证据页展示执行结果、输出摘要、策略账本和时间线事件。
+- SANDBOX 证据可显式关联 Finding、SCA 组件或 DAST 验证，并继承验证链上下文。
 
 主要 API：
 
@@ -281,8 +290,11 @@ PATCH /api/sandbox/evidence/{evidence_id}
 - 按来源、严重等级、状态、DAST 裁决做统计。
 - 风险分计算。
 - Finding 治理字段：状态、负责人、备注、到期时间。
-- 攻击链第一版：从 Finding、DAST、SANDBOX 证据中生成简单攻击链视图。
+- 跨模块攻击链第二版：只基于显式 Finding / 组件 / DAST / SANDBOX 关联生成攻击链，不再按同项目首条记录机械拼接。
+- 证据图谱 API 第一版：输出项目、组件、Finding、DAST 验证和 SANDBOX 证据节点，以及 `reported_by`、`validated_by`、`observed_by` 关系。
+- 关系边记录关联依据、可信度和时间，攻击链支持证据溯源。
 - 前端治理总览展示项目摘要、风险分、统计和风险列表。
+- 前端 DAST / SANDBOX 页面支持选择关联对象，ASPM 展示跨模块证据关系审计表。
 - 治理总览新增 SCA 供应链治理卡片：区分最新扫描组件数、风险组件数、漏洞组件数、SCA Finding 数和 Top 风险组件。
 - 治理总览展示 Syft / Grype 增强状态、Grype 输入来源和错误摘要。
 
@@ -290,6 +302,7 @@ PATCH /api/sandbox/evidence/{evidence_id}
 
 ```text
 GET   /api/aspm/projects/{project_id}/summary
+GET   /api/aspm/projects/{project_id}/evidence-graph
 PATCH /api/findings/{finding_id}/governance
 PATCH /api/findings/{finding_id}/status
 ```
@@ -297,13 +310,13 @@ PATCH /api/findings/{finding_id}/status
 还缺少：
 
 - 风险分规则还比较简单，尚未接 CVSS、EPSS、资产暴露面、业务重要性。
-- 攻击链还只是规则化聚合，不是真正的图谱推理。
+- 证据图谱目前是显式关系图，不是真正的图数据库或 AI 图谱推理。
 - 没有 SLA 管理。
 - 没有工单系统接入。
 - 没有整改闭环流程。
 - 没有合规报告。
 - 没有管理层报表导出。
-- SCA 与 DAST / SANDBOX 的跨模块攻击链仍是规则化关联，尚未形成完整图谱推理。
+- 旧数据没有显式关联字段，需要重新执行关联验证后才会生成可信攻击链。
 
 ## 当前关键限制
 
@@ -316,8 +329,8 @@ PATCH /api/findings/{finding_id}/status
 
 ## 下一步建议
 
-1. 增强 ASPM 攻击链：把 SCA、SAST、AGENT、DAST、SANDBOX 的证据串联得更清晰。
+1. 增加 ASPM 风险趋势、复测状态和 SLA 第一版。
 2. 回头处理 SAST 前端 `Failed to fetch` 问题。
-3. 为 SCA 增加 lockfile 解析和 SBOM 导出。
-4. 增加正式数据库迁移和任务队列。
+3. 为 SCA 增加 Python 原生完整依赖树。
+4. 增加扫描任务队列和后台 Worker。
 5. 补充报告导出和审计日志。
