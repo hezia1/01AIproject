@@ -40,6 +40,9 @@ type EvidenceGraph = { project_id: string; nodes: EvidenceGraphNode[]; edges: Ev
 type LinkSuggestion = { finding_id?: string | null; component_id?: string | null; validation_id?: string | null; confidence: number; confidence_level: "high" | "medium" | "low"; reasons: string[]; label: string; source: string };
 type ExecutionStatus = "waiting" | "running" | "completed" | "failed" | "skipped";
 type ExecutionStep = { module: Exclude<ModuleKey, "aspm">; status: ExecutionStatus; detail: string };
+type RetestResult = "still_present" | "resolved" | "new" | "changed";
+type FindingRetestItem = { identity: string; result: RetestResult; title: string; file_path?: string | null; previous_line_start?: number | null; current_line_start?: number | null; previous_severity?: Severity | null; current_severity?: Severity | null; previous_finding_id?: string | null; current_finding_id?: string | null };
+type FindingRetestComparison = { project_id: string; source: string; has_comparison: boolean; previous_scan_id?: string | null; current_scan_id?: string | null; previous_scan_at?: string | null; current_scan_at?: string | null; still_present_count: number; resolved_count: number; new_count: number; changed_count: number; items: FindingRetestItem[] };
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
@@ -98,6 +101,7 @@ function App() {
   const [dastLinkSuggestions, setDastLinkSuggestions] = useState<LinkSuggestion[]>([]);
   const [sandboxLinkSuggestions, setSandboxLinkSuggestions] = useState<LinkSuggestion[]>([]);
   const [executionSteps, setExecutionSteps] = useState<ExecutionStep[]>([]);
+  const [retestComparisons, setRetestComparisons] = useState<Record<"sca" | "sast" | "agent", FindingRetestComparison | null>>({ sca: null, sast: null, agent: null });
   const [status, setStatus] = useState("正在连接 API...");
   const [loading, setLoading] = useState(false);
   const [savingKey, setSavingKey] = useState<ModuleKey | null>(null);
@@ -190,6 +194,7 @@ function App() {
     setDastLinkSuggestions([]);
     setSandboxLinkSuggestions([]);
     setExecutionSteps([]);
+    setRetestComparisons({ sca: null, sast: null, agent: null });
     setAssetProbe(null);
   }
 
@@ -267,6 +272,12 @@ function App() {
     setSandboxTemplates(templateData);
     setSummary(summaryData);
     setEvidenceGraph(evidenceGraphData);
+    const [scaRetest, sastRetest, agentRetest] = await Promise.all([
+      request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SCA`).catch(() => null),
+      request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SAST`).catch(() => null),
+      request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=AGENT`).catch(() => null),
+    ]);
+    setRetestComparisons({ sca: scaRetest, sast: sastRetest, agent: agentRetest });
   }
 
   async function createProject(event: React.FormEvent<HTMLFormElement>) {
@@ -382,6 +393,71 @@ function App() {
     }
   }
 
+  async function performModuleCheck(moduleKey: Exclude<ModuleKey, "aspm">): Promise<{ status: "completed" | "skipped"; detail: string; scanId?: string | null }> {
+    if (!project) throw new Error("请先选择项目");
+    if (moduleKey === "sca" || moduleKey === "sast" || moduleKey === "agent") {
+      const configuredSource = moduleKey === "sca" ? sourcePath : moduleKey === "sast" ? sastPath : agentPath;
+      if (!configuredSource.trim()) return { status: "skipped", detail: "未配置源码路径" };
+      const result = await request<ScaScanResult | unknown>(`/${moduleKey}/scan`, {
+        method: "POST",
+        body: JSON.stringify({
+          project_id: project.id,
+          source_path: configuredSource,
+          clear_previous: false,
+          enable_tool_scan: moduleKey === "sca" ? scaToolScanEnabled : false,
+        }),
+      });
+      return {
+        status: "completed",
+        detail: "扫描完成，已生成复测对比",
+        scanId: moduleKey === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId,
+      };
+    }
+    if (moduleKey === "dast") {
+      if (!targetUrl.trim()) return { status: "skipped", detail: "未配置目标地址" };
+      const suggestions = await request<LinkSuggestion[]>("/dast/link-suggestions", {
+        method: "POST",
+        body: JSON.stringify({ project_id: project.id, target_url: targetUrl }),
+      }).catch(() => []);
+      const recommendation = suggestions[0]?.confidence >= 80 ? suggestions[0] : null;
+      await request("/dast/probe", {
+        method: "POST",
+        body: JSON.stringify({
+          project_id: project.id,
+          target_url: targetUrl,
+          validator: "module-retest-dast",
+          finding_id: recommendation?.finding_id ?? null,
+          component_id: recommendation?.component_id ?? null,
+          link_source: recommendation ? `${recommendation.source}-confirmed` : "unlinked",
+          link_confidence: recommendation?.confidence ?? 0,
+        }),
+      });
+      return { status: "completed", detail: "动态验证完成，已保留新的验证记录" };
+    }
+    if (!runCommand.trim()) return { status: "skipped", detail: "未配置沙箱命令" };
+    const suggestions = await request<LinkSuggestion[]>("/sandbox/link-suggestions", {
+      method: "POST",
+      body: JSON.stringify({ project_id: project.id, run_command: runCommand }),
+    }).catch(() => []);
+    const recommendation = suggestions[0]?.confidence >= 80 ? suggestions[0] : null;
+    await request("/sandbox/run", {
+      method: "POST",
+      body: JSON.stringify({
+        project_id: project.id,
+        run_command: runCommand,
+        image: emptyToNull(sandboxImage),
+        timeout_seconds: 10,
+        operator: "module-retest-runner",
+        finding_id: recommendation?.finding_id ?? null,
+        component_id: recommendation?.component_id ?? null,
+        validation_id: recommendation?.validation_id ?? null,
+        link_source: recommendation ? `${recommendation.source}-confirmed` : "unlinked",
+        link_confidence: recommendation?.confidence ?? 0,
+      }),
+    });
+    return { status: "completed", detail: "沙箱执行完成，已保留新的运行证据" };
+  }
+
   async function runUnifiedSecurityCheck() {
     if (!project) return setStatus("请先选择项目");
     const order: Array<Exclude<ModuleKey, "aspm">> = ["sca", "sast", "agent", "dast", "sandbox"];
@@ -401,72 +477,14 @@ function App() {
     for (const moduleKey of selected) {
       updateStep(moduleKey, "running", "正在执行");
       try {
-        if (moduleKey === "sca" || moduleKey === "sast" || moduleKey === "agent") {
-          const configuredSource = moduleKey === "sca" ? sourcePath : moduleKey === "sast" ? sastPath : agentPath;
-          if (!configuredSource.trim()) {
-            updateStep(moduleKey, "skipped", "未配置源码路径");
-            continue;
-          }
-          const result = await request<ScaScanResult | unknown>(`/${moduleKey}/scan`, {
-            method: "POST",
-            body: JSON.stringify({
-              project_id: project.id,
-              source_path: configuredSource,
-              clear_previous: true,
-              enable_tool_scan: moduleKey === "sca" ? scaToolScanEnabled : false,
-            }),
-          });
-          if (moduleKey === "sca") nextScaScanId = (result as ScaScanResult).scan_task_id;
-        } else if (moduleKey === "dast") {
-          if (!targetUrl.trim()) {
-            updateStep(moduleKey, "skipped", "未配置目标地址");
-            continue;
-          }
-          const suggestions = await request<LinkSuggestion[]>("/dast/link-suggestions", {
-            method: "POST",
-            body: JSON.stringify({ project_id: project.id, target_url: targetUrl }),
-          }).catch(() => []);
-          const recommendation = suggestions[0]?.confidence >= 80 ? suggestions[0] : null;
-          await request("/dast/probe", {
-            method: "POST",
-            body: JSON.stringify({
-              project_id: project.id,
-              target_url: targetUrl,
-              validator: "one-click-dast",
-              finding_id: recommendation?.finding_id ?? null,
-              component_id: recommendation?.component_id ?? null,
-              link_source: recommendation ? `${recommendation.source}-confirmed` : "unlinked",
-              link_confidence: recommendation?.confidence ?? 0,
-            }),
-          });
-        } else {
-          if (!runCommand.trim()) {
-            updateStep(moduleKey, "skipped", "未配置沙箱命令");
-            continue;
-          }
-          const suggestions = await request<LinkSuggestion[]>("/sandbox/link-suggestions", {
-            method: "POST",
-            body: JSON.stringify({ project_id: project.id, run_command: runCommand }),
-          }).catch(() => []);
-          const recommendation = suggestions[0]?.confidence >= 80 ? suggestions[0] : null;
-          await request("/sandbox/run", {
-            method: "POST",
-            body: JSON.stringify({
-              project_id: project.id,
-              run_command: runCommand,
-              image: emptyToNull(sandboxImage),
-              timeout_seconds: 10,
-              operator: "one-click-runner",
-              finding_id: recommendation?.finding_id ?? null,
-              component_id: recommendation?.component_id ?? null,
-              validation_id: recommendation?.validation_id ?? null,
-              link_source: recommendation ? `${recommendation.source}-confirmed` : "unlinked",
-              link_confidence: recommendation?.confidence ?? 0,
-            }),
-          });
+        const result = await performModuleCheck(moduleKey);
+        if (result.status === "skipped") {
+          updateStep(moduleKey, "skipped", result.detail);
+          continue;
         }
+        if (moduleKey === "sca") nextScaScanId = result.scanId ?? nextScaScanId;
         completedCount += 1;
-        updateStep(moduleKey, "completed", "执行完成");
+        updateStep(moduleKey, "completed", result.detail);
       } catch (error) {
         console.error(error);
         updateStep(moduleKey, "failed", errorMessage(error));
@@ -479,12 +497,32 @@ function App() {
     setLoading(false);
   }
 
+  async function runSingleModuleCheck(moduleKey: Exclude<ModuleKey, "aspm">) {
+    if (!project) return setStatus("请先选择项目");
+    setLoading(true);
+    setExecutionSteps([{ module: moduleKey, status: "running", detail: "正在单独执行" }]);
+    try {
+      const result = await performModuleCheck(moduleKey);
+      setExecutionSteps([{ module: moduleKey, status: result.status, detail: result.detail }]);
+      const nextScaScanId = moduleKey === "sca" ? result.scanId ?? selectedScaScanId : selectedScaScanId;
+      if (moduleKey === "sca") setSelectedScaScanId(nextScaScanId);
+      await refreshProjectContext(project.id, nextScaScanId);
+      setStatus(`${MODULE_DISPLAY[moduleKey].name}：${result.detail}`);
+    } catch (error) {
+      console.error(error);
+      setExecutionSteps([{ module: moduleKey, status: "failed", detail: errorMessage(error) }]);
+      setStatus(`${MODULE_DISPLAY[moduleKey].name}执行失败：${errorMessage(error)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function runScan(kind: "sca" | "sast" | "agent") {
     if (!project) return setStatus("API 未连接，无法执行任务");
     const source = kind === "sca" ? sourcePath : kind === "sast" ? sastPath : agentPath;
     setLoading(true);
     try {
-      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, clear_previous: true, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) });
+      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) });
       const nextScaScanId = kind === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId;
       if (kind === "sca") setSelectedScaScanId(nextScaScanId);
       await refreshProjectContext(project.id, nextScaScanId);
@@ -500,7 +538,7 @@ function App() {
     try {
       let nextScaScanId = selectedScaScanId;
       for (const kind of runnable) {
-        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, clear_previous: true, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) });
+        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) });
         if (kind === "sca") nextScaScanId = (result as ScaScanResult).scan_task_id;
       }
       setSelectedScaScanId(nextScaScanId);
@@ -685,7 +723,7 @@ function App() {
         {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={loading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
         {activeView === "assets" && <><ProjectAssetConfig project={project} loading={loading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
         {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
-        {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} onUpdateFinding={updateFindingGovernance} />}
+        {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} loading={loading} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
       </section>
     </main>
   );
@@ -842,6 +880,9 @@ function GovernanceCenter({
   validations,
   evidence,
   graph,
+  retestComparisons,
+  loading,
+  onRunModule,
   onUpdateFinding,
 }: {
   project: Project | null;
@@ -852,6 +893,9 @@ function GovernanceCenter({
   validations: DastValidation[];
   evidence: SandboxEvidence[];
   graph: EvidenceGraph | null;
+  retestComparisons: Record<"sca" | "sast" | "agent", FindingRetestComparison | null>;
+  loading: boolean;
+  onRunModule: (moduleKey: Exclude<ModuleKey, "aspm">) => Promise<void>;
   onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status" | "remediation_owner" | "remediation_note" | "remediation_due_at">>) => Promise<void>;
 }) {
   const scopes: GovernanceScope[] = ["overview", ...(["sca", "sast", "agent", "dast", "sandbox"] as const).filter((key) => enabledModules.has(key))];
@@ -864,28 +908,29 @@ function GovernanceCenter({
     <nav className="governance-scope" aria-label="治理查看范围">
       {scopes.map((item) => <button className={scope === item ? "active" : ""} key={item} onClick={() => setScope(item)}>{item === "overview" ? "综合总览" : MODULE_DISPLAY[item].name}</button>)}
     </nav>
-    {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "sca" ? <ScaGovernanceView components={components} summary={summary} /> : null}
-    {scope === "sast" ? <FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "dast" ? <DastGovernanceView validations={validations} /> : null}
-    {scope === "sandbox" ? <SandboxGovernanceView evidence={evidence} graph={graph} /> : null}
+    {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "sca" ? <ScaGovernanceView components={components} summary={summary} comparison={retestComparisons.sca} loading={loading} onRun={() => onRunModule("sca")} /> : null}
+    {scope === "sast" ? <FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} graph={graph} comparison={retestComparisons.sast} loading={loading} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} graph={graph} comparison={retestComparisons.agent} loading={loading} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "dast" ? <DastGovernanceView validations={validations} loading={loading} onRun={() => onRunModule("dast")} /> : null}
+    {scope === "sandbox" ? <SandboxGovernanceView evidence={evidence} graph={graph} loading={loading} onRun={() => onRunModule("sandbox")} /> : null}
   </section>;
 }
 
-function GovernanceOverview({ summary, enabledModules, components, findings, validations, evidence, onUpdateFinding }: { summary: AspmSummary | null; enabledModules: Set<ModuleKey>; components: Component[]; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function GovernanceOverview({ summary, enabledModules, components, findings, validations, evidence, graph, onUpdateFinding }: { summary: AspmSummary | null; enabledModules: Set<ModuleKey>; components: Component[]; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   const openCount = findings.filter((item) => ["open", "pending", "confirmed"].includes(item.status)).length;
   const highCount = findings.filter((item) => item.severity === "critical" || item.severity === "high").length;
   const fixedCount = findings.filter((item) => item.status === "fixed" || item.status === "closed").length;
   const priorityFindings = [...findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)).slice(0, 5);
   const moduleCards = (["sca", "sast", "agent", "dast", "sandbox"] as const).filter((key) => enabledModules.has(key));
+  const evidenceChainCount = findings.filter((finding) => findingEvidenceNodes(finding.id, graph).some((node) => node.kind === "validation" || node.kind === "evidence")).length;
 
   return <div className="governance-view">
     <section className="governance-metrics">
       <Metric label="风险评分（越高越危险）" value={summary?.risk_score ?? 0} />
       <Metric label="待处理问题" value={openCount} />
       <Metric label="严重 / 高危" value={highCount} />
-      <Metric label="已解决问题" value={fixedCount} />
+      <Metric label="已有验证证据" value={evidenceChainCount} />
     </section>
     <section className="panel">
       <div className="panel-header"><h2>已接入模块概况</h2><span>{moduleCards.length} 个检测模块</span></div>
@@ -893,58 +938,187 @@ function GovernanceOverview({ summary, enabledModules, components, findings, val
     </section>
     <section className="panel">
       <div className="panel-header"><h2>优先处理问题</h2><span>优先显示严重和高危风险</span></div>
-      <ConciseFindingTable findings={priorityFindings} onUpdateFinding={onUpdateFinding} />
+      <ConciseFindingTable findings={priorityFindings} graph={graph} onUpdateFinding={onUpdateFinding} />
     </section>
     <section className="next-action-panel"><strong>建议下一步</strong><span>{highCount > 0 ? `优先确认并处理 ${highCount} 个严重或高危问题；需要运行时证明的问题可接入 DAST 或 SANDBOX。` : openCount > 0 ? `当前有 ${openCount} 个问题等待确认，请分配负责人并记录处理结论。` : "当前没有待处理高风险问题，建议按计划重新执行检测。"}</span></section>
   </div>;
 }
 
-function ScaGovernanceView({ components, summary }: { components: Component[]; summary: AspmSummary | null }) {
+function ScaGovernanceView({ components, summary, comparison, loading, onRun }: { components: Component[]; summary: AspmSummary | null; comparison: FindingRetestComparison | null; loading: boolean; onRun: () => Promise<void> }) {
+  const [filters, setFilters] = useState({ keyword: "", ecosystem: "all", severity: "all", risk: "all", dependency: "all" });
+  const [page, setPage] = useState(1);
   const risky = components.filter(isRiskyScaComponent);
   const high = risky.filter((item) => item.severity === "critical" || item.severity === "high");
-  return <ModuleGovernanceShell moduleKey="sca" lastStatus={summary?.sca_governance.latest_scan_status ?? null} metrics={[["组件总数", components.length], ["风险组件", risky.length], ["严重 / 高危", high.length], ["建议升级", risky.filter((item) => item.remediation).length]]} action={risky.length ? "优先升级高危组件，并确认升级是否影响直接和传递依赖。" : "当前未发现高风险组件，建议定期重新扫描依赖。"}>
-    <table className="concise-table"><thead><tr><th>风险组件</th><th>风险等级</th><th>漏洞标识</th><th>建议动作</th></tr></thead><tbody>{risky.length === 0 ? <tr><td colSpan={4} className="empty-cell">当前没有需要优先处理的供应链风险。</td></tr> : risky.slice(0, 10).map((item) => <tr key={item.id}><td><strong>{item.name}</strong><span className="cell-subtext">{item.version ?? "版本未知"} · {item.ecosystem}</span></td><td>{severityLabel(item.severity)}</td><td>{item.vulnerability_ids?.slice(0, 3).join(", ") || "需要复核"}</td><td>{item.remediation ?? "确认可用安全版本后升级"}</td></tr>)}</tbody></table>
+  const filtered = components.filter((item) => {
+    const keyword = filters.keyword.trim().toLowerCase();
+    return (!keyword || `${item.name} ${item.version ?? ""} ${(item.vulnerability_ids ?? []).join(" ")}`.toLowerCase().includes(keyword))
+      && (filters.ecosystem === "all" || item.ecosystem === filters.ecosystem)
+      && (filters.severity === "all" || (item.severity ?? "none") === filters.severity)
+      && (filters.risk === "all" || (item.risk_status ?? "not_checked") === filters.risk)
+      && (filters.dependency === "all" || item.dependency_type === filters.dependency);
+  });
+  const pagination = paginate(filtered, page);
+  useEffect(() => { setPage(1); }, [filters.keyword, filters.ecosystem, filters.severity, filters.risk, filters.dependency]);
+  return <ModuleGovernanceShell moduleKey="sca" lastStatus={summary?.sca_governance.latest_scan_status ?? null} metrics={[["组件总数", components.length], ["风险组件", risky.length], ["严重 / 高危", high.length], ["建议升级", risky.filter((item) => item.remediation).length]]} action={risky.length ? "优先升级高危组件，并确认升级是否影响直接和传递依赖。" : "当前未发现高风险组件，建议定期重新扫描依赖。"} loading={loading} onRun={onRun}>
+    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索组件、版本或漏洞标识" /><SimpleFilter value={filters.ecosystem} label="全部生态" options={uniqueValues(components.map((item) => item.ecosystem))} onChange={(value) => setFilters({ ...filters, ecosystem: value })} /><SimpleFilter value={filters.severity} label="全部等级" options={uniqueValues(components.map((item) => item.severity ?? "none"))} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.risk} label="全部风险状态" options={uniqueValues(components.map((item) => item.risk_status ?? "not_checked"))} format={riskStatusLabel} onChange={(value) => setFilters({ ...filters, risk: value })} /><SimpleFilter value={filters.dependency} label="全部依赖类型" options={uniqueValues(components.map((item) => item.dependency_type))} format={dependencyTypeLabel} onChange={(value) => setFilters({ ...filters, dependency: value })} /></ModuleFilterBar>
+    <table className="concise-table"><thead><tr><th>组件</th><th>风险状态</th><th>漏洞标识</th><th>建议动作</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td colSpan={4} className="empty-cell">没有符合筛选条件的组件。</td></tr> : pagination.items.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><span className="cell-subtext">{item.version ?? "版本未知"} · {item.ecosystem} · {dependencyTypeLabel(item.dependency_type)}</span></td><td>{riskStatusLabel(item.risk_status)}<span className="cell-subtext">{severityLabel(item.severity)}</span></td><td>{item.vulnerability_ids?.join(", ") || "无已知漏洞标识"}</td><td>{item.remediation ?? (isRiskyScaComponent(item) ? "确认可用安全版本后升级" : "暂不需要处理")}</td></tr>)}</tbody></table>
+    <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
+    <RetestComparisonPanel comparison={comparison} />
   </ModuleGovernanceShell>;
 }
 
-function FindingModuleGovernance({ moduleKey, findings, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function FindingModuleGovernance({ moduleKey, findings, graph, comparison, loading, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+  const [filters, setFilters] = useState({ keyword: "", severity: "all", status: "all", category: "all" });
+  const [page, setPage] = useState(1);
   const high = findings.filter((item) => item.severity === "critical" || item.severity === "high").length;
   const open = findings.filter((item) => ["open", "pending", "confirmed"].includes(item.status)).length;
   const reviewed = findings.filter((item) => item.ai_review).length;
-  return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={findings.length ? "completed" : null} metrics={[["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : "当前没有检测结果，请先在安全检测中执行该模块。"}>
-    <ConciseFindingTable findings={findings.slice(0, 10)} onUpdateFinding={onUpdateFinding} />
+  const filtered = findings.filter((item) => {
+    const keyword = filters.keyword.trim().toLowerCase();
+    const category = item.ai_review?.category ?? "unknown";
+    return (!keyword || `${item.title} ${item.file_path ?? ""} ${item.rule_id} ${item.evidence ?? ""}`.toLowerCase().includes(keyword))
+      && (filters.severity === "all" || item.severity === filters.severity)
+      && (filters.status === "all" || normalizeFindingStatus(item.status) === filters.status)
+      && (filters.category === "all" || category === filters.category);
+  });
+  const pagination = paginate(filtered, page);
+  useEffect(() => { setPage(1); }, [filters.keyword, filters.severity, filters.status, filters.category]);
+  return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={findings.length ? "completed" : null} metrics={[["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : "当前没有检测结果，请先在安全检测中执行该模块。"} loading={loading} onRun={onRun}>
+    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
+    <ConciseFindingTable findings={pagination.items} graph={graph} onUpdateFinding={onUpdateFinding} />
+    <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
+    <RetestComparisonPanel comparison={comparison} />
   </ModuleGovernanceShell>;
 }
 
-function DastGovernanceView({ validations }: { validations: DastValidation[] }) {
+function DastGovernanceView({ validations, loading, onRun }: { validations: DastValidation[]; loading: boolean; onRun: () => Promise<void> }) {
+  const [filters, setFilters] = useState({ keyword: "", verdict: "all", linked: "all" });
+  const [page, setPage] = useState(1);
   const exploitable = validations.filter((item) => item.verdict === "exploitable").length;
   const uncertain = validations.filter((item) => item.verdict === "uncertain").length;
   const linked = validations.filter((item) => item.finding_id || item.component_id).length;
-  return <ModuleGovernanceShell moduleKey="dast" lastStatus={validations.length ? "completed" : null} metrics={[["验证记录", validations.length], ["确认可利用", exploitable], ["需要复核", uncertain], ["已关联风险", linked]]} action={exploitable ? `已有 ${exploitable} 项被判定为可利用，请核对证据并优先修复。` : uncertain ? `有 ${uncertain} 项暂时无法确认，建议补充登录态或验证条件。` : "当前没有确认可利用的动态风险。"}>
-    <table className="concise-table"><thead><tr><th>验证目标</th><th>结论</th><th>证据摘要</th><th>关联状态</th></tr></thead><tbody>{validations.length === 0 ? <tr><td colSpan={4} className="empty-cell">暂无动态验证记录。</td></tr> : validations.slice(0, 10).map((item) => <tr key={item.id}><td><strong>{item.target_url}</strong><span className="cell-subtext">{formatDateTime(item.created_at)}</span></td><td>{dastVerdictLabel(item.verdict)}</td><td>{item.evidence_summary ?? "未记录证据摘要"}</td><td>{item.finding_id || item.component_id ? "已关联原始风险" : "独立验证"}</td></tr>)}</tbody></table>
+  const filtered = validations.filter((item) => {
+    const isLinked = Boolean(item.finding_id || item.component_id);
+    return (!filters.keyword.trim() || item.target_url.toLowerCase().includes(filters.keyword.trim().toLowerCase()))
+      && (filters.verdict === "all" || item.verdict === filters.verdict)
+      && (filters.linked === "all" || (filters.linked === "linked") === isLinked);
+  });
+  const pagination = paginate(filtered, page);
+  useEffect(() => { setPage(1); }, [filters.keyword, filters.verdict, filters.linked]);
+  return <ModuleGovernanceShell moduleKey="dast" lastStatus={validations.length ? "completed" : null} metrics={[["验证记录", validations.length], ["确认可利用", exploitable], ["需要复核", uncertain], ["已关联风险", linked]]} action={exploitable ? `已有 ${exploitable} 项被判定为可利用，请核对证据并优先修复。` : uncertain ? `有 ${uncertain} 项暂时无法确认，建议补充登录态或验证条件。` : "当前没有确认可利用的动态风险。"} loading={loading} onRun={onRun}>
+    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索验证地址" /><SimpleFilter value={filters.verdict} label="全部验证结论" options={["exploitable", "uncertain", "not_exploitable"]} format={dastVerdictLabel} onChange={(value) => setFilters({ ...filters, verdict: value })} /><SimpleFilter value={filters.linked} label="全部关联状态" options={["linked", "unlinked"]} format={(value) => value === "linked" ? "已关联风险" : "独立验证"} onChange={(value) => setFilters({ ...filters, linked: value })} /></ModuleFilterBar>
+    <table className="concise-table"><thead><tr><th>验证目标</th><th>结论</th><th>证据摘要</th><th>关联状态</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td colSpan={4} className="empty-cell">没有符合筛选条件的动态验证记录。</td></tr> : pagination.items.map((item) => <tr key={item.id}><td><strong>{item.target_url}</strong><span className="cell-subtext">{formatDateTime(item.created_at)}</span></td><td>{dastVerdictLabel(item.verdict)}</td><td>{item.evidence_summary ?? "未记录证据摘要"}</td><td>{item.finding_id || item.component_id ? "已关联原始风险" : "独立验证"}</td></tr>)}</tbody></table>
+    <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
   </ModuleGovernanceShell>;
 }
 
-function SandboxGovernanceView({ evidence, graph }: { evidence: SandboxEvidence[]; graph: EvidenceGraph | null }) {
+function SandboxGovernanceView({ evidence, graph, loading, onRun }: { evidence: SandboxEvidence[]; graph: EvidenceGraph | null; loading: boolean; onRun: () => Promise<void> }) {
+  const [filters, setFilters] = useState({ keyword: "", linked: "all", result: "all", runtime: "all" });
+  const [page, setPage] = useState(1);
   const linked = evidence.filter((item) => item.finding_id || item.component_id || item.validation_id).length;
   const completed = evidence.filter((item) => item.observed_processes.some((process) => textValue(process.exit_code) !== "-")).length;
-  return <ModuleGovernanceShell moduleKey="sandbox" lastStatus={evidence.length ? "completed" : null} metrics={[["证据记录", evidence.length], ["执行完成", completed], ["已关联风险", linked], ["隔离策略", "禁网 / 只读"]]} action={linked ? "查看与高风险问题关联的运行结果，确认观察到的行为是否足以支持风险结论。" : "已有运行记录尚未对应具体风险，可在高级证据信息中核对。"}>
-    <table className="concise-table"><thead><tr><th>运行命令</th><th>执行结果</th><th>证据摘要</th><th>关联状态</th></tr></thead><tbody>{evidence.length === 0 ? <tr><td colSpan={4} className="empty-cell">暂无沙箱证据记录。</td></tr> : evidence.slice(0, 10).map((item) => { const process = item.observed_processes[0] ?? {}; return <tr key={item.id}><td><strong>{item.run_command}</strong><span className="cell-subtext">{item.runtime_profile ?? "默认环境"}</span></td><td>退出码 {textValue(process.exit_code)}<span className="cell-subtext">{formatDateTime(item.created_at)}</span></td><td>{item.evidence_summary ?? "未记录证据摘要"}</td><td>{item.finding_id || item.component_id || item.validation_id ? "已关联上游风险" : "独立运行"}</td></tr>; })}</tbody></table>
+  const filtered = evidence.filter((item) => {
+    const process = item.observed_processes[0] ?? {};
+    const exitCode = textValue(process.exit_code);
+    const isLinked = Boolean(item.finding_id || item.component_id || item.validation_id);
+    const executionResult = exitCode === "0" ? "success" : exitCode === "-" ? "unknown" : "failed";
+    return (!filters.keyword.trim() || item.run_command.toLowerCase().includes(filters.keyword.trim().toLowerCase()))
+      && (filters.linked === "all" || (filters.linked === "linked") === isLinked)
+      && (filters.result === "all" || filters.result === executionResult)
+      && (filters.runtime === "all" || (item.runtime_profile ?? "unknown") === filters.runtime);
+  });
+  const pagination = paginate(filtered, page);
+  useEffect(() => { setPage(1); }, [filters.keyword, filters.linked, filters.result, filters.runtime]);
+  return <ModuleGovernanceShell moduleKey="sandbox" lastStatus={evidence.length ? "completed" : null} metrics={[["证据记录", evidence.length], ["执行完成", completed], ["已关联风险", linked], ["隔离策略", "禁网 / 只读"]]} action={linked ? "查看与高风险问题关联的运行结果，确认观察到的行为是否足以支持风险结论。" : "已有运行记录尚未对应具体风险，可在高级证据信息中核对。"} loading={loading} onRun={onRun}>
+    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索运行命令" /><SimpleFilter value={filters.linked} label="全部关联状态" options={["linked", "unlinked"]} format={(value) => value === "linked" ? "已关联风险" : "独立运行"} onChange={(value) => setFilters({ ...filters, linked: value })} /><SimpleFilter value={filters.result} label="全部执行结果" options={["success", "failed", "unknown"]} format={(value) => value === "success" ? "执行成功" : value === "failed" ? "执行失败" : "结果未知"} onChange={(value) => setFilters({ ...filters, result: value })} /><SimpleFilter value={filters.runtime} label="全部运行环境" options={uniqueValues(evidence.map((item) => item.runtime_profile ?? "unknown"))} onChange={(value) => setFilters({ ...filters, runtime: value })} /></ModuleFilterBar>
+    <table className="concise-table"><thead><tr><th>运行命令</th><th>执行结果</th><th>证据摘要</th><th>关联状态</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td colSpan={4} className="empty-cell">没有符合筛选条件的沙箱证据。</td></tr> : pagination.items.map((item) => { const process = item.observed_processes[0] ?? {}; return <tr key={item.id}><td><strong>{item.run_command}</strong><span className="cell-subtext">{item.runtime_profile ?? "默认环境"}</span></td><td>退出码 {textValue(process.exit_code)}<span className="cell-subtext">{formatDateTime(item.created_at)}</span></td><td>{item.evidence_summary ?? "未记录证据摘要"}</td><td>{item.finding_id || item.component_id || item.validation_id ? "已关联上游风险" : "独立运行"}</td></tr>; })}</tbody></table>
+    <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
     <details className="advanced-evidence"><summary>查看高级证据关系</summary><EvidenceGraphPanel graph={graph} /></details>
   </ModuleGovernanceShell>;
 }
 
-function ModuleGovernanceShell({ moduleKey, lastStatus, metrics, action, children }: { moduleKey: Exclude<ModuleKey, "aspm">; lastStatus: string | null; metrics: Array<[string, string | number]>; action: string; children: React.ReactNode }) {
+function ModuleGovernanceShell({ moduleKey, lastStatus, metrics, action, loading, onRun, children }: { moduleKey: Exclude<ModuleKey, "aspm">; lastStatus: string | null; metrics: Array<[string, string | number]>; action: string; loading: boolean; onRun: () => Promise<void>; children: React.ReactNode }) {
   return <div className="governance-view module-governance-view">
-    <section className="module-governance-heading"><div className="module-icon">{moduleIcons[moduleKey]}</div><div><h2>{MODULE_DISPLAY[moduleKey].name}</h2><p>{MODULE_DISPLAY[moduleKey].purpose}</p></div><span>{lastStatus ? scanStatusLabel(lastStatus) : "尚未执行"}</span></section>
+    <section className="module-governance-heading"><div className="module-icon">{moduleIcons[moduleKey]}</div><div><h2>{MODULE_DISPLAY[moduleKey].name}</h2><p>{MODULE_DISPLAY[moduleKey].purpose}</p></div><div className="module-run-actions"><span>{lastStatus ? scanStatusLabel(lastStatus) : "尚未执行"}</span><button className="primary-action" disabled={loading} onClick={() => void onRun()}>{loading ? "执行中" : moduleKey === "dast" || moduleKey === "sandbox" ? "再次执行" : "重新扫描并复测"}</button></div></section>
     <section className="governance-metrics">{metrics.map(([label, value]) => <Metric key={label} label={label} value={value} />)}</section>
-    <section className="panel"><div className="panel-header"><h2>主要结果</h2><span>最多展示 10 条重点记录</span></div>{children}</section>
+    <section className="panel"><div className="panel-header"><h2>主要结果</h2><span>完整结果 · 每页 10 条</span></div>{children}</section>
     <section className="next-action-panel"><strong>建议动作</strong><span>{action}</span></section>
   </div>;
 }
 
-function ConciseFindingTable({ findings, onUpdateFinding }: { findings: Finding[]; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
-  return <table className="concise-table"><thead><tr><th>风险问题</th><th>等级</th><th>位置</th><th>处理状态</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={4} className="empty-cell">当前没有需要展示的风险问题。</td></tr> : findings.map((finding) => { const description = finding.ai_review?.description ?? finding.evidence ?? "暂无影响说明"; return <tr key={finding.id}><td><strong>{finding.title}</strong><span className="cell-subtext" title={description}>{truncateText(description, 140)}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span></td><td>{finding.file_path ?? "项目级问题"}<span className="cell-subtext">{finding.line_start ? `第 ${finding.line_start} 行` : finding.source}</span></td><td><select value={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></td></tr>; })}</tbody></table>;
+function ConciseFindingTable({ findings, graph, onUpdateFinding }: { findings: Finding[]; graph?: EvidenceGraph | null; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  return <><table className="concise-table"><thead><tr><th>风险问题</th><th>等级</th><th>位置</th><th>处理状态</th><th>验证证据</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={5} className="empty-cell">当前没有需要展示的风险问题。</td></tr> : findings.map((finding) => { const description = finding.ai_review?.description ?? finding.evidence ?? "暂无影响说明"; const evidenceNodes = findingEvidenceNodes(finding.id, graph); return <tr key={finding.id}><td><strong title={finding.title}>{truncateText(finding.title, 100)}</strong><span className="cell-subtext" title={description}>{truncateText(description, 140)}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span></td><td>{finding.file_path ?? "项目级问题"}<span className="cell-subtext">{finding.line_start ? `第 ${finding.line_start} 行` : finding.source}</span></td><td><select value={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></td><td><button className="secondary-action" onClick={() => setSelectedFinding(finding)}>{evidenceNodes.length ? `查看证据（${evidenceNodes.length}）` : "尚未验证"}</button></td></tr>; })}</tbody></table>{selectedFinding ? <FindingEvidenceDetail finding={selectedFinding} graph={graph ?? null} onClose={() => setSelectedFinding(null)} /> : null}</>;
+}
+
+function ModuleFilterBar({ children }: { children: React.ReactNode }) {
+  return <div className="module-filter-bar">{children}</div>;
+}
+
+function SimpleFilter({ value, label, options, format = (item) => item, onChange }: { value: string; label: string; options: string[]; format?: (value: string) => string; onChange: (value: string) => void }) {
+  return <select value={value} onChange={(event) => onChange(event.target.value)}><option value="all">{label}</option>{options.map((option) => <option value={option} key={option}>{format(option)}</option>)}</select>;
+}
+
+function Pagination({ page, pageCount, total, onPageChange }: { page: number; pageCount: number; total: number; onPageChange: (page: number) => void }) {
+  return <div className="result-pagination"><span>共 {total} 条，每页 10 条</span><div><button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>上一页</button><strong>第 {page} / {pageCount} 页</strong><button disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>下一页</button></div></div>;
+}
+
+function RetestComparisonPanel({ comparison }: { comparison: FindingRetestComparison | null }) {
+  const [resultFilter, setResultFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  if (!comparison?.has_comparison) return <section className="retest-panel"><div className="panel-header"><h3>修复复测</h3><span>等待第二次扫描</span></div><p>完成修改后点击“重新扫描并复测”。系统需要至少两个扫描批次才能判断问题是否仍然存在。</p></section>;
+  const filtered = comparison.items.filter((item) => resultFilter === "all" || item.result === resultFilter);
+  const pagination = paginate(filtered, page);
+  return <section className="retest-panel">
+    <div className="panel-header"><h3>最近一次复测对比</h3><span>{formatDateTime(comparison.previous_scan_at)} → {formatDateTime(comparison.current_scan_at)}</span></div>
+    <div className="retest-summary"><Metric label="仍然存在" value={comparison.still_present_count} /><Metric label="已经消失" value={comparison.resolved_count} /><Metric label="新增问题" value={comparison.new_count} /><Metric label="发生变化" value={comparison.changed_count} /></div>
+    <p className="retest-note">“已经消失”表示修改后未再次发现；“仍然存在”表示需要继续整改。首次启用扫描历史保留时，旧批次中无法稳定匹配的问题可能显示为“新增”，后续复测会按扫描批次持续比较。</p>
+    <details className="retest-details">
+      <summary>查看全部复测明细（{comparison.items.length} 条）</summary>
+      <div className="module-filter-bar"><SimpleFilter value={resultFilter} label="全部复测结果" options={["still_present", "resolved", "new", "changed"]} format={retestResultLabel} onChange={(value) => { setResultFilter(value); setPage(1); }} /></div>
+      <table className="concise-table"><thead><tr><th>问题</th><th>复测结论</th><th>位置变化</th><th>等级变化</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td colSpan={4} className="empty-cell">没有符合筛选条件的复测结果。</td></tr> : pagination.items.map((item) => <tr key={item.identity}><td><strong>{item.title}</strong><span className="cell-subtext">{item.file_path ?? "项目级问题"}</span></td><td><span className={`retest-badge ${item.result}`}>{retestResultLabel(item.result)}</span></td><td>{item.previous_line_start ?? "-"} → {item.current_line_start ?? "-"}</td><td>{severityLabel(item.previous_severity)} → {severityLabel(item.current_severity)}</td></tr>)}</tbody></table>
+      <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
+    </details>
+  </section>;
+}
+
+function FindingEvidenceDetail({ finding, graph, onClose }: { finding: Finding; graph: EvidenceGraph | null; onClose: () => void }) {
+  const nodes = findingEvidenceNodes(finding.id, graph);
+  const hasValidation = nodes.some((node) => node.kind === "validation");
+  const hasRuntimeEvidence = nodes.some((node) => node.kind === "evidence");
+  const conclusion = hasValidation && hasRuntimeEvidence ? "已形成完整证据链" : hasRuntimeEvidence ? "已有运行证据" : hasValidation ? "已完成动态验证" : "仅发现，尚未验证";
+  return <section className="finding-evidence-detail">
+    <div className="panel-header"><div><h3>风险证据链</h3><span>{finding.title}</span></div><button className="secondary-action" onClick={onClose}>关闭</button></div>
+    <div className="evidence-conclusion"><strong>{conclusion}</strong><span>{nodes.length ? "以下内容来自已保存的显式关联，不代表自动确认漏洞成立。" : "当前问题还没有关联 DAST 或 SANDBOX 证据。"}</span></div>
+    <ol className="evidence-timeline">
+      <li><b>{finding.source}</b><div><strong>发现风险</strong><span>{finding.file_path ?? "项目级问题"} · {severityLabel(finding.severity)}</span></div></li>
+      {nodes.map((node) => <li key={node.id}><b>{node.module}</b><div><strong>{evidenceNodeStage(node)}</strong><span>{node.label}</span><small>{node.detail ?? "未记录证据摘要"} · {formatDateTime(node.created_at)}</small></div></li>)}
+    </ol>
+  </section>;
+}
+
+function findingEvidenceNodes(findingId: string, graph?: EvidenceGraph | null): EvidenceGraphNode[] {
+  if (!graph) return [];
+  const findingNodeId = `finding:${findingId}`;
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const relationEdges = graph.edges.filter((edge) => edge.relation_type !== "contains");
+  const visited = new Set<string>([findingNodeId]);
+  relationEdges.filter((edge) => edge.target === findingNodeId && edge.relation_type === "reported_by").forEach((edge) => visited.add(edge.source));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of relationEdges) {
+      if (visited.has(edge.source) && !visited.has(edge.target)) {
+        visited.add(edge.target);
+        changed = true;
+      }
+    }
+  }
+  return [...visited]
+    .filter((id) => id !== findingNodeId)
+    .map((id) => nodes.get(id))
+    .filter((node): node is EvidenceGraphNode => Boolean(node))
+    .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
 }
 
 function ModulesView({ modules, project, enabledModules, selectedModules, savingKey, onToggle }: { modules: SecurityModule[]; project: Project | null; enabledModules: Set<ModuleKey>; selectedModules: SecurityModule[]; savingKey: ModuleKey | null; onToggle: (module: SecurityModule) => Promise<void> }) { return <><section className="module-summary"><Metric label="已选择模块" value={`${selectedModules.length} / ${modules.length}`} /><Metric label="当前项目" value={project?.name ?? "本地预览"} /><Metric label="动态验证依赖" value={enabledModules.has("dast") ? "SAST 联动" : "未接入"} /><Metric label="治理底座" value="ASPM 内置" /></section><section className="module-layout"><div className="module-grid">{modules.map((module) => { const enabled = enabledModules.has(module.key); return <article className={`module-card ${enabled ? "enabled" : ""}`} key={module.key}><div className="module-card-top"><div className="module-icon">{moduleIcons[module.key]}</div><div><span className="module-code">{module.code}</span><h2>{module.name}</h2></div><button aria-label={`${enabled ? "停用" : "启用"} ${module.code}`} className={`toggle ${enabled ? "on" : ""}`} disabled={savingKey === module.key} onClick={() => void onToggle(module)}><span /></button></div><p className="module-subtitle">{module.subtitle}</p><p className="module-description">{module.description}</p><div className="capability-list">{module.capabilities.map((capability) => <span key={capability.title} title={capability.description}><Check size={14} />{capability.title}</span>)}</div>{module.dependencies.length ? <div className="dependency-note"><Lock size={14} />启用时会自动接入依赖模块：{module.dependencies.join(", ").toUpperCase()}</div> : null}</article>; })}</div><aside className="selection-panel"><div className="panel-header"><h2>接入预览</h2><span>Project: {project?.name ?? "本地预览"}</span></div><ol className="selected-list">{selectedModules.map((module) => <li key={module.key}><b>{module.code}</b><span>{module.name}</span></li>)}<li className="builtin-module"><b>ASPM</b><span>平台内置治理底座</span></li></ol><div className="execution-flow"><h3>推荐执行顺序</h3><p>SCA -&gt; SAST -&gt; AGENT -&gt; DAST -&gt; SANDBOX，结果自动进入 ASPM 治理总览。</p></div></aside></section></>; }
@@ -1275,6 +1449,8 @@ function relationTypeLabel(value: string) { return value === "reported_by" ? "�
 function confidenceLevelLabel(value: string) { return value === "high" ? "高置信度" : value === "medium" ? "中置信度" : "低置信度"; }
 function executionStatusLabel(value: ExecutionStatus) { return value === "waiting" ? "等待执行" : value === "running" ? "正在执行" : value === "completed" ? "已完成" : value === "failed" ? "执行失败" : "已跳过"; }
 function dastVerdictLabel(value: string) { return value === "exploitable" ? "确认可利用" : value === "uncertain" ? "需要进一步确认" : value === "not_exploitable" ? "未发现可利用风险" : value; }
+function retestResultLabel(value: string) { return value === "still_present" ? "仍然存在" : value === "resolved" ? "已经消失" : value === "new" ? "新增问题" : value === "changed" ? "位置或等级变化" : value; }
+function evidenceNodeStage(node: EvidenceGraphNode) { return node.kind === "component" ? "关联供应链组件" : node.kind === "validation" ? "动态验证" : node.kind === "evidence" ? "沙箱运行证据" : "关联风险"; }
 function severityRank(value: Severity) { return value === "critical" ? 5 : value === "high" ? 4 : value === "medium" ? 3 : value === "low" ? 2 : 1; }
 function moduleOverviewText(moduleKey: Exclude<ModuleKey, "aspm">, components: Component[], findings: Finding[], validations: DastValidation[], evidence: SandboxEvidence[]) {
   if (moduleKey === "sca") return `${components.length} 个组件，${components.filter(isRiskyScaComponent).length} 个需要关注`;
@@ -1362,6 +1538,7 @@ function matchesScaFilters(component: Component, filters: { ecosystem: string; d
     && matchesFilter(component.license_risk ?? "not_declared", filters.licensePolicy);
 }
 function matchesFilter(value: string, selected: string) { return selected === "all" || value === selected; }
+function paginate<T>(items: T[], requestedPage: number, pageSize = 10) { const pageCount = Math.max(1, Math.ceil(items.length / pageSize)); const page = Math.min(Math.max(1, requestedPage), pageCount); return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageCount }; }
 function emptyToNull(value: string) { const trimmed = value.trim(); return trimmed ? trimmed : null; }
 async function enableProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}`, { method: "POST", body: JSON.stringify({ module_key: moduleKey, enabled, config: {} }) }); }
 async function updateProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}/${moduleKey}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }

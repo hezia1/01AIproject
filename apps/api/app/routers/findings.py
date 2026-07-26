@@ -7,21 +7,50 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import ComponentRecord, FindingRecord, ProjectRecord
-from app.models import AiReview, Finding, FindingCreate, FindingGovernanceUpdate, FindingStatusUpdate
+from app.models import (
+    AiReview,
+    Finding,
+    FindingCreate,
+    FindingGovernanceUpdate,
+    FindingRetestComparison,
+    FindingStatusUpdate,
+)
 from app.repositories.mappers import finding_to_schema
+from app.services.finding_retest import (
+    build_finding_retest_comparison,
+    current_finding_records,
+)
 
 router = APIRouter()
 
 
 @router.get("", response_model=list[Finding])
 def list_findings(
-    project_id: UUID | None = None, db: Session = Depends(get_db)
+    project_id: UUID | None = None,
+    latest_only: bool = True,
+    db: Session = Depends(get_db),
 ) -> list[Finding]:
     statement = select(FindingRecord).order_by(FindingRecord.created_at.desc())
     if project_id is not None:
         statement = statement.where(FindingRecord.project_id == str(project_id))
     records = db.scalars(statement).all()
+    if latest_only and project_id is not None:
+        records = current_finding_records(db, project_id, list(records))
     return [finding_to_schema(record) for record in records]
+
+
+@router.get("/projects/{project_id}/retest-comparison", response_model=FindingRetestComparison)
+def get_retest_comparison(
+    project_id: UUID,
+    source: str,
+    db: Session = Depends(get_db),
+) -> FindingRetestComparison:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        return build_finding_retest_comparison(db, project_id, source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("", response_model=Finding, status_code=201)

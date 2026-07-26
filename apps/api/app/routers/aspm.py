@@ -23,6 +23,7 @@ from app.models import (
     ScaToolStatus,
 )
 from app.services.aspm_evidence_graph import build_attack_chains_v2, build_evidence_graph
+from app.services.finding_retest import current_finding_records
 
 router = APIRouter()
 
@@ -44,18 +45,19 @@ def get_project_summary(project_id: UUID, db: Session = Depends(get_db)) -> Aspm
     ]
 
     component_count = count_rows(db, ComponentRecord, project_id)
-    finding_count = count_rows(db, FindingRecord, project_id)
     dast_validation_count = count_rows(db, DastValidationRecord, project_id)
     sandbox_evidence_count = count_rows(db, SandboxEvidenceRecord, project_id)
     scan_task_count = count_rows(db, ScanTaskRecord, project_id)
 
-    findings_by_source = grouped_counts(db, FindingRecord.source, FindingRecord.project_id, project_id)
-    findings_by_severity = grouped_counts(db, FindingRecord.severity, FindingRecord.project_id, project_id)
-    findings_by_status = grouped_counts(db, FindingRecord.status, FindingRecord.project_id, project_id)
     dast_by_verdict = grouped_counts(db, DastValidationRecord.verdict, DastValidationRecord.project_id, project_id)
-    findings = db.scalars(
+    all_findings = list(db.scalars(
         select(FindingRecord).where(FindingRecord.project_id == str(project_id)).order_by(FindingRecord.created_at.desc())
-    ).all()
+    ).all())
+    findings = current_finding_records(db, project_id, all_findings)
+    finding_count = len(findings)
+    findings_by_source = record_counts(findings, "source")
+    findings_by_severity = record_counts(findings, "severity")
+    findings_by_status = record_counts(findings, "status")
     components = db.scalars(
         select(ComponentRecord)
         .where(ComponentRecord.project_id == str(project_id))
@@ -93,7 +95,7 @@ def get_project_summary(project_id: UUID, db: Session = Depends(get_db)) -> Aspm
         findings_by_status=findings_by_status,
         dast_by_verdict=dast_by_verdict,
         sca_governance=build_sca_governance_summary(db, project_id),
-        attack_chains=build_attack_chains_v2(findings, components, validations, sandbox_evidence),
+        attack_chains=build_attack_chains_v2(all_findings, components, validations, sandbox_evidence),
     )
 
 
@@ -137,6 +139,14 @@ def count_rows(db: Session, model, project_id: UUID) -> int:
         db.scalar(select(func.count()).select_from(model).where(model.project_id == str(project_id)))
         or 0
     )
+
+
+def record_counts(records: list, field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        value = str(getattr(record, field))
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def grouped_counts(db: Session, group_column, project_column, project_id: UUID) -> dict[str, int]:

@@ -142,6 +142,34 @@ class FindingGovernanceUpdate(BaseModel):
     remediation_due_at: datetime | None = None
 
 
+class FindingRetestItem(BaseModel):
+    identity: str
+    result: str
+    title: str
+    file_path: str | None = None
+    previous_line_start: int | None = None
+    current_line_start: int | None = None
+    previous_severity: Severity | None = None
+    current_severity: Severity | None = None
+    previous_finding_id: UUID | None = None
+    current_finding_id: UUID | None = None
+
+
+class FindingRetestComparison(BaseModel):
+    project_id: UUID
+    source: str
+    has_comparison: bool = False
+    previous_scan_id: UUID | None = None
+    current_scan_id: UUID | None = None
+    previous_scan_at: datetime | None = None
+    current_scan_at: datetime | None = None
+    still_present_count: int = 0
+    resolved_count: int = 0
+    new_count: int = 0
+    changed_count: int = 0
+    items: list[FindingRetestItem] = Field(default_factory=list)
+
+
 class ModuleKey(str, Enum):
     sast = "sast"
     sca = "sca"

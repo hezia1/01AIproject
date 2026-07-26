@@ -303,14 +303,16 @@ PATCH /api/sandbox/evidence/{evidence_id}
 - 关系边记录关联依据、可信度和时间，攻击链支持证据溯源。
 - 前端治理总览顶部可选择“综合总览”或任一已接入模块，一次只展示一个范围。
 - 综合总览展示风险评分、待处理问题、严重/高危数量、已解决数量、模块概况、五条优先风险和建议动作。
-- SCA、SAST、AGENT、DAST、SANDBOX 各自使用统一的简洁结构：模块状态、四项核心指标、最多十条主要结果、建议动作。
-- 自动关联建议由一键执行流程使用；只有高置信度候选进入关联，证据图谱在 SANDBOX 高级信息中按需展开。
+- SCA、SAST、AGENT、DAST、SANDBOX 各自使用统一的简洁结构：模块状态、四项核心指标、完整结果筛选、每页 10 条分页和建议动作。
+- 每个可独立运行的模块都提供执行入口；SCA、SAST、AGENT 支持保留扫描批次并按“仍然存在、已经消失、新增、发生变化”展示修复复测结果。
+- 自动关联建议由一键执行流程使用；只有高置信度候选进入关联。风险清单可按单个 Finding 展开其显式 DAST / SANDBOX 证据链，未验证风险会明确标记。
 
 主要 API：
 
 ```text
 GET   /api/aspm/projects/{project_id}/summary
 GET   /api/aspm/projects/{project_id}/evidence-graph
+GET   /api/findings/projects/{project_id}/retest-comparison?source=SAST
 PATCH /api/findings/{finding_id}/governance
 PATCH /api/findings/{finding_id}/status
 ```
@@ -322,7 +324,7 @@ PATCH /api/findings/{finding_id}/status
 - 证据图谱目前是显式关系图，不是真正的图数据库或 AI 图谱推理。
 - 没有 SLA 管理。
 - 没有工单系统接入。
-- 没有整改闭环流程。
+- 已有扫描复测对比，但还没有包含审批、工单和 SLA 的完整整改闭环流程。
 - 没有合规报告。
 - 没有管理层报表导出。
 - 旧数据没有显式关联字段，需要重新执行关联验证后才会生成可信攻击链。
@@ -338,7 +340,7 @@ PATCH /api/findings/{finding_id}/status
 
 ## 下一步建议
 
-1. 增加 ASPM 风险趋势、复测状态和 SLA 第一版。
+1. 增加 ASPM 风险趋势和 SLA 第一版，并把复测结果纳入项目级趋势。
 2. 回头处理 SAST 前端 `Failed to fetch` 问题。
 3. 为 SCA 增加 Python 原生完整依赖树。
 4. 增加扫描任务队列和后台 Worker。

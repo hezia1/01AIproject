@@ -2,7 +2,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -40,14 +40,6 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
 
     try:
         parsed = scan_agent_tree(payload.source_path)
-        if payload.clear_previous:
-            db.execute(
-                delete(FindingRecord).where(
-                    FindingRecord.project_id == str(payload.project_id),
-                    FindingRecord.source == "AGENT",
-                )
-            )
-
         records: list[FindingRecord] = []
         for finding in parsed.findings:
             record = FindingRecord(
