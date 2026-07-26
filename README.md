@@ -213,6 +213,8 @@ GET  /api/agent/projects/{project_id}/findings
 - 根据轻量规则生成 `exploitable`、`uncertain`、`not_exploitable` 裁决。
 - 支持项目运行地址作为默认目标。
 - DAST 验证可显式关联 Finding 或 SCA 组件，并记录关联来源与可信度。
+- 自动关联建议第一版：根据 URL 路径、CVE/CWE、漏洞类型、风险来源和等级对 Finding 候选评分。
+- 推荐结果展示匹配理由和高/中/低置信度；80 分及以上可预选，但只有用户执行验证后才写入关系。
 - 前端 DAST 页面可查看验证记录。
 
 主要 API：
@@ -220,6 +222,7 @@ GET  /api/agent/projects/{project_id}/findings
 ```text
 POST  /api/dast/validations
 POST  /api/dast/probe
+POST  /api/dast/link-suggestions
 GET   /api/dast/projects/{project_id}/validations
 PATCH /api/dast/validations/{validation_id}
 ```
@@ -261,12 +264,15 @@ PATCH /api/dast/validations/{validation_id}
 - 结构化记录运行时间线：准备、执行、完成或超时阶段。
 - 前端 SANDBOX 证据页展示执行结果、输出摘要、策略账本和时间线事件。
 - SANDBOX 证据可显式关联 Finding、SCA 组件或 DAST 验证，并继承验证链上下文。
+- 自动关联建议第一版：结合运行命令、风险文件、已选 Finding/组件及 DAST 裁决推荐证据链上游。
+- 可利用或不确定的 DAST 验证优先进入候选；推荐仍需随执行动作确认，不会静默落库。
 
 主要 API：
 
 ```text
 POST  /api/sandbox/evidence
 POST  /api/sandbox/run
+POST  /api/sandbox/link-suggestions
 GET   /api/sandbox/projects/{project_id}/templates
 GET   /api/sandbox/projects/{project_id}/evidence
 PATCH /api/sandbox/evidence/{evidence_id}
@@ -294,7 +300,7 @@ PATCH /api/sandbox/evidence/{evidence_id}
 - 证据图谱 API 第一版：输出项目、组件、Finding、DAST 验证和 SANDBOX 证据节点，以及 `reported_by`、`validated_by`、`observed_by` 关系。
 - 关系边记录关联依据、可信度和时间，攻击链支持证据溯源。
 - 前端治理总览展示项目摘要、风险分、统计和风险列表。
-- 前端 DAST / SANDBOX 页面支持选择关联对象，ASPM 展示跨模块证据关系审计表。
+- 前端 DAST / SANDBOX 页面展示自动关联候选、分数和匹配理由，支持采用建议或人工调整；ASPM 展示跨模块证据关系审计表。
 - 治理总览新增 SCA 供应链治理卡片：区分最新扫描组件数、风险组件数、漏洞组件数、SCA Finding 数和 Top 风险组件。
 - 治理总览展示 Syft / Grype 增强状态、Grype 输入来源和错误摘要。
 
@@ -310,6 +316,7 @@ PATCH /api/findings/{finding_id}/status
 还缺少：
 
 - 风险分规则还比较简单，尚未接 CVSS、EPSS、资产暴露面、业务重要性。
+- 自动关联目前是可解释的规则评分，不是语义模型或图谱推理；弱信号候选不会自动预选。
 - 证据图谱目前是显式关系图，不是真正的图数据库或 AI 图谱推理。
 - 没有 SLA 管理。
 - 没有工单系统接入。

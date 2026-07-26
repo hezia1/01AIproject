@@ -37,6 +37,7 @@ type AttackChain = { id: string; name: string; severity: Severity; modules: stri
 type EvidenceGraphNode = { id: string; kind: string; module: string; label: string; severity?: Severity | null; status?: string | null; detail?: string | null; created_at?: string | null };
 type EvidenceGraphEdge = { id: string; source: string; target: string; relation_type: string; basis: string; confidence: number; created_at?: string | null };
 type EvidenceGraph = { project_id: string; nodes: EvidenceGraphNode[]; edges: EvidenceGraphEdge[]; summary: Record<string, number> };
+type LinkSuggestion = { finding_id?: string | null; component_id?: string | null; validation_id?: string | null; confidence: number; confidence_level: "high" | "medium" | "low"; reasons: string[]; label: string; source: string };
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
@@ -90,11 +91,47 @@ function App() {
   const [correlationFindingId, setCorrelationFindingId] = useState("");
   const [correlationComponentId, setCorrelationComponentId] = useState("");
   const [correlationValidationId, setCorrelationValidationId] = useState("");
+  const [correlationLinkSource, setCorrelationLinkSource] = useState("unlinked");
+  const [correlationLinkConfidence, setCorrelationLinkConfidence] = useState(0);
+  const [dastLinkSuggestions, setDastLinkSuggestions] = useState<LinkSuggestion[]>([]);
+  const [sandboxLinkSuggestions, setSandboxLinkSuggestions] = useState<LinkSuggestion[]>([]);
   const [status, setStatus] = useState("正在连接 API...");
   const [loading, setLoading] = useState(false);
   const [savingKey, setSavingKey] = useState<ModuleKey | null>(null);
 
   useEffect(() => { void bootstrap(); }, []);
+  useEffect(() => {
+    if (!project || (activeView !== "dast" && activeView !== "sandbox")) return;
+    const timer = window.setTimeout(() => {
+      const path = activeView === "dast" ? "/dast/link-suggestions" : "/sandbox/link-suggestions";
+      const body = activeView === "dast"
+        ? { project_id: project.id, target_url: targetUrl }
+        : {
+            project_id: project.id,
+            run_command: runCommand,
+            finding_id: emptyToNull(correlationFindingId),
+            component_id: emptyToNull(correlationComponentId),
+          };
+      void request<LinkSuggestion[]>(path, { method: "POST", body: JSON.stringify(body) })
+        .then((items) => {
+          if (activeView === "dast") setDastLinkSuggestions(items);
+          else setSandboxLinkSuggestions(items);
+          const top = items[0];
+          const canPreselect = activeView === "dast"
+            ? !correlationFindingId && !correlationComponentId
+            : !correlationValidationId;
+          if (top?.confidence >= 80 && canPreselect) {
+            applyLinkSuggestion(top);
+          }
+        })
+        .catch((error) => {
+          console.error(error);
+          if (activeView === "dast") setDastLinkSuggestions([]);
+          else setSandboxLinkSuggestions([]);
+        });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [activeView, project?.id, targetUrl, runCommand]);
 
   const optionalModules = useMemo(() => modules.filter((module) => OPTIONAL_MODULES.includes(module.key)), [modules]);
   const selectedModules = useMemo(() => optionalModules.filter((module) => enabledModules.has(module.key)), [enabledModules, optionalModules]);
@@ -145,12 +182,23 @@ function App() {
     setCorrelationFindingId("");
     setCorrelationComponentId("");
     setCorrelationValidationId("");
+    setCorrelationLinkSource("unlinked");
+    setCorrelationLinkConfidence(0);
+    setDastLinkSuggestions([]);
+    setSandboxLinkSuggestions([]);
     setAssetProbe(null);
   }
 
   async function selectProject(nextProject: Project, knownProjects = projects) {
     setLoading(true);
     try {
+      setCorrelationFindingId("");
+      setCorrelationComponentId("");
+      setCorrelationValidationId("");
+      setCorrelationLinkSource("unlinked");
+      setCorrelationLinkConfidence(0);
+      setDastLinkSuggestions([]);
+      setSandboxLinkSuggestions([]);
       setProject(nextProject);
       setProjects(knownProjects.length ? knownProjects : await request<Project[]>("/projects"));
       if (nextProject.source_path) {
@@ -361,6 +409,8 @@ function App() {
         validator: "auto-dast",
         finding_id: emptyToNull(correlationFindingId),
         component_id: emptyToNull(correlationComponentId),
+        link_source: correlationLinkSource,
+        link_confidence: correlationLinkConfidence,
       }) });
       await refreshProjectContext(project.id);
       setStatus("DAST 自动验证已完成");
@@ -380,10 +430,25 @@ function App() {
         finding_id: emptyToNull(correlationFindingId),
         component_id: emptyToNull(correlationComponentId),
         validation_id: emptyToNull(correlationValidationId),
+        link_source: correlationLinkSource,
+        link_confidence: correlationLinkConfidence,
       }) });
       await refreshProjectContext(project.id);
       setStatus("SANDBOX 受控执行已完成");
     } catch (error) { console.error(error); setStatus("SANDBOX 执行失败，请确认模块已启用且命令未被安全策略阻止"); } finally { setLoading(false); }
+  }
+
+  function applyLinkSuggestion(suggestion: LinkSuggestion) {
+    setCorrelationFindingId(suggestion.finding_id ?? "");
+    setCorrelationComponentId(suggestion.component_id ?? "");
+    setCorrelationValidationId(suggestion.validation_id ?? "");
+    setCorrelationLinkSource(`${suggestion.source}-confirmed`);
+    setCorrelationLinkConfidence(suggestion.confidence);
+  }
+
+  function markExplicitLink() {
+    setCorrelationLinkSource("explicit-selection");
+    setCorrelationLinkConfidence(100);
   }
 
   async function updateFindingGovernance(findingId: string, patch: Partial<Pick<Finding, "status" | "remediation_owner" | "remediation_note" | "remediation_due_at">>) {
@@ -515,8 +580,8 @@ function App() {
         {activeView === "sca" && <ScaView project={project} components={components} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} sourcePath={sourcePath} toolScanEnabled={scaToolScanEnabled} ecosystemSummary={ecosystemSummary} riskSummary={scaRiskSummary} loading={loading} onSourcePathChange={setSourcePath} onToolScanChange={setScaToolScanEnabled} onRunScan={() => runScan("sca")} onExportSbom={exportScaSbom} onExportReport={exportScaReport} onSelectScan={selectScaScanSnapshot} />}
         {activeView === "sast" && <SastView project={project} findings={sastFindings} categorySummary={sastCategorySummary} sourcePath={sastPath} loading={loading} onSourcePathChange={setSastPath} onRunScan={() => runScan("sast")} onAgentReview={runSastAgentReview} />}
         {activeView === "agent" && <AgentView project={project} findings={agentFindings} categorySummary={agentCategorySummary} sourcePath={agentPath} loading={loading} onSourcePathChange={setAgentPath} onRunScan={() => runScan("agent")} />}
-        {activeView === "dast" && <><EvidenceLinkSelector title="选择本次验证对应的风险对象" findings={findings} components={components} validations={[]} selectedFindingId={correlationFindingId} selectedComponentId={correlationComponentId} selectedValidationId="" onFindingChange={(value) => { setCorrelationFindingId(value); const linkedComponentId = findings.find((item) => item.id === value)?.component_id; if (linkedComponentId) setCorrelationComponentId(linkedComponentId); }} onComponentChange={(value) => { setCorrelationComponentId(value); const findingComponentId = findings.find((item) => item.id === correlationFindingId)?.component_id; if (findingComponentId && findingComponentId !== value) setCorrelationFindingId(""); }} onValidationChange={() => undefined} /><DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} /></>}
-        {activeView === "sandbox" && <><EvidenceLinkSelector title="选择本次运行对应的风险或验证" findings={findings} components={components} validations={validations} selectedFindingId={correlationFindingId} selectedComponentId={correlationComponentId} selectedValidationId={correlationValidationId} onFindingChange={(value) => { setCorrelationFindingId(value); const linkedComponentId = findings.find((item) => item.id === value)?.component_id; if (linkedComponentId) setCorrelationComponentId(linkedComponentId); }} onComponentChange={(value) => { setCorrelationComponentId(value); const findingComponentId = findings.find((item) => item.id === correlationFindingId)?.component_id; if (findingComponentId && findingComponentId !== value) setCorrelationFindingId(""); }} onValidationChange={(value) => { setCorrelationValidationId(value); const selectedValidation = validations.find((item) => item.id === value); if (selectedValidation?.finding_id) setCorrelationFindingId(selectedValidation.finding_id); if (selectedValidation?.component_id) setCorrelationComponentId(selectedValidation.component_id); }} /><SandboxView project={project} evidence={evidence} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} loading={loading} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={createSandboxEvidence} /></>}
+        {activeView === "dast" && <><EvidenceLinkSelector title="确认本次验证对应的风险对象" findings={findings} components={components} validations={[]} suggestions={dastLinkSuggestions} selectedFindingId={correlationFindingId} selectedComponentId={correlationComponentId} selectedValidationId="" onSuggestionApply={applyLinkSuggestion} onFindingChange={(value) => { markExplicitLink(); setCorrelationFindingId(value); const linkedComponentId = findings.find((item) => item.id === value)?.component_id; if (linkedComponentId) setCorrelationComponentId(linkedComponentId); }} onComponentChange={(value) => { markExplicitLink(); setCorrelationComponentId(value); const findingComponentId = findings.find((item) => item.id === correlationFindingId)?.component_id; if (findingComponentId && findingComponentId !== value) setCorrelationFindingId(""); }} onValidationChange={() => undefined} /><DastView project={project} validations={validations} targetUrl={targetUrl} loading={loading} onTargetUrlChange={setTargetUrl} onProbe={createDastValidation} /></>}
+        {activeView === "sandbox" && <><EvidenceLinkSelector title="确认本次运行对应的风险或验证" findings={findings} components={components} validations={validations} suggestions={sandboxLinkSuggestions} selectedFindingId={correlationFindingId} selectedComponentId={correlationComponentId} selectedValidationId={correlationValidationId} onSuggestionApply={applyLinkSuggestion} onFindingChange={(value) => { markExplicitLink(); setCorrelationFindingId(value); const linkedComponentId = findings.find((item) => item.id === value)?.component_id; if (linkedComponentId) setCorrelationComponentId(linkedComponentId); }} onComponentChange={(value) => { markExplicitLink(); setCorrelationComponentId(value); const findingComponentId = findings.find((item) => item.id === correlationFindingId)?.component_id; if (findingComponentId && findingComponentId !== value) setCorrelationFindingId(""); }} onValidationChange={(value) => { markExplicitLink(); setCorrelationValidationId(value); const selectedValidation = validations.find((item) => item.id === value); if (selectedValidation?.finding_id) setCorrelationFindingId(selectedValidation.finding_id); if (selectedValidation?.component_id) setCorrelationComponentId(selectedValidation.component_id); }} /><SandboxView project={project} evidence={evidence} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} loading={loading} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={createSandboxEvidence} /></>}
         {activeView === "aspm" && <><EvidenceGraphPanel graph={evidenceGraph} /><AspmView summary={summary} findings={findings} validations={validations} evidence={evidence} onUpdateFinding={updateFindingGovernance} /></>}
       </section>
     </main>
@@ -570,29 +635,44 @@ function EvidenceLinkSelector({
   findings,
   components,
   validations,
+  suggestions,
   selectedFindingId,
   selectedComponentId,
   selectedValidationId,
   onFindingChange,
   onComponentChange,
   onValidationChange,
+  onSuggestionApply,
 }: {
   title: string;
   findings: Finding[];
   components: Component[];
   validations: DastValidation[];
+  suggestions: LinkSuggestion[];
   selectedFindingId: string;
   selectedComponentId: string;
   selectedValidationId: string;
   onFindingChange: (value: string) => void;
   onComponentChange: (value: string) => void;
   onValidationChange: (value: string) => void;
+  onSuggestionApply: (suggestion: LinkSuggestion) => void;
 }) {
   return (
     <section className="panel full evidence-link-selector">
       <div className="panel-header">
         <h2>{title}</h2>
-        <span>显式关联用于生成可追溯攻击链；不选择则记录为未关联</span>
+        <span>系统给出候选与理由；高置信度会预选，执行前仍可调整</span>
+      </div>
+      <div className="link-suggestion-list">
+        {suggestions.length === 0 ? <div className="empty-project">暂无可靠候选。当前记录可以保持未关联，或手动选择。</div> : suggestions.map((suggestion, index) => {
+          const selected = suggestion.validation_id
+            ? suggestion.validation_id === selectedValidationId
+            : Boolean(suggestion.finding_id && suggestion.finding_id === selectedFindingId);
+          return <article className={`link-suggestion ${selected ? "selected" : ""}`} key={`${suggestion.validation_id ?? suggestion.finding_id ?? index}`}>
+            <div><strong>{index === 0 ? "首选 · " : ""}{suggestion.label}</strong><span>{suggestion.reasons.join("；")}</span></div>
+            <div className="suggestion-score"><b className={suggestion.confidence_level}>{suggestion.confidence}%</b><span>{confidenceLevelLabel(suggestion.confidence_level)}</span><button className="secondary-action" onClick={() => onSuggestionApply(suggestion)}>{selected ? "已采用" : "采用建议"}</button></div>
+          </article>;
+        })}
       </div>
       <div className="evidence-link-grid">
         <label>
@@ -870,6 +950,7 @@ function toolStatusLabel(value?: string | null) { return value === "disabled" ? 
 function grypeInputLabel(value?: string | null) { return value === "syft-sbom" ? "Syft SBOM" : value === "directory" ? "目录回退" : "-"; }
 function toolHealthStatusLabel(value?: string | null) { return value === "success" ? "可用" : value === "warning" ? "有警告" : value === "failed" ? "不可用" : value ?? "未检查"; }
 function relationTypeLabel(value: string) { return value === "reported_by" ? "产生风险" : value === "validated_by" ? "动态验证" : value === "observed_by" ? "运行时取证" : value; }
+function confidenceLevelLabel(value: string) { return value === "high" ? "高置信度" : value === "medium" ? "中置信度" : "低置信度"; }
 function toolHealthNameLabel(value?: string | null) { return value === "docker_cli" ? "Docker CLI" : value === "docker_engine" ? "Docker Engine" : value === "syft_image" ? "Syft 镜像" : value === "grype_image" ? "Grype 镜像" : value === "grype_db" ? "Grype 漏洞库" : value === "api" ? "后端 API" : value ?? "-"; }
 function scaChangeTypeLabel(value?: string | null) { return value === "added" ? "新增组件" : value === "removed" ? "移除组件" : value === "version_changed" ? "版本变化" : value === "risk_added" ? "新增风险" : value === "risk_removed" ? "风险消失" : value === "risk_changed" ? "风险变化" : value === "license_risk_changed" ? "许可证变化" : value ?? "-"; }
 function normalizeFindingStatus(status: FindingStatus) { return status === "pending" ? "open" : status === "retest" ? "fixing" : status === "closed" ? "fixed" : status; }

@@ -7,11 +7,41 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
-from app.models import DastProbeRequest, DastValidation, DastValidationCreate, DastValidationUpdate, ModuleKey
+from app.models import (
+    DastLinkSuggestionRequest,
+    DastProbeRequest,
+    DastValidation,
+    DastValidationCreate,
+    DastValidationUpdate,
+    LinkSuggestion,
+    ModuleKey,
+)
 from app.repositories.mappers import dast_validation_to_schema
 from app.services.dast_probe import probe_target_url
+from app.services.evidence_link_suggestions import build_dast_link_suggestions
 
 router = APIRouter()
+
+
+@router.post("/link-suggestions", response_model=list[LinkSuggestion])
+def suggest_validation_links(
+    payload: DastLinkSuggestionRequest,
+    db: Session = Depends(get_db),
+) -> list[LinkSuggestion]:
+    if db.get(ProjectRecord, str(payload.project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    findings = list(
+        db.scalars(
+            select(FindingRecord).where(FindingRecord.project_id == str(payload.project_id))
+        ).all()
+    )
+    components = {
+        str(item.id): item
+        for item in db.scalars(
+            select(ComponentRecord).where(ComponentRecord.project_id == str(payload.project_id))
+        ).all()
+    }
+    return build_dast_link_suggestions(payload.target_url, findings, components)
 
 
 def ensure_dast_enabled(project_id: UUID, db: Session) -> None:
@@ -99,7 +129,12 @@ def create_validation(payload: DastValidationCreate, db: Session = Depends(get_d
 def probe_target(payload: DastProbeRequest, db: Session = Depends(get_db)) -> DastValidation:
     ensure_dast_enabled(payload.project_id, db)
     ensure_links_belong_to_project(payload.project_id, payload.finding_id, payload.component_id, db)
-    link_source, link_confidence = link_metadata(payload.finding_id, payload.component_id)
+    link_source, link_confidence = link_metadata(
+        payload.finding_id,
+        payload.component_id,
+        payload.link_source,
+        payload.link_confidence,
+    )
 
     try:
         probe = probe_target_url(payload.target_url)

@@ -835,6 +835,72 @@ th {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.link-suggestion-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.link-suggestion {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbe4ef;
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px 14px;
+}
+
+.link-suggestion.selected {
+  background: #eff6ff;
+  border-color: #60a5fa;
+}
+
+.link-suggestion > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.link-suggestion > div:first-child span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.suggestion-score {
+  align-items: center;
+  display: grid;
+  gap: 3px;
+  grid-template-columns: auto auto;
+  text-align: right;
+}
+
+.suggestion-score b {
+  font-size: 18px;
+}
+
+.suggestion-score b.high {
+  color: #15803d;
+}
+
+.suggestion-score b.medium {
+  color: #b45309;
+}
+
+.suggestion-score b.low {
+  color: #64748b;
+}
+
+.suggestion-score > span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.suggestion-score button {
+  grid-column: 1 / -1;
+}
+
 .evidence-link-grid label {
   color: #475569;
   display: grid;

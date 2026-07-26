@@ -386,6 +386,29 @@ class DastVerdict(str, Enum):
     not_exploitable = "not_exploitable"
 
 
+class LinkSuggestion(BaseModel):
+    finding_id: UUID | None = None
+    component_id: UUID | None = None
+    validation_id: UUID | None = None
+    confidence: int = Field(ge=0, le=100)
+    confidence_level: str
+    reasons: list[str] = Field(default_factory=list)
+    label: str
+    source: str = "rule-engine-v1"
+
+
+class DastLinkSuggestionRequest(BaseModel):
+    project_id: UUID
+    target_url: str = Field(min_length=1, max_length=1000)
+
+
+class SandboxLinkSuggestionRequest(BaseModel):
+    project_id: UUID
+    run_command: str = Field(min_length=1, max_length=1000)
+    finding_id: UUID | None = None
+    component_id: UUID | None = None
+
+
 class DastValidationCreate(BaseModel):
     project_id: UUID
     target_url: str = Field(min_length=1, max_length=1000)
@@ -407,6 +430,8 @@ class DastProbeRequest(BaseModel):
     target_url: str = Field(min_length=1, max_length=1000)
     finding_id: UUID | None = None
     component_id: UUID | None = None
+    link_source: str = "unlinked"
+    link_confidence: int = Field(default=0, ge=0, le=100)
     validator: str | None = "auto-dast"
 
 
@@ -454,6 +479,8 @@ class SandboxRunRequest(BaseModel):
     finding_id: UUID | None = None
     component_id: UUID | None = None
     validation_id: UUID | None = None
+    link_source: str = "unlinked"
+    link_confidence: int = Field(default=0, ge=0, le=100)
     timeout_seconds: int = Field(default=10, ge=1, le=30)
     operator: str | None = "sandbox-runner"
     image: str | None = None

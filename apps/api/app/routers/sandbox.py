@@ -7,12 +7,56 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord
-from app.models import ModuleKey, SandboxCommandTemplate, SandboxEvidence, SandboxEvidenceCreate, SandboxEvidenceUpdate, SandboxRunRequest
+from app.models import (
+    LinkSuggestion,
+    ModuleKey,
+    SandboxCommandTemplate,
+    SandboxEvidence,
+    SandboxEvidenceCreate,
+    SandboxEvidenceUpdate,
+    SandboxLinkSuggestionRequest,
+    SandboxRunRequest,
+)
 from app.repositories.mappers import sandbox_evidence_to_schema
+from app.services.evidence_link_suggestions import build_sandbox_link_suggestions
 from app.services.sandbox_runner import SandboxCommandRejected, run_sandbox_command
 from app.services.sandbox_templates import discover_sandbox_templates
 
 router = APIRouter()
+
+
+@router.post("/link-suggestions", response_model=list[LinkSuggestion])
+def suggest_evidence_links(
+    payload: SandboxLinkSuggestionRequest,
+    db: Session = Depends(get_db),
+) -> list[LinkSuggestion]:
+    if db.get(ProjectRecord, str(payload.project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_key = str(payload.project_id)
+    findings = list(
+        db.scalars(select(FindingRecord).where(FindingRecord.project_id == project_key)).all()
+    )
+    components = {
+        str(item.id): item
+        for item in db.scalars(
+            select(ComponentRecord).where(ComponentRecord.project_id == project_key)
+        ).all()
+    }
+    validations = list(
+        db.scalars(
+            select(DastValidationRecord)
+            .where(DastValidationRecord.project_id == project_key)
+            .order_by(DastValidationRecord.created_at.desc())
+        ).all()
+    )
+    return build_sandbox_link_suggestions(
+        payload.run_command,
+        findings,
+        components,
+        validations,
+        str(payload.finding_id) if payload.finding_id else None,
+        str(payload.component_id) if payload.component_id else None,
+    )
 
 
 @router.post("/evidence", response_model=SandboxEvidence, status_code=201)
@@ -67,7 +111,13 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
         payload.component_id,
         payload.validation_id,
     )
-    link_source, link_confidence = _link_metadata(finding_id, component_id, validation_id)
+    link_source, link_confidence = _link_metadata(
+        finding_id,
+        component_id,
+        validation_id,
+        payload.link_source,
+        payload.link_confidence,
+    )
 
     try:
         result = run_sandbox_command(payload.run_command, project.source_path, payload.timeout_seconds, payload.image)
