@@ -45,10 +45,12 @@ Get-Content README.md -Encoding utf8
 - 项目资产配置：源码路径、运行地址、API 地址、沙箱命令、沙箱镜像。
 - 六个模块可单独启用或停用：SCA、SAST、AGENT、DAST、SANDBOX、ASPM。
 - 项目资产探测：根据源码目录识别 SCA、SAST、AGENT 可执行任务。
-- 统一任务中心：可触发 SCA、SAST、AGENT、DAST、SANDBOX。
+- “安全检测”合并模块接入和任务执行：用户自主选择 SCA、SAST、AGENT、DAST、SANDBOX，并查看关系提示和执行参数。
+- 一键检测按 `SCA -> SAST -> AGENT -> DAST -> SANDBOX` 顺序运行已接入模块，单模块失败不会阻断后续检查。
 - PostgreSQL 持久化：项目、模块配置、扫描任务、组件、Finding、DAST 记录、SANDBOX 证据。
 - Alembic 正式迁移基线和跨模块证据关联首个版本：`20260726_0001`。
-- 前端多页面视图：项目管理、项目资产、模块接入、任务中心、SCA、SAST、AGENT、DAST、SANDBOX、ASPM。
+- 前端主导航精简为项目管理、项目资产、安全检测、治理总览。
+- 治理总览支持综合视图和已接入模块视图切换，未接入模块不会出现。
 
 ### 还未完成
 
@@ -264,7 +266,7 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
 - 自动关联建议 v1：使用 URL 路径、CVE/CWE、漏洞类型、风险来源和等级生成候选、理由与置信度。
 - 80 分及以上候选可在前端预选；预选不会写数据库，用户执行 DAST 后才确认关系。
 - 推荐接口：`POST /api/dast/link-suggestions`。
-- 前端 DAST 页面可查看验证记录。
+- 治理总览 DAST 视图简要展示验证记录、裁决、证据摘要和关联状态。
 
 ### 还未完成
 
@@ -305,7 +307,7 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
 - SANDBOX 证据可显式关联 Finding、SCA 组件或 DAST 验证，并继承验证链上下文。
 - 自动关联建议 v1：结合运行命令引用的风险文件、已选 Finding/组件和已有 DAST 裁决推荐上游链路。
 - 推荐接口：`POST /api/sandbox/link-suggestions`；高置信度只做预选，执行 SANDBOX 后才落库。
-- 前端 SANDBOX 页面展示执行结果、输出摘要、策略账本、时间线事件。
+- 治理总览 SANDBOX 视图简要展示执行结果、证据摘要和关联状态，详细证据关系默认折叠。
 
 ### 还未完成
 
@@ -340,17 +342,10 @@ SCA 是当前推进最多的模块。新的对话建议继续围绕 SCA 收尾�
 - 证据图谱 API：`GET /api/aspm/projects/{project_id}/evidence-graph`。
 - 证据图谱节点覆盖项目、组件、Finding、DAST 验证和 SANDBOX 证据。
 - 证据图谱关系覆盖 `reported_by`、`validated_by`、`observed_by`。
-- 前端治理总览展示项目摘要、风险分、统计和风险列表。
-- 前端 DAST / SANDBOX 页面展示自动关联候选、置信度和匹配理由，同时保留人工调整；ASPM 展示关系审计表。
-- SCA 供应链治理卡片：
-  - 最新扫描组件数。
-  - 风险组件数。
-  - 漏洞组件数。
-  - SCA Finding 数。
-  - Top 风险组件。
-  - Syft / Grype 增强状态。
-  - Grype 输入来源。
-  - 错误摘要。
+- 前端治理总览顶部可切换综合总览或任一已接入模块，一次只显示一个范围。
+- 综合总览只显示四项核心指标、模块概况、五条优先风险和建议动作。
+- SCA、SAST、AGENT、DAST、SANDBOX 统一为模块状态、四项核心指标、最多十条主要结果、建议动作。
+- 一键执行仅采用高置信度自动关联建议；跨模块证据关系位于 SANDBOX 高级信息，默认折叠。
 
 ### 还未完成
 
