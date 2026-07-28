@@ -48,6 +48,8 @@ type FindingRetestComparison = { project_id: string; source: string; has_compari
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
+type SecurityReport = { generated_at: string; project: Project; summary: AspmSummary; components: Component[]; findings: Finding[]; validations: DastValidation[]; sandbox_evidence: SandboxEvidence[]; evidence_graph: EvidenceGraph; retest_comparisons: Record<string, FindingRetestComparison>; capability_boundaries: Record<string, string[]> };
+type ReportRow = { id: string; title: string; subtitle: string; summary: string; details: [string, string][] };
 
 const API_BASE = "http://127.0.0.1:8000/api";
 const DEFAULT_ENABLED_MODULES: ModuleKey[] = ["sast", "sca", "aspm"];
@@ -1132,6 +1134,10 @@ function AttackChainSummary({ chains }: { chains: AttackChain[] }) {
 
 function KnowledgeHubView({ project, findings, validations, evidence, summary }: { project: Project | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null }) {
   if (!project) return <div className="panel empty-project">请先选择项目，再查看该项目沉淀的安全知识。</div>;
+  const projectId = project.id;
+  const [report, setReport] = useState<SecurityReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState("");
   const rules = uniqueValues(findings.map((item) => item.rule_id));
   const categories = uniqueValues(findings.map((item) => item.ai_review?.category ?? "未分类"));
   const falsePositiveCount = findings.filter((item) => item.status === "false_positive").length;
@@ -1149,6 +1155,18 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
   const knowledgeItems = [...findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
   const knowledgePagination = paginate(knowledgeItems, knowledgePage);
   useEffect(() => { setKnowledgePage(1); }, [findings]);
+  async function generateReportPreview() {
+    setReportLoading(true);
+    setReportError("");
+    try {
+      setReport(await request<SecurityReport>(`/aspm/projects/${projectId}/report`));
+    } catch (error) {
+      console.error(error);
+      setReportError(`报告生成失败：${errorMessage(error)}`);
+    } finally {
+      setReportLoading(false);
+    }
+  }
   return <section className="knowledge-hub">
     <section className="knowledge-hero panel">
       <div><span className="section-kicker">安全知识中枢</span><h2>让检测结果变成企业可以复用的安全经验</h2><p>当前版本先把项目上下文、规则命中、动态证据、修复和误报结论组织在一起；后续再将这些经验反馈给规则和安全 Skill。</p></div>
@@ -1169,8 +1187,38 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       <div className="panel-header"><h2>当前项目知识条目</h2><span>完整结果 · 每页 10 条</span></div>
       <table className="concise-table"><thead><tr><th>规则 / 分类</th><th>项目风险知识</th><th>验证与证据</th><th>治理结论</th></tr></thead><tbody>{knowledgeItems.length === 0 ? <tr><td colSpan={4} className="empty-cell">执行检测后，规则命中和复核结论会进入这里。</td></tr> : knowledgePagination.items.map((finding) => { const linkedValidations = validations.filter((item) => item.finding_id === finding.id); const validationIds = new Set(linkedValidations.map((item) => item.id)); const linkedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id))); return <tr key={finding.id}><td><strong>{finding.rule_id}</strong><span className="cell-subtext">{finding.source} · {finding.ai_review?.category ?? "未分类"}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span><strong>{finding.title}</strong><span className="cell-subtext">{truncateText(finding.ai_review?.description ?? finding.evidence ?? "暂无风险说明", 120)}</span></td><td>{linkedValidations.length ? `${linkedValidations.length} 次 DAST` : "未动态验证"}<span className="cell-subtext">{linkedEvidence.length ? `${linkedEvidence.length} 份 SANDBOX 证据` : "无运行时证据"}</span></td><td>{statusLabel(normalizeFindingStatus(finding.status))}<span className="cell-subtext">{finding.remediation_note ?? finding.ai_review?.remediation ?? "等待治理结论"}</span></td></tr>; })}</tbody></table><Pagination page={knowledgePagination.page} pageCount={knowledgePagination.pageCount} total={knowledgeItems.length} onPageChange={setKnowledgePage} />
     </section>
+    <section className="panel report-delivery">
+      <div className="panel-header"><div><span className="section-kicker">项目安全报告</span><h2>生成可交付的项目安全快照</h2></div><span>{report ? `生成于 ${formatDateTime(report.generated_at)}` : "报告不会改变现有数据"}</span></div>
+      <p>报告汇总当前项目的已接入模块、风险、动态验证、运行时证据、可信关系、攻击链、复测结果和能力边界。先生成预览确认内容，再导出 JSON 或 HTML。</p>
+      <div className="report-actions"><button className="primary-action" disabled={reportLoading} onClick={() => void generateReportPreview()}>{reportLoading ? "正在生成报告…" : report ? "刷新报告预览" : "生成报告预览"}</button><button className="secondary-action" disabled={!report} onClick={() => report && downloadSecurityReport(report, "json")}>导出 JSON</button><button className="secondary-action" disabled={!report} onClick={() => report && downloadSecurityReport(report, "html")}>导出 HTML</button></div>
+      {reportError ? <div className="report-error">{reportError}</div> : null}
+    </section>
+    {report ? <SecurityReportPreview report={report} /> : null}
     <section className="knowledge-boundary"><strong>当前能力边界</strong><span>目前已完成知识组织和追溯视图；规则自动生成、跨项目知识推荐和基于反馈的自主演进仍属于后续能力，不会在界面中伪装成已实现。</span></section>
   </section>;
+}
+
+function SecurityReportPreview({ report }: { report: SecurityReport }) {
+  const retestRows: ReportRow[] = Object.values(report.retest_comparisons).flatMap((comparison) => comparison.items.map((item) => ({ id: `${comparison.source}-${item.identity}`, title: item.title, subtitle: `${comparison.source} · ${retestResultLabel(item.result)}`, summary: `${item.file_path ?? "未记录文件位置"} · 原位置 ${item.previous_line_start ?? "-"} → 当前 ${item.current_line_start ?? "-"}`, details: [["复测结果", retestResultLabel(item.result)], ["原等级 / 当前等级", `${severityLabel(item.previous_severity)} / ${severityLabel(item.current_severity)}`], ["风险标识", item.identity]] })));
+  const relationRows: ReportRow[] = report.evidence_graph.edges.filter((item) => item.relation_type !== "contains").map((item) => ({ id: item.id, title: `${item.source} → ${item.target}`, subtitle: relationTypeLabel(item.relation_type), summary: item.basis, details: [["可信度", `${item.confidence}%`], ["记录时间", formatDateTime(item.created_at)], ["关系类型", relationTypeLabel(item.relation_type)]] }));
+  return <section className="report-preview">
+    <section className="panel"><div className="panel-header"><div><span className="section-kicker">报告预览</span><h2>{report.project.name}：完整项目安全交付</h2></div><span>所有多条结果每页 10 条</span></div><section className="module-summary inline-summary"><Metric label="风险分" value={report.summary.risk_score} /><Metric label="当前风险" value={report.findings.length} /><Metric label="动态验证" value={report.validations.length} /><Metric label="运行证据" value={report.sandbox_evidence.length} /><Metric label="可信攻击链" value={report.summary.attack_chains.length} /></section><div className="report-meta"><span>接入模块：{report.summary.enabled_modules.map((item) => item.toUpperCase()).join("、") || "仅 ASPM"}</span><span>扫描任务：{report.summary.scan_task_count}</span><span>报告时间：{formatDateTime(report.generated_at)}</span></div></section>
+    <ReportDataSection title="SCA：组件与供应链结果" emptyText="尚未记录组件扫描结果。" rows={report.components.map((item) => ({ id: item.id, title: `${item.name} ${item.version ?? "版本未知"}`, subtitle: `${item.ecosystem} · ${dependencyTypeLabel(item.dependency_type)}`, summary: `${riskStatusLabel(item.risk_status)} · ${severityLabel(item.severity)} · 漏洞 ${(item.vulnerability_ids ?? []).join(", ") || "无"}`, details: [["来源文件", item.source_file], ["包管理器", item.package_manager ?? "未记录"], ["许可证 / 策略", `${item.license ?? "未记录"} / ${licensePolicyLabel(item.license_risk)}`], ["风险来源", sourceLabel(item.risk_source)], ["风险摘要", item.risk_summary ?? "未记录"], ["修复建议", item.remediation ?? "未记录"]] }))} />
+    <ReportDataSection title="统一风险：SCA、SAST 与 AGENT" emptyText="尚未执行检测，暂无风险结果。" rows={report.findings.map((item) => ({ id: item.id, title: item.title, subtitle: `${item.source} · ${item.rule_id} · ${severityLabel(item.severity)}`, summary: `${item.file_path ?? "未记录位置"}${item.line_start ? `:${item.line_start}` : ""} · ${statusLabel(normalizeFindingStatus(item.status))}`, details: [["原始证据", item.evidence ?? "未记录"], ["分类 / 复核结论", `${item.ai_review?.category ?? "未分类"} / ${item.ai_review?.review_verdict ?? "未记录"}`], ["修复建议", item.remediation_note ?? item.ai_review?.remediation ?? "未记录"], ["负责人 / 截止时间", `${item.remediation_owner ?? "未分配"} / ${formatDateTime(item.remediation_due_at)}`], ["AI 复核摘要", item.ai_review?.summary ?? "尚未复核"]] }))} />
+    <ReportDataSection title="DAST：动态验证记录" emptyText="尚未记录动态验证。" rows={report.validations.map((item) => ({ id: item.id, title: dastVerdictLabel(item.verdict), subtitle: `${item.target_url} · ${item.strategy_name ?? item.strategy_id}`, summary: item.evidence_summary ?? "未记录验证摘要", details: [["关联方式 / 可信度", `${item.link_source} / ${item.link_confidence}%`], ["验证范围", item.scope_summary ?? "未记录"], ["能力边界", item.limitations ?? "未记录"], ["请求 / 响应", `${item.request_summary ?? "未记录"} / ${item.response_summary ?? "未记录"}`], ["复现 / 修复", `${item.reproduction_steps ?? "未记录"} / ${item.remediation_hint ?? "未记录"}`]] }))} />
+    <ReportDataSection title="SANDBOX：隔离运行与取证记录" emptyText="尚未记录隔离运行证据。" rows={report.sandbox_evidence.map((item) => ({ id: item.id, title: item.strategy_name ?? "隔离运行记录", subtitle: item.run_command, summary: item.evidence_summary ?? "未记录运行结论", details: [["取证目的", item.purpose ?? "未记录"], ["隔离策略", `网络：${item.network_policy}；文件：${item.filesystem_policy}`], ["能力边界", item.limitations ?? "未记录"], ["关联方式 / 可信度", `${item.link_source} / ${item.link_confidence}%`], ["行为账本", `文件 ${item.observed_files.length}；网络 ${item.observed_network.length}；进程 ${item.observed_processes.length}；工具调用 ${item.observed_tool_calls.length}`]] }))} />
+    <section className="panel"><div className="panel-header"><h2>可信攻击链</h2><span>仅由显式关联的记录形成</span></div><AttackChainSummary chains={report.summary.attack_chains} /></section>
+    <ReportDataSection title="证据图谱：跨模块可信关系" emptyText="尚未形成显式的跨模块关系。" rows={relationRows} />
+    <ReportDataSection title="修复复测：与上一批扫描对比" emptyText={Object.values(report.retest_comparisons).some((item) => item.has_comparison) ? "已完成复测，本次没有发现需要逐条展示的变化。" : "至少完成两次同类扫描后，才会产生逐条复测结果。"} rows={retestRows} />
+    <section className="panel report-boundaries"><div className="panel-header"><h2>报告能力边界</h2><span>避免将演示能力误读为生产结论</span></div>{Object.entries(report.capability_boundaries).map(([module, items]) => <details key={module} open><summary>{module}</summary><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></details>)}</section>
+  </section>;
+}
+
+function ReportDataSection({ title, emptyText, rows }: { title: string; emptyText: string; rows: ReportRow[] }) {
+  const [page, setPage] = useState(1);
+  const pagination = paginate(rows, page);
+  useEffect(() => { setPage(1); }, [rows.length]);
+  return <section className="panel report-data-section"><div className="panel-header"><h2>{title}</h2><span>完整结果 · 每页 10 条</span></div>{rows.length === 0 ? <div className="empty-project">{emptyText}</div> : <><table className="concise-table"><thead><tr><th>条目</th><th>结论 / 摘要</th><th>完整字段</th></tr></thead><tbody>{pagination.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><span className="cell-subtext">{item.subtitle}</span></td><td>{item.summary}</td><td><details className="report-row-details"><summary>查看完整记录</summary><dl>{item.details.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details></td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={rows.length} onPageChange={setPage} /></>}</section>;
 }
 
 function ScaGovernanceView({ project, components, summary, comparison, scanHistory, selectedScanId, scanDiff, dependencyGraph, toolScanEnabled, loading, onToolScanChange, onSelectScan, onExportSbom, onExportReport, onRun }: { project: Project | null; components: Component[]; summary: AspmSummary | null; comparison: FindingRetestComparison | null; scanHistory: ScaScanHistoryItem[]; selectedScanId: string | null; scanDiff: ScaScanDiff | null; dependencyGraph: DependencyGraph | null; toolScanEnabled: boolean; loading: boolean; onToolScanChange: (enabled: boolean) => void; onSelectScan: (scanTaskId: string) => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportReport: () => Promise<void>; onRun: () => Promise<void> }) {
@@ -1769,6 +1817,26 @@ function Metric({ label, value }: { label: string; value: string | number }) { r
 function objectValue(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function listValue(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function textValue(value: unknown) { return value === null || value === undefined || value === "" ? "-" : String(value); }
+function downloadSecurityReport(report: SecurityReport, format: "json" | "html") {
+  const filename = `${safeFilename(report.project.name)}-security-report.${format}`;
+  const content = format === "json"
+    ? JSON.stringify(report, null, 2)
+    : buildSecurityReportHtml(report);
+  const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+function buildSecurityReportHtml(report: SecurityReport) {
+  const summaryRows = [["风险分", report.summary.risk_score], ["当前风险", report.findings.length], ["组件", report.components.length], ["动态验证", report.validations.length], ["运行时证据", report.sandbox_evidence.length], ["可信攻击链", report.summary.attack_chains.length]];
+  const boundaries = Object.entries(report.capability_boundaries).map(([module, items]) => `<h3>${escapeHtml(module)}</h3><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`).join("");
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(report.project.name)} 安全报告</title><style>body{font:14px/1.6 Arial,"Microsoft YaHei",sans-serif;color:#172b4d;margin:36px;max-width:1100px}h1{margin-bottom:4px}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8e0ec;padding:8px;text-align:left;vertical-align:top}th{background:#f3f6fb}pre{white-space:pre-wrap;word-break:break-word;background:#f7f9fc;padding:16px;border-radius:8px}section{margin:26px 0}</style></head><body><h1>${escapeHtml(report.project.name)} 项目安全报告</h1><p>生成时间：${escapeHtml(formatDateTime(report.generated_at))}。本 HTML 保留完整结构化原始数据，便于离线审阅或交付归档。</p><table><thead><tr>${summaryRows.map(([label]) => `<th>${escapeHtml(String(label))}</th>`).join("")}</tr></thead><tbody><tr>${summaryRows.map(([, value]) => `<td>${escapeHtml(String(value))}</td>`).join("")}</tr></tbody></table><section><h2>能力边界</h2>${boundaries}</section><section><h2>完整结构化数据</h2><pre>${escapeHtml(JSON.stringify(report, null, 2))}</pre></section></body></html>`;
+}
+function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character] ?? character)); }
+function safeFilename(value: string) { return value.replace(/[\\/:*?"<>|]/g, "-").trim() || "project"; }
 function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "grype" ? "Grype" : value === "syft" ? "Syft" : value === "osv+grype" ? "OSV + Grype" : value === "local_rule+grype" ? "本地规则 + Grype" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
 function riskStatusLabel(value?: string | null) { return value === "vulnerable" ? "存在漏洞" : value === "license-risk" ? "许可证风险" : value === "review-required" ? "需要复核" : value === "clean" ? "无风险" : value === "not_checked" ? "未检查" : value ?? "未知"; }
 function severityLabel(value?: string | null) { return value === "critical" ? "严重" : value === "high" ? "高危" : value === "medium" ? "中危" : value === "low" ? "低危" : value === "info" ? "提示" : value === "none" ? "无等级" : value ?? "-"; }

@@ -16,14 +16,22 @@ from app.db_models import (
 )
 from app.models import (
     AspmProjectSummary,
+    ProjectSecurityReport,
     EvidenceGraph,
     ModuleKey,
     ScaGovernanceComponent,
     ScaGovernanceSummary,
     ScaToolStatus,
 )
+from app.repositories.mappers import (
+    component_to_schema,
+    dast_validation_to_schema,
+    finding_to_schema,
+    project_to_schema,
+    sandbox_evidence_to_schema,
+)
 from app.services.aspm_evidence_graph import build_attack_chains_v2, build_evidence_graph
-from app.services.finding_retest import current_finding_records
+from app.services.finding_retest import build_finding_retest_comparison, current_finding_records
 
 router = APIRouter()
 
@@ -99,6 +107,61 @@ def get_project_summary(project_id: UUID, db: Session = Depends(get_db)) -> Aspm
     )
 
 
+@router.get("/projects/{project_id}/report", response_model=ProjectSecurityReport)
+def get_project_security_report(project_id: UUID, db: Session = Depends(get_db)) -> ProjectSecurityReport:
+    """Return an export-ready, traceable snapshot of all currently relevant project results."""
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    all_findings = list(
+        db.scalars(
+            select(FindingRecord)
+            .where(FindingRecord.project_id == str(project_id))
+            .order_by(FindingRecord.created_at.desc())
+        ).all()
+    )
+    findings = current_finding_records(db, project_id, all_findings)
+    components = list(
+        db.scalars(
+            select(ComponentRecord)
+            .where(ComponentRecord.project_id == str(project_id))
+            .order_by(ComponentRecord.created_at.desc())
+        ).all()
+    )
+    validations = list(
+        db.scalars(
+            select(DastValidationRecord)
+            .where(DastValidationRecord.project_id == str(project_id))
+            .order_by(DastValidationRecord.created_at.desc())
+        ).all()
+    )
+    evidence_records = list(
+        db.scalars(
+            select(SandboxEvidenceRecord)
+            .where(SandboxEvidenceRecord.project_id == str(project_id))
+            .order_by(SandboxEvidenceRecord.created_at.desc())
+        ).all()
+    )
+
+    return ProjectSecurityReport(
+        project=project_to_schema(project),
+        summary=get_project_summary(project_id, db),
+        components=[component_to_schema(item) for item in components],
+        findings=[finding_to_schema(item) for item in findings],
+        validations=[dast_validation_to_schema(item) for item in validations],
+        sandbox_evidence=[sandbox_evidence_to_schema(item) for item in evidence_records],
+        evidence_graph=build_evidence_graph(
+            project_id, project.name, all_findings, components, validations, evidence_records
+        ),
+        retest_comparisons={
+            source.lower(): build_finding_retest_comparison(db, project_id, source)
+            for source in ("SCA", "SAST", "AGENT")
+        },
+        capability_boundaries=project_report_capability_boundaries(),
+    )
+
+
 @router.get("/projects/{project_id}/evidence-graph", response_model=EvidenceGraph)
 def get_project_evidence_graph(project_id: UUID, db: Session = Depends(get_db)) -> EvidenceGraph:
     project = db.get(ProjectRecord, str(project_id))
@@ -170,6 +233,32 @@ def calculate_risk_score(
     score += dast_by_verdict.get("uncertain", 0) * 3
     score += min(sandbox_evidence_count * 2, 10)
     return min(score, 100)
+
+
+def project_report_capability_boundaries() -> dict[str, list[str]]:
+    """Keep the report explicit about demonstrated capability versus future scope."""
+    return {
+        "SCA": [
+            "当前报告汇总已执行批次的组件、漏洞、许可证和依赖关系结果。",
+            "不等同于所有包管理器的完整原生依赖树或实时漏洞情报。",
+        ],
+        "SAST / AGENT": [
+            "当前结果来自本地规则、Semgrep（可用时）和规则化复核流程。",
+            "不表示已经接入外部大模型、真实 Agent 执行或完整数据流分析。",
+        ],
+        "DAST": [
+            "当前动态验证是安全的 Web 基础检查，并保留选择的风险、策略和证据摘要。",
+            "基础检查的异常信号不等同于 SQL 注入、鉴权绕过等业务漏洞已被真实利用。",
+        ],
+        "SANDBOX": [
+            "当前记录隔离执行策略、命令输出摘要和结构化运行账本。",
+            "不是 eBPF、Sysmon 或恶意样本级行为探针，默认隔离策略禁止网络。",
+        ],
+        "ASPM / 证据链": [
+            "攻击链和证据图谱只使用显式关联的 Finding、组件、DAST 与 SANDBOX 记录。",
+            "尚未提供 CVSS/EPSS 风险模型、SLA、工单、审批、租户权限或跨项目图推理。",
+        ],
+    }
 
 
 def build_sca_governance_summary(db: Session, project_id: UUID) -> ScaGovernanceSummary:

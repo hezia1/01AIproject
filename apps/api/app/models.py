@@ -671,5 +671,20 @@ class AspmProjectSummary(BaseModel):
     attack_chains: list[AttackChain] = Field(default_factory=list)
 
 
+class ProjectSecurityReport(BaseModel):
+    """Project-level delivery snapshot assembled from persisted module results."""
+
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    project: Project
+    summary: AspmProjectSummary
+    components: list[Component] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+    validations: list[DastValidation] = Field(default_factory=list)
+    sandbox_evidence: list[SandboxEvidence] = Field(default_factory=list)
+    evidence_graph: EvidenceGraph
+    retest_comparisons: dict[str, FindingRetestComparison] = Field(default_factory=dict)
+    capability_boundaries: dict[str, list[str]] = Field(default_factory=dict)
+
+
 
 
