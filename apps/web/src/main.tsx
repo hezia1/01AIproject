@@ -1070,6 +1070,10 @@ function RiskEvidenceChainCard({ finding, validations, evidence, graph, canRunDa
   const relatedValidations = validations.filter((item) => item.finding_id === finding.id || (finding.component_id && item.component_id === finding.component_id));
   const validationIds = new Set(relatedValidations.map((item) => item.id));
   const relatedEvidence = evidence.filter((item) => item.finding_id === finding.id || (finding.component_id && item.component_id === finding.component_id) || Boolean(item.validation_id && validationIds.has(item.validation_id)));
+  const [evidencePage, setEvidencePage] = useState(1);
+  const relatedRecords = [...relatedValidations.map((item) => ({ kind: "validation" as const, item })), ...relatedEvidence.map((item) => ({ kind: "evidence" as const, item }))];
+  const evidencePagination = paginate(relatedRecords, evidencePage);
+  useEffect(() => { setEvidencePage(1); }, [finding.id, relatedRecords.length]);
   const graphNodes = findingEvidenceNodes(finding.id, graph);
   const conclusion = relatedEvidence.length ? "已有运行时证据" : relatedValidations.length ? "已完成动态验证" : "等待动态验证";
   return <article className="risk-chain-card">
@@ -1083,7 +1087,7 @@ function RiskEvidenceChainCard({ finding, validations, evidence, graph, canRunDa
       <ArrowRight size={16} />
       <ChainStep module="治理" title={statusLabel(normalizeFindingStatus(finding.status))} detail={finding.remediation_note ?? finding.ai_review?.remediation ?? "分配负责人并记录整改结论"} state={finding.status === "fixed" || finding.status === "closed" ? "done" : "waiting"} />
     </div>
-    {(relatedValidations.length > 0 || relatedEvidence.length > 0) ? <details className="chain-evidence-details"><summary>展开完整验证与取证详情</summary><div>{relatedValidations.map((item) => <section key={item.id}><strong>DAST · {dastVerdictLabel(item.verdict)}</strong><dl><div><dt>验证目标</dt><dd>{item.target_url}</dd></div><div><dt>请求 / 响应</dt><dd>{item.request_summary ?? "未记录"}<br />{item.response_summary ?? "未记录"}</dd></div><div><dt>复现与修复</dt><dd>{item.reproduction_steps ?? "未记录"}<br />{item.remediation_hint ?? "未记录"}</dd></div></dl></section>)}{relatedEvidence.map((item) => <section key={item.id}><strong>SANDBOX · 隔离运行记录</strong><dl><div><dt>命令 / 镜像</dt><dd>{item.run_command}<br />{item.runtime_profile ?? "默认运行环境"}</dd></div><div><dt>隔离策略</dt><dd>网络：{item.network_policy}；文件：{item.filesystem_policy}</dd></div><div><dt>观察结论</dt><dd>{item.evidence_summary ?? "未记录"}</dd></div><div><dt>账本</dt><dd>文件 {item.observed_files.length} 条；网络 {item.observed_network.length} 条；进程 {item.observed_processes.length} 条；工具调用 {item.observed_tool_calls.length} 条</dd></div></dl></section>)}</div></details> : null}
+    {relatedRecords.length > 0 ? <details className="chain-evidence-details"><summary>展开完整验证与取证详情</summary><div>{evidencePagination.items.map((record) => record.kind === "validation" ? <section key={record.item.id}><strong>DAST · {dastVerdictLabel(record.item.verdict)}</strong><dl><div><dt>验证目标</dt><dd>{record.item.target_url}</dd></div><div><dt>请求 / 响应</dt><dd>{record.item.request_summary ?? "未记录"}<br />{record.item.response_summary ?? "未记录"}</dd></div><div><dt>复现与修复</dt><dd>{record.item.reproduction_steps ?? "未记录"}<br />{record.item.remediation_hint ?? "未记录"}</dd></div></dl></section> : <section key={record.item.id}><strong>SANDBOX · 隔离运行记录</strong><dl><div><dt>命令 / 镜像</dt><dd>{record.item.run_command}<br />{record.item.runtime_profile ?? "默认运行环境"}</dd></div><div><dt>隔离策略</dt><dd>网络：{record.item.network_policy}；文件：{record.item.filesystem_policy}</dd></div><div><dt>观察结论</dt><dd>{record.item.evidence_summary ?? "未记录"}</dd></div><div><dt>账本</dt><dd>文件 {record.item.observed_files.length} 条；网络 {record.item.observed_network.length} 条；进程 {record.item.observed_processes.length} 条；工具调用 {record.item.observed_tool_calls.length} 条</dd></div></dl></section>)}<Pagination page={evidencePagination.page} pageCount={evidencePagination.pageCount} total={relatedRecords.length} onPageChange={setEvidencePage} /></div></details> : null}
     <div className="risk-chain-footer"><div className="risk-chain-meta"><span>显式关系节点：{graphNodes.length}</span><span>DAST 记录：{relatedValidations.length}</span><span>SANDBOX 证据：{relatedEvidence.length}</span></div><div className="risk-chain-actions">{relatedValidations.length === 0 ? <button className="secondary-action" disabled={!canRunDast} onClick={() => onOpenDast(finding.id)}>{canRunDast ? "发起 DAST 验证" : "DAST 未接入"}</button> : relatedEvidence.length === 0 ? <button className="secondary-action" disabled={!canRunSandbox} onClick={() => onOpenSandbox(finding.id)}>{canRunSandbox ? "进入 SANDBOX 取证" : "SANDBOX 未接入"}</button> : <button className="secondary-action" onClick={() => onOpenSandbox(finding.id)}>查看关联证据</button>}</div></div>
   </article>;
 }
@@ -1093,8 +1097,10 @@ function ChainStep({ module, title, detail, state }: { module: string; title: st
 }
 
 function AttackChainSummary({ chains }: { chains: AttackChain[] }) {
+  const [page, setPage] = useState(1);
   if (chains.length === 0) return <div className="empty-project">暂未形成可信攻击链。只有风险与 DAST 或 SANDBOX 存在显式关系后才会生成。</div>;
-  return <div className="attack-chain-list">{chains.slice(0, 5).map((chain) => <details key={chain.id}><summary><span className={`severity ${chain.severity}`}>{severityLabel(chain.severity)}</span><strong>{chain.name}</strong><small>{chain.modules.join(" → ")} · 可信度 {chain.confidence}%</small></summary><ol>{chain.steps.map((step) => <li key={`${chain.id}-${step.node_id ?? step.title}`}><b>{step.module}</b><span>{step.title}</span><small>{step.evidence ?? "无证据摘要"}</small></li>)}</ol><p>{chain.recommended_action}</p></details>)}</div>;
+  const pagination = paginate(chains, page);
+  return <div className="attack-chain-list">{pagination.items.map((chain) => <details key={chain.id}><summary><span className={`severity ${chain.severity}`}>{severityLabel(chain.severity)}</span><strong>{chain.name}</strong><small>{chain.modules.join(" → ")} · 可信度 {chain.confidence}%</small></summary><ol>{chain.steps.map((step) => <li key={`${chain.id}-${step.node_id ?? step.title}`}><b>{step.module}</b><span>{step.title}</span><small>{step.evidence ?? "无证据摘要"}</small></li>)}</ol><p>{chain.recommended_action}</p></details>)}<Pagination page={pagination.page} pageCount={pagination.pageCount} total={chains.length} onPageChange={setPage} /></div>;
 }
 
 function KnowledgeHubView({ project, findings, validations, evidence, summary }: { project: Project | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null }) {
@@ -1112,7 +1118,10 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     ["运行时证据", `${linkedEvidenceCount} 份`, `保存隔离策略、进程、文件、网络和工具调用账本`],
     ["治理经验", `${fixedCount + falsePositiveCount} 条`, `修复结论与误报判断形成后续可复用上下文`],
   ] as const;
-  const knowledgeItems = [...findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)).slice(0, 10);
+  const [knowledgePage, setKnowledgePage] = useState(1);
+  const knowledgeItems = [...findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+  const knowledgePagination = paginate(knowledgeItems, knowledgePage);
+  useEffect(() => { setKnowledgePage(1); }, [findings]);
   return <section className="knowledge-hub">
     <section className="knowledge-hero panel">
       <div><span className="section-kicker">安全知识中枢</span><h2>让检测结果变成企业可以复用的安全经验</h2><p>当前版本先把项目上下文、规则命中、动态证据、修复和误报结论组织在一起；后续再将这些经验反馈给规则和安全 Skill。</p></div>
@@ -1130,8 +1139,8 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       <Metric label="可信攻击链" value={summary?.attack_chains.length ?? 0} />
     </section>
     <section className="panel">
-      <div className="panel-header"><h2>当前项目知识条目</h2><span>优先展示高风险和已经形成处置结论的记录</span></div>
-      <table className="concise-table"><thead><tr><th>规则 / 分类</th><th>项目风险知识</th><th>验证与证据</th><th>治理结论</th></tr></thead><tbody>{knowledgeItems.length === 0 ? <tr><td colSpan={4} className="empty-cell">执行检测后，规则命中和复核结论会进入这里。</td></tr> : knowledgeItems.map((finding) => { const linkedValidations = validations.filter((item) => item.finding_id === finding.id); const validationIds = new Set(linkedValidations.map((item) => item.id)); const linkedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id))); return <tr key={finding.id}><td><strong>{finding.rule_id}</strong><span className="cell-subtext">{finding.source} · {finding.ai_review?.category ?? "未分类"}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span><strong>{finding.title}</strong><span className="cell-subtext">{truncateText(finding.ai_review?.description ?? finding.evidence ?? "暂无风险说明", 120)}</span></td><td>{linkedValidations.length ? `${linkedValidations.length} 次 DAST` : "未动态验证"}<span className="cell-subtext">{linkedEvidence.length ? `${linkedEvidence.length} 份 SANDBOX 证据` : "无运行时证据"}</span></td><td>{statusLabel(normalizeFindingStatus(finding.status))}<span className="cell-subtext">{finding.remediation_note ?? finding.ai_review?.remediation ?? "等待治理结论"}</span></td></tr>; })}</tbody></table>
+      <div className="panel-header"><h2>当前项目知识条目</h2><span>完整结果 · 每页 10 条</span></div>
+      <table className="concise-table"><thead><tr><th>规则 / 分类</th><th>项目风险知识</th><th>验证与证据</th><th>治理结论</th></tr></thead><tbody>{knowledgeItems.length === 0 ? <tr><td colSpan={4} className="empty-cell">执行检测后，规则命中和复核结论会进入这里。</td></tr> : knowledgePagination.items.map((finding) => { const linkedValidations = validations.filter((item) => item.finding_id === finding.id); const validationIds = new Set(linkedValidations.map((item) => item.id)); const linkedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id))); return <tr key={finding.id}><td><strong>{finding.rule_id}</strong><span className="cell-subtext">{finding.source} · {finding.ai_review?.category ?? "未分类"}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span><strong>{finding.title}</strong><span className="cell-subtext">{truncateText(finding.ai_review?.description ?? finding.evidence ?? "暂无风险说明", 120)}</span></td><td>{linkedValidations.length ? `${linkedValidations.length} 次 DAST` : "未动态验证"}<span className="cell-subtext">{linkedEvidence.length ? `${linkedEvidence.length} 份 SANDBOX 证据` : "无运行时证据"}</span></td><td>{statusLabel(normalizeFindingStatus(finding.status))}<span className="cell-subtext">{finding.remediation_note ?? finding.ai_review?.remediation ?? "等待治理结论"}</span></td></tr>; })}</tbody></table><Pagination page={knowledgePagination.page} pageCount={knowledgePagination.pageCount} total={knowledgeItems.length} onPageChange={setKnowledgePage} />
     </section>
     <section className="knowledge-boundary"><strong>当前能力边界</strong><span>目前已完成知识组织和追溯视图；规则自动生成、跨项目知识推荐和基于反馈的自主演进仍属于后续能力，不会在界面中伪装成已实现。</span></section>
   </section>;
@@ -1239,6 +1248,7 @@ function DastGovernanceView({ findings, validations, targetUrl, selectedFindingI
 function SandboxGovernanceView({ findings, validations, evidence, graph, templates, runCommand, sandboxImage, selectedFindingId, selectedValidationId, loading, onRunCommandChange, onSandboxImageChange, onSelectRisk, onSelectValidation, onRun }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; templates: SandboxTemplate[]; runCommand: string; sandboxImage: string; selectedFindingId: string; selectedValidationId: string; loading: boolean; onRunCommandChange: (value: string) => void; onSandboxImageChange: (value: string) => void; onSelectRisk: (findingId: string) => void; onSelectValidation: (validationId: string) => void; onRun: () => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", linked: "all", result: "all", runtime: "all" });
   const [page, setPage] = useState(1);
+  const [templatePage, setTemplatePage] = useState(1);
   const findingMap = new Map(findings.map((item) => [item.id, item]));
   const validationMap = new Map(validations.map((item) => [item.id, item]));
   const selectedFinding = findingMap.get(selectedFindingId);
@@ -1256,6 +1266,7 @@ function SandboxGovernanceView({ findings, validations, evidence, graph, templat
       && (filters.runtime === "all" || (item.runtime_profile ?? "unknown") === filters.runtime);
   });
   const pagination = paginate(filtered, page);
+  const templatePagination = paginate(templates, templatePage);
   useEffect(() => { setPage(1); }, [filters.keyword, filters.linked, filters.result, filters.runtime]);
   return <ModuleGovernanceShell moduleKey="sandbox" lastStatus={evidence.length ? "completed" : null} metrics={[["运行证据", evidence.length], ["执行完成", completed], ["进入证据链", linked], ["隔离策略", "禁网 / 只读"]]} action={linked ? "结合上游风险和 DAST 裁决复核运行行为，判断证据是否足以支持最终风险结论。" : "请先选择一条风险或 DAST 验证，独立命令执行不能证明漏洞成立。"} loading={loading} hideRunButton onRun={onRun}>
     <section className="validation-workbench sandbox-workbench">
@@ -1264,7 +1275,7 @@ function SandboxGovernanceView({ findings, validations, evidence, graph, templat
         <label><span>① 上游 DAST 验证（优先）</span><select value={selectedValidationId} onChange={(event) => onSelectValidation(event.target.value)}><option value="">不从 DAST 结果进入</option>{validations.filter((item) => item.finding_id || item.component_id).map((item) => <option key={item.id} value={item.id}>{dastVerdictLabel(item.verdict)} · {item.target_url}</option>)}</select></label>
         <label><span>或直接选择风险</span><select value={selectedFindingId} onChange={(event) => onSelectRisk(event.target.value)}><option value="">请选择风险</option>{findings.map((finding) => <option value={finding.id} key={finding.id}>{finding.source} · {severityLabel(finding.severity)} · {finding.title}</option>)}</select></label>
       </div>
-      {templates.length ? <label className="sandbox-template-picker"><span>可选：使用安全命令模板</span><select defaultValue="" onChange={(event) => { const template = templates.find((item) => item.name === event.target.value); if (template) { onRunCommandChange(template.command); onSandboxImageChange(template.image); } }}><option value="">手动填写命令和镜像</option>{templates.map((template) => <option key={template.name} value={template.name}>{template.name} · {template.description}</option>)}</select><small>模板只会填入命令和隔离镜像；仍需先选择要验证的风险或 DAST 记录。</small></label> : null}
+      {templates.length ? <div className="sandbox-template-picker"><span>可选：使用安全命令模板</span><select defaultValue="" onChange={(event) => { const template = templates.find((item) => item.name === event.target.value); if (template) { onRunCommandChange(template.command); onSandboxImageChange(template.image); } }}><option value="">手动填写命令和镜像</option>{templatePagination.items.map((template) => <option key={template.name} value={template.name}>{template.name} · {template.description}</option>)}</select><small>模板只会填入命令和隔离镜像；仍需先选择要验证的风险或 DAST 记录。</small><Pagination page={templatePagination.page} pageCount={templatePagination.pageCount} total={templates.length} onPageChange={setTemplatePage} /></div> : null}
       <div className="validation-form sandbox-command-form">
         <label><span>② 验证命令</span><input value={runCommand} onChange={(event) => onRunCommandChange(event.target.value)} placeholder="例如：python verify_sql_injection.py" /></label>
         <label><span>隔离镜像</span><input value={sandboxImage} onChange={(event) => onSandboxImageChange(event.target.value)} placeholder="python:3.12-slim" /></label>
@@ -1325,10 +1336,14 @@ function RetestComparisonPanel({ comparison }: { comparison: FindingRetestCompar
 }
 
 function FindingEvidenceDetail({ finding, validations, evidence, graph, onClose }: { finding: Finding; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; onClose: () => void }) {
+  const [recordPage, setRecordPage] = useState(1);
   const nodes = findingEvidenceNodes(finding.id, graph);
   const relatedValidations = validations.filter((item) => item.finding_id === finding.id);
   const validationIds = new Set(relatedValidations.map((item) => item.id));
   const relatedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id)));
+  const relatedRecords = [...relatedValidations.map((item) => ({ kind: "validation" as const, item })), ...relatedEvidence.map((item) => ({ kind: "evidence" as const, item }))];
+  const recordPagination = paginate(relatedRecords, recordPage);
+  useEffect(() => { setRecordPage(1); }, [finding.id, relatedRecords.length]);
   const hasValidation = relatedValidations.length > 0 || nodes.some((node) => node.kind === "validation");
   const hasRuntimeEvidence = relatedEvidence.length > 0 || nodes.some((node) => node.kind === "evidence");
   const conclusion = hasValidation && hasRuntimeEvidence ? "已形成完整证据链" : hasRuntimeEvidence ? "已有运行证据" : hasValidation ? "已完成动态验证" : "仅发现，尚未验证";
@@ -1339,7 +1354,7 @@ function FindingEvidenceDetail({ finding, validations, evidence, graph, onClose 
       <li><b>{finding.source}</b><div><strong>发现风险</strong><span>{finding.file_path ?? "项目级问题"} · {severityLabel(finding.severity)}</span></div></li>
         {nodes.map((node) => <li key={node.id}><b>{node.module}</b><div><strong>{evidenceNodeStage(node)}</strong><span>{node.label}</span><small>{node.detail ?? "未记录证据摘要"} · {formatDateTime(node.created_at)}</small></div></li>)}
       </ol>
-      {(relatedValidations.length > 0 || relatedEvidence.length > 0) ? <div className="evidence-record-stack">{relatedValidations.map((item) => <details key={item.id} open><summary>DAST：{dastVerdictLabel(item.verdict)} · {item.target_url}</summary><dl><div><dt>请求</dt><dd>{item.request_summary ?? "未记录"}</dd></div><div><dt>响应</dt><dd>{item.response_summary ?? "未记录"}</dd></div><div><dt>复现过程</dt><dd>{item.reproduction_steps ?? "未记录"}</dd></div><div><dt>修复提示</dt><dd>{item.remediation_hint ?? "未记录"}</dd></div></dl></details>)}{relatedEvidence.map((item) => <details key={item.id} open><summary>SANDBOX：{item.run_command}</summary><dl><div><dt>隔离策略</dt><dd>网络：{item.network_policy}；文件：{item.filesystem_policy}</dd></div><div><dt>观察结论</dt><dd>{item.evidence_summary ?? "未记录"}</dd></div><div><dt>行为账本</dt><dd>文件 {item.observed_files.length} 条；网络 {item.observed_network.length} 条；进程 {item.observed_processes.length} 条；工具调用 {item.observed_tool_calls.length} 条</dd></div></dl></details>)}</div> : null}
+      {relatedRecords.length > 0 ? <div className="evidence-record-stack">{recordPagination.items.map((record) => record.kind === "validation" ? <details key={record.item.id} open><summary>DAST：{dastVerdictLabel(record.item.verdict)} · {record.item.target_url}</summary><dl><div><dt>请求</dt><dd>{record.item.request_summary ?? "未记录"}</dd></div><div><dt>响应</dt><dd>{record.item.response_summary ?? "未记录"}</dd></div><div><dt>复现过程</dt><dd>{record.item.reproduction_steps ?? "未记录"}</dd></div><div><dt>修复提示</dt><dd>{record.item.remediation_hint ?? "未记录"}</dd></div></dl></details> : <details key={record.item.id} open><summary>SANDBOX：{record.item.run_command}</summary><dl><div><dt>隔离策略</dt><dd>网络：{record.item.network_policy}；文件：{record.item.filesystem_policy}</dd></div><div><dt>观察结论</dt><dd>{record.item.evidence_summary ?? "未记录"}</dd></div><div><dt>行为账本</dt><dd>文件 {record.item.observed_files.length} 条；网络 {record.item.observed_network.length} 条；进程 {record.item.observed_processes.length} 条；工具调用 {record.item.observed_tool_calls.length} 条</dd></div></dl></details>)}<Pagination page={recordPagination.page} pageCount={recordPagination.pageCount} total={relatedRecords.length} onPageChange={setRecordPage} /></div> : null}
     </section>;
 }
 
@@ -1551,11 +1566,16 @@ function ScaView({ project, components, scanHistory, selectedScanId, scanDiff, d
 }
 
 function ScaScanHistoryTable({ history, selectedScanId, loading, onSelect }: { history: ScaScanHistoryItem[]; selectedScanId: string | null; loading: boolean; onSelect: (scanTaskId: string) => Promise<void> }) {
+  const [page, setPage] = useState(1);
   if (history.length === 0) return <div className="empty-project">暂无 SCA 扫描历史，执行 SCA 风险分析后会保留每次扫描快照。</div>;
-  return <table className="compact-table"><thead><tr><th>批次</th><th>状态</th><th>完成时间</th><th>组件</th><th>直接 / 传递</th><th>漏洞 / 高危</th><th>许可证风险</th><th>增强引擎</th><th>操作</th></tr></thead><tbody>{history.map((item) => <tr key={item.scan_task_id} className={selectedScanId === item.scan_task_id ? "selected-row" : ""}><td><strong>{item.scan_task_id.slice(0, 8)}</strong><span className="cell-subtext">{formatDateTime(item.started_at ?? item.created_at)}</span></td><td>{scanStatusLabel(item.status)}</td><td>{formatDateTime(item.finished_at)}</td><td>{item.component_count}</td><td>{item.direct_dependency_count} / {item.transitive_dependency_count}</td><td>{item.vulnerable_count}<span className="cell-subtext">严重 {item.critical_count} · 高危 {item.high_count}</span></td><td>{item.license_risk_count}</td><td>{toolStatusLabel(item.tool_status?.status)}<span className="cell-subtext">Syft {item.tool_status?.syft_component_count ?? 0} · Grype {item.tool_status?.grype_vulnerability_count ?? 0}</span></td><td><button className="secondary-action" disabled={loading || selectedScanId === item.scan_task_id} onClick={() => void onSelect(item.scan_task_id)}>{selectedScanId === item.scan_task_id ? "当前批次" : "查看快照"}</button></td></tr>)}</tbody></table>;
+  const pagination = paginate(history, page);
+  return <><table className="compact-table"><thead><tr><th>批次</th><th>状态</th><th>完成时间</th><th>组件</th><th>直接 / 传递</th><th>漏洞 / 高危</th><th>许可证风险</th><th>增强引擎</th><th>操作</th></tr></thead><tbody>{pagination.items.map((item) => <tr key={item.scan_task_id} className={selectedScanId === item.scan_task_id ? "selected-row" : ""}><td><strong>{item.scan_task_id.slice(0, 8)}</strong><span className="cell-subtext">{formatDateTime(item.started_at ?? item.created_at)}</span></td><td>{scanStatusLabel(item.status)}</td><td>{formatDateTime(item.finished_at)}</td><td>{item.component_count}</td><td>{item.direct_dependency_count} / {item.transitive_dependency_count}</td><td>{item.vulnerable_count}<span className="cell-subtext">严重 {item.critical_count} · 高危 {item.high_count}</span></td><td>{item.license_risk_count}</td><td>{toolStatusLabel(item.tool_status?.status)}<span className="cell-subtext">Syft {item.tool_status?.syft_component_count ?? 0} · Grype {item.tool_status?.grype_vulnerability_count ?? 0}</span></td><td><button className="secondary-action" disabled={loading || selectedScanId === item.scan_task_id} onClick={() => void onSelect(item.scan_task_id)}>{selectedScanId === item.scan_task_id ? "当前批次" : "查看快照"}</button></td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={history.length} onPageChange={setPage} /></>;
 }
 
 function ScaToolHealthPanel({ health, loading, onRefresh }: { health: ScaToolHealth | null; loading: boolean; onRefresh: () => Promise<void> }) {
+  const [page, setPage] = useState(1);
+  const checks = health?.checks ?? [];
+  const pagination = paginate(checks, page);
   return <div className="panel full">
     <div className="panel-header"><h2>工具链预检</h2><span>{toolHealthStatusLabel(health?.status)}</span></div>
     <div className="kv-list">
@@ -1564,29 +1584,35 @@ function ScaToolHealthPanel({ health, loading, onRefresh }: { health: ScaToolHea
       <div><span>失败 / 警告</span><strong>{health?.checks.filter((item) => item.status !== "success").length ?? 0}</strong></div>
       <div><span>操作</span><button className="secondary-action" disabled={loading} onClick={() => void onRefresh()}>{loading ? "检查中" : "重新预检"}</button></div>
     </div>
-    <table className="compact-table"><thead><tr><th>检查项</th><th>状态</th><th>详情</th><th>处理建议</th></tr></thead><tbody>{health?.checks.length ? health.checks.map((item) => <tr key={item.name}><td>{toolHealthNameLabel(item.name)}</td><td><span className={`risk-badge ${item.status === "success" ? "clean" : item.status === "warning" ? "review-required" : "vulnerable"}`}>{toolHealthStatusLabel(item.status)}</span></td><td>{item.detail ?? "-"}</td><td>{item.remediation ?? "-"}</td></tr>) : <tr><td colSpan={4} className="empty-cell">正在等待工具链预检结果。</td></tr>}</tbody></table>
+    <table className="compact-table"><thead><tr><th>检查项</th><th>状态</th><th>详情</th><th>处理建议</th></tr></thead><tbody>{checks.length ? pagination.items.map((item) => <tr key={item.name}><td>{toolHealthNameLabel(item.name)}</td><td><span className={`risk-badge ${item.status === "success" ? "clean" : item.status === "warning" ? "review-required" : "vulnerable"}`}>{toolHealthStatusLabel(item.status)}</span></td><td>{item.detail ?? "-"}</td><td>{item.remediation ?? "-"}</td></tr>) : <tr><td colSpan={4} className="empty-cell">正在等待工具链预检结果。</td></tr>}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={checks.length} onPageChange={setPage} />
   </div>;
 }
 
 function ScaScanDiffView({ diff }: { diff: ScaScanDiff | null }) {
+  const [page, setPage] = useState(1);
   if (!diff || !diff.has_comparison) return <div className="empty-project">需要至少两次完成的 SCA 扫描才能生成对比。</div>;
   const summary = diff.summary;
-  return <div className="diff-stack"><div className="module-summary inline-summary"><Metric label="新增组件" value={summary.added_components} /><Metric label="移除组件" value={summary.removed_components} /><Metric label="版本变化" value={summary.version_changes} /><Metric label="新增 / 消失风险" value={`${summary.risk_added} / ${summary.risk_removed}`} /></div><table className="compact-table"><thead><tr><th>类型</th><th>组件</th><th>版本变化</th><th>风险变化</th><th>许可证策略</th><th>说明</th></tr></thead><tbody>{diff.changes.length === 0 ? <tr><td colSpan={6} className="empty-cell">与上一批次相比没有变化。</td></tr> : diff.changes.map((item, index) => <tr key={`${item.ecosystem}-${item.name}-${item.change_type}-${index}`}><td>{scaChangeTypeLabel(item.change_type)}</td><td><strong>{item.name}</strong><span className="cell-subtext">{item.ecosystem}</span></td><td>{item.base_version ?? "-"} → {item.target_version ?? "-"}</td><td>{riskStatusLabel(item.base_risk_status)} / {severityLabel(item.base_severity)}<span className="cell-subtext">→ {riskStatusLabel(item.target_risk_status)} / {severityLabel(item.target_severity)}</span><span className="cell-subtext">{item.base_vulnerability_ids.join(", ") || "-"} → {item.target_vulnerability_ids.join(", ") || "-"}</span></td><td>{licensePolicyLabel(item.base_license_risk)} → {licensePolicyLabel(item.target_license_risk)}</td><td>{item.summary}</td></tr>)}</tbody></table></div>;
+  const pagination = paginate(diff.changes, page);
+  return <div className="diff-stack"><div className="module-summary inline-summary"><Metric label="新增组件" value={summary.added_components} /><Metric label="移除组件" value={summary.removed_components} /><Metric label="版本变化" value={summary.version_changes} /><Metric label="新增 / 消失风险" value={`${summary.risk_added} / ${summary.risk_removed}`} /></div><table className="compact-table"><thead><tr><th>类型</th><th>组件</th><th>版本变化</th><th>风险变化</th><th>许可证策略</th><th>说明</th></tr></thead><tbody>{diff.changes.length === 0 ? <tr><td colSpan={6} className="empty-cell">与上一批次相比没有变化。</td></tr> : pagination.items.map((item, index) => <tr key={`${item.ecosystem}-${item.name}-${item.change_type}-${index}`}><td>{scaChangeTypeLabel(item.change_type)}</td><td><strong>{item.name}</strong><span className="cell-subtext">{item.ecosystem}</span></td><td>{item.base_version ?? "-"} → {item.target_version ?? "-"}</td><td>{riskStatusLabel(item.base_risk_status)} / {severityLabel(item.base_severity)}<span className="cell-subtext">→ {riskStatusLabel(item.target_risk_status)} / {severityLabel(item.target_severity)}</span><span className="cell-subtext">{item.base_vulnerability_ids.join(", ") || "-"} → {item.target_vulnerability_ids.join(", ") || "-"}</span></td><td>{licensePolicyLabel(item.base_license_risk)} → {licensePolicyLabel(item.target_license_risk)}</td><td>{item.summary}</td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={diff.changes.length} onPageChange={setPage} /></div>;
 }
 
 function DependencyGraphView({ graph, full = false }: { graph: DependencyGraph | null; full?: boolean }) {
+  const [page, setPage] = useState(1);
   if (!graph || graph.nodes.length === 0) return <div className="empty-project">暂无依赖图谱，执行 SCA 扫描后显示结果。</div>;
-  const positions = graphLayout(graph);
-  const height = graphHeight(graph);
-  return <div className={full ? "graph-shell full-graph" : "graph-shell"}><svg viewBox={`0 0 960 ${height}`} role="img" aria-label="SCA 依赖图谱">
+  const pagination = paginate(graph.nodes, page);
+  const pageNodeIds = new Set(pagination.items.map((node) => node.id));
+  const pageGraph = { ...graph, nodes: pagination.items, edges: graph.edges.filter((edge) => pageNodeIds.has(edge.source) && pageNodeIds.has(edge.target)) };
+  const positions = graphLayout(pageGraph);
+  const height = graphHeight(pageGraph);
+  return <div className={full ? "graph-shell full-graph" : "graph-shell"}><div className="graph-page-note">当前展示 {pagination.items.length} 个节点及其页面内关系</div><svg viewBox={`0 0 960 ${height}`} role="img" aria-label="SCA 依赖图谱">
     <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#8aa0b8" /></marker></defs>
-    {graph.edges.map((edge) => {
+    {pageGraph.edges.map((edge) => {
       const source = positions.get(edge.source);
       const target = positions.get(edge.target);
       if (!source || !target) return null;
       return <line key={`${edge.source}-${edge.target}`} x1={source.x + 92} y1={source.y} x2={target.x - 92} y2={target.y} className={`graph-edge ${edge.quality}`} markerEnd="url(#arrow)" />;
     })}
-    {graph.nodes.map((node) => {
+    {pageGraph.nodes.map((node) => {
       const position = positions.get(node.id);
       if (!position) return null;
       return <g key={node.id} transform={`translate(${position.x - 82}, ${position.y - 26})`} className={`graph-node ${nodeRiskClass(node)}`}>
@@ -1595,12 +1621,14 @@ function DependencyGraphView({ graph, full = false }: { graph: DependencyGraph |
         <text x="12" y="39" className="graph-node-meta">{node.kind === "project" ? "项目" : `${dependencyTypeLabel(node.dependency_type)} · ${node.ecosystem ?? "-"}`}</text>
       </g>;
     })}
-  </svg><div className="graph-legend"><span><i className="legend-dot clean" />无风险</span><span><i className="legend-dot vulnerable" />漏洞/高危</span><span><i className="legend-dot license-risk" />许可证风险</span><span>实线：直接依赖 / 虚线：推断传递依赖</span></div></div>;
+  </svg><div className="graph-legend"><span><i className="legend-dot clean" />无风险</span><span><i className="legend-dot vulnerable" />漏洞/高危</span><span><i className="legend-dot license-risk" />许可证风险</span><span>实线：直接依赖 / 虚线：推断传递依赖</span></div><Pagination page={pagination.page} pageCount={pagination.pageCount} total={graph.nodes.length} onPageChange={setPage} /></div>;
 }
 
 function UpgradeLeverTable({ levers }: { levers: UpgradeLever[] }) {
+  const [page, setPage] = useState(1);
   if (levers.length === 0) return <div className="empty-project">暂无升级杠杆。通常表示当前没有直接依赖带入风险传递依赖。</div>;
-  return <table><thead><tr><th>直接依赖</th><th>风险传递依赖</th><th>最高等级</th><th>影响组件</th><th>建议动作</th></tr></thead><tbody>{levers.map((lever) => <tr key={lever.component_id}><td><strong>{lever.component}</strong><span className="cell-subtext">{lever.ecosystem} · {lever.version ?? "-"}</span></td><td>{lever.risk_transitive_count}</td><td>{severityLabel(lever.highest_severity ?? "none")}</td><td>{lever.affected_components.slice(0, 5).join(", ") || "-"}{lever.affected_components.length > 5 ? <span className="cell-subtext">另 {lever.affected_components.length - 5} 个</span> : null}</td><td>{lever.recommendation}</td></tr>)}</tbody></table>;
+  const pagination = paginate(levers, page);
+  return <><table><thead><tr><th>直接依赖</th><th>风险传递依赖</th><th>最高等级</th><th>影响组件</th><th>建议动作</th></tr></thead><tbody>{pagination.items.map((lever) => <tr key={lever.component_id}><td><strong>{lever.component}</strong><span className="cell-subtext">{lever.ecosystem} · {lever.version ?? "-"}</span></td><td>{lever.risk_transitive_count}</td><td>{severityLabel(lever.highest_severity ?? "none")}</td><td>{lever.affected_components.slice(0, 5).join(", ") || "-"}{lever.affected_components.length > 5 ? <span className="cell-subtext">另 {lever.affected_components.length - 5} 个</span> : null}</td><td>{lever.recommendation}</td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={levers.length} onPageChange={setPage} /></>;
 }
 
 function RiskBadge({ status, severity }: { status: string; severity: Severity | null }) {
@@ -1611,8 +1639,10 @@ function FilterSelect({ label, value, options, onChange, formatOption = (option)
   return <label className="filter-control"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="all">全部</option>{options.map((option) => <option key={option} value={option}>{formatOption(option)}</option>)}</select></label>;
 }
 function EvidenceGraphPanel({ graph }: { graph: EvidenceGraph | null }) {
+  const [page, setPage] = useState(1);
   const nodeMap = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
   const relationEdges = (graph?.edges ?? []).filter((edge) => edge.relation_type !== "contains");
+  const pagination = paginate(relationEdges, page);
   return (
     <section className="panel full evidence-graph-panel">
       <div className="panel-header">
@@ -1628,32 +1658,39 @@ function EvidenceGraphPanel({ graph }: { graph: EvidenceGraph | null }) {
       {relationEdges.length === 0 ? <div className="empty-project">请在 DAST 或 SANDBOX 页面选择原始 Finding、SCA 组件或验证记录后执行任务。未关联记录不会生成攻击链。</div> : (
         <table className="compact-table">
           <thead><tr><th>来源</th><th>关系</th><th>目标</th><th>依据</th><th>可信度</th></tr></thead>
-          <tbody>{relationEdges.slice(0, 20).map((edge) => {
+          <tbody>{pagination.items.map((edge) => {
             const source = nodeMap.get(edge.source);
             const target = nodeMap.get(edge.target);
             return <tr key={edge.id}><td><strong>{source?.module ?? "-"}</strong><span className="cell-subtext">{source?.label ?? edge.source}</span></td><td>{relationTypeLabel(edge.relation_type)}</td><td><strong>{target?.module ?? "-"}</strong><span className="cell-subtext">{target?.label ?? edge.target}</span></td><td>{edge.basis}</td><td>{edge.confidence}%</td></tr>;
           })}</tbody>
         </table>
       )}
+      {relationEdges.length ? <Pagination page={pagination.page} pageCount={pagination.pageCount} total={relationEdges.length} onPageChange={setPage} /> : null}
     </section>
   );
 }
 
 function AspmView({ summary, findings, validations, evidence, onUpdateFinding }: { summary: AspmSummary | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status" | "remediation_owner" | "remediation_note" | "remediation_due_at">>) => Promise<void> }) {
   const [page, setPage] = useState(1);
+  const [attackChainPage, setAttackChainPage] = useState(1);
   const pageSize = 10;
   const pageCount = Math.max(1, Math.ceil(findings.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const pageFindings = findings.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const governanceSummary = countBy(findings, "status");
   const attackChains = summary?.attack_chains ?? [];
+  const attackChainPagination = paginate(attackChains, attackChainPage);
   const scaGovernance = summary?.sca_governance;
   useEffect(() => { setPage(1); }, [findings]);
+  useEffect(() => { setAttackChainPage(1); }, [attackChains.length]);
 
-  return <section className="sca-layout"><section className="module-summary"><Metric label="风险分" value={summary?.risk_score ?? 0} /><Metric label="攻击链" value={attackChains.length} /><Metric label="待处置" value={(governanceSummary.open ?? 0) + (governanceSummary.pending ?? 0) + (governanceSummary.confirmed ?? 0)} /><Metric label="验证/证据" value={`${summary?.dast_validation_count ?? validations.length}/${summary?.sandbox_evidence_count ?? evidence.length}`} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>模块来源统计</h2><span>Finding 维度</span></div><KeyValue data={summary?.findings_by_source ?? {}} /></div><div className="panel"><div className="panel-header"><h2>整改状态</h2><span>Workflow</span></div><KeyValue data={governanceSummary} /></div><ScaGovernancePanel summary={scaGovernance} /><div className="panel full"><div className="panel-header"><h2>攻击链关联</h2><span>{attackChains.length ? `共 ${attackChains.length} 条` : "等待多模块证据"}</span></div>{attackChains.length === 0 ? <div className="empty-project">暂无攻击链。通常需要 SAST/AGENT/SCA 风险与 DAST 或 SANDBOX 证据同时存在后生成。</div> : <table><thead><tr><th>链路</th><th>等级</th><th>涉及模块</th><th>证据步骤</th><th>建议动作</th></tr></thead><tbody>{attackChains.map((chain) => <tr key={chain.id}><td><strong>{chain.name}</strong><span className="cell-subtext">{chain.summary}</span></td><td><span className={`severity ${chain.severity}`}>{chain.severity}</span></td><td>{chain.modules.join(" + ")}<span className="cell-subtext">{chain.evidence_count} 个证据点</span></td><td>{chain.steps.map((step) => <span className="cell-subtext" key={`${chain.id}-${step.module}-${step.title}`}>{step.module}: {step.title}</span>)}</td><td>{chain.recommended_action}</td></tr>)}</tbody></table>}</div><div className="panel full"><div className="panel-header"><h2>整改闭环清单</h2><span>共 {findings.length} 条</span></div><table><thead><tr><th>风险</th><th>位置</th><th>状态</th><th>负责人</th><th>截止时间</th><th>处置备注</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={6} className="empty-cell">暂无 findings。</td></tr> : pageFindings.map((finding) => <tr key={finding.id}><td><span className={`severity ${finding.severity}`}>{finding.severity}</span><strong>{finding.title}</strong><span className="cell-subtext">{finding.source} · {finding.rule_id}</span></td><td>{finding.file_path ?? "-"}<span className="cell-subtext">Line {finding.line_start ?? "-"}</span></td><td><select defaultValue={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select><span className="cell-subtext">更新：{formatDateTime(finding.updated_at)}</span></td><td><input defaultValue={finding.remediation_owner ?? ""} placeholder="负责人" onBlur={(event) => void onUpdateFinding(finding.id, { remediation_owner: emptyToNull(event.target.value) })} /></td><td><input type="date" defaultValue={dateInputValue(finding.remediation_due_at)} onBlur={(event) => void onUpdateFinding(finding.id, { remediation_due_at: dateToIso(event.target.value) })} /></td><td><textarea defaultValue={finding.remediation_note ?? ""} placeholder="处置备注" onBlur={(event) => void onUpdateFinding(finding.id, { remediation_note: emptyToNull(event.target.value) })} /></td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+  return <section className="sca-layout"><section className="module-summary"><Metric label="风险分" value={summary?.risk_score ?? 0} /><Metric label="攻击链" value={attackChains.length} /><Metric label="待处置" value={(governanceSummary.open ?? 0) + (governanceSummary.pending ?? 0) + (governanceSummary.confirmed ?? 0)} /><Metric label="验证/证据" value={`${summary?.dast_validation_count ?? validations.length}/${summary?.sandbox_evidence_count ?? evidence.length}`} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>模块来源统计</h2><span>Finding 维度</span></div><KeyValue data={summary?.findings_by_source ?? {}} /></div><div className="panel"><div className="panel-header"><h2>整改状态</h2><span>Workflow</span></div><KeyValue data={governanceSummary} /></div><ScaGovernancePanel summary={scaGovernance} /><div className="panel full"><div className="panel-header"><h2>攻击链关联</h2><span>{attackChains.length ? `共 ${attackChains.length} 条 · 每页 10 条` : "等待多模块证据"}</span></div>{attackChains.length === 0 ? <div className="empty-project">暂无攻击链。通常需要 SAST/AGENT/SCA 风险与 DAST 或 SANDBOX 证据同时存在后生成。</div> : <><table><thead><tr><th>链路</th><th>等级</th><th>涉及模块</th><th>证据步骤</th><th>建议动作</th></tr></thead><tbody>{attackChainPagination.items.map((chain) => <tr key={chain.id}><td><strong>{chain.name}</strong><span className="cell-subtext">{chain.summary}</span></td><td><span className={`severity ${chain.severity}`}>{chain.severity}</span></td><td>{chain.modules.join(" + ")}<span className="cell-subtext">{chain.evidence_count} 个证据点</span></td><td>{chain.steps.map((step) => <span className="cell-subtext" key={`${chain.id}-${step.module}-${step.title}`}>{step.module}: {step.title}</span>)}</td><td>{chain.recommended_action}</td></tr>)}</tbody></table><Pagination page={attackChainPagination.page} pageCount={attackChainPagination.pageCount} total={attackChains.length} onPageChange={setAttackChainPage} /></>}</div><div className="panel full"><div className="panel-header"><h2>整改闭环清单</h2><span>共 {findings.length} 条</span></div><table><thead><tr><th>风险</th><th>位置</th><th>状态</th><th>负责人</th><th>截止时间</th><th>处置备注</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={6} className="empty-cell">暂无 findings。</td></tr> : pageFindings.map((finding) => <tr key={finding.id}><td><span className={`severity ${finding.severity}`}>{finding.severity}</span><strong>{finding.title}</strong><span className="cell-subtext">{finding.source} · {finding.rule_id}</span></td><td>{finding.file_path ?? "-"}<span className="cell-subtext">Line {finding.line_start ?? "-"}</span></td><td><select defaultValue={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select><span className="cell-subtext">更新：{formatDateTime(finding.updated_at)}</span></td><td><input defaultValue={finding.remediation_owner ?? ""} placeholder="负责人" onBlur={(event) => void onUpdateFinding(finding.id, { remediation_owner: emptyToNull(event.target.value) })} /></td><td><input type="date" defaultValue={dateInputValue(finding.remediation_due_at)} onBlur={(event) => void onUpdateFinding(finding.id, { remediation_due_at: dateToIso(event.target.value) })} /></td><td><textarea defaultValue={finding.remediation_note ?? ""} placeholder="处置备注" onBlur={(event) => void onUpdateFinding(finding.id, { remediation_note: emptyToNull(event.target.value) })} /></td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
 }
 function ScaGovernancePanel({ summary }: { summary?: ScaGovernanceSummary }) {
+  const [page, setPage] = useState(1);
   const toolStatus = summary?.tool_status;
+  const topComponents = summary?.top_components ?? [];
+  const pagination = paginate(topComponents, page);
   return <div className="panel full sca-governance-panel">
     <div className="panel-header"><h2>SCA 供应链治理</h2><span>{summary?.latest_scan_id ? `最近扫描 ${formatDateTime(summary.latest_scan_finished_at)}` : "暂无 SCA 扫描"}</span></div>
     <section className="sca-governance-grid">
@@ -1674,7 +1711,7 @@ function ScaGovernancePanel({ summary }: { summary?: ScaGovernanceSummary }) {
       <div><span>扫描状态</span><strong>{scanStatusLabel(summary?.latest_scan_status)}</strong></div>
     </div>
     {toolStatus?.errors?.length ? <div className="sca-tool-errors">{toolStatus.errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div> : null}
-    <table><thead><tr><th>Top 风险组件</th><th>风险</th><th>漏洞数</th><th>许可证</th><th>来源/建议</th></tr></thead><tbody>{summary?.top_components?.length ? summary.top_components.map((component) => <tr key={`${component.ecosystem}-${component.name}-${component.version ?? "unknown"}`}><td><strong>{component.name}</strong><span className="cell-subtext">{component.ecosystem} · {component.version ?? "-"}</span></td><td><RiskBadge status={component.risk_status} severity={component.severity} /></td><td>{component.vulnerability_count}</td><td>{licensePolicyLabel(component.license_risk)}</td><td>{sourceLabel(component.risk_source)}<span className="cell-subtext">{component.remediation ?? "-"}</span></td></tr>) : <tr><td colSpan={5} className="empty-cell">暂无 SCA 风险组件。</td></tr>}</tbody></table>
+    <table><thead><tr><th>Top 风险组件</th><th>风险</th><th>漏洞数</th><th>许可证</th><th>来源/建议</th></tr></thead><tbody>{topComponents.length ? pagination.items.map((component) => <tr key={`${component.ecosystem}-${component.name}-${component.version ?? "unknown"}`}><td><strong>{component.name}</strong><span className="cell-subtext">{component.ecosystem} · {component.version ?? "-"}</span></td><td><RiskBadge status={component.risk_status} severity={component.severity} /></td><td>{component.vulnerability_count}</td><td>{licensePolicyLabel(component.license_risk)}</td><td>{sourceLabel(component.risk_source)}<span className="cell-subtext">{component.remediation ?? "-"}</span></td></tr>) : <tr><td colSpan={5} className="empty-cell">暂无 SCA 风险组件。</td></tr>}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={topComponents.length} onPageChange={setPage} />
   </div>;
 }
 function KeyValue({ data, formatKey = (key) => key }: { data: Record<string, number>; formatKey?: (key: string) => string }) { const entries = Object.entries(data); return <div className="kv-list">{entries.length === 0 ? <span className="empty-inline">暂无数据</span> : entries.map(([key, value]) => <div key={key}><span>{formatKey(key)}</span><strong>{value}</strong></div>)}</div>; }
