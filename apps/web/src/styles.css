@@ -2831,6 +2831,156 @@ th {
   color: #7c2d12;
 }
 
+.advanced-details {
+  border: 1px solid #cbd9ea;
+  border-radius: 12px;
+  background: #f8fbff;
+  margin-top: 18px;
+}
+
+.advanced-details > summary,
+.chain-evidence-details > summary,
+.evidence-record-stack summary {
+  cursor: pointer;
+  color: #1e4d8f;
+  font-weight: 700;
+  padding: 14px 16px;
+}
+
+.advanced-details-body {
+  display: grid;
+  gap: 16px;
+  padding: 0 16px 16px;
+}
+
+.advanced-inline-action,
+.sandbox-template-picker {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dbe4ef;
+  border-radius: 10px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.advanced-inline-action > div:first-child,
+.sandbox-template-picker {
+  display: grid;
+  gap: 5px;
+}
+
+.advanced-inline-action span,
+.sandbox-template-picker small {
+  color: #60748d;
+  font-size: 13px;
+}
+
+.advanced-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.advanced-summary-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.advanced-summary-grid > div {
+  background: #ffffff;
+  border: 1px solid #dbe4ef;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.advanced-summary-grid > div > span {
+  color: #526b88;
+  display: block;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.sandbox-template-picker {
+  margin-top: 12px;
+}
+
+.sandbox-template-picker select {
+  max-width: 100%;
+}
+
+.chain-evidence-details {
+  background: #f8fbff;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  margin-top: 12px;
+}
+
+.chain-evidence-details > div {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px;
+}
+
+.chain-evidence-details section,
+.evidence-record-stack details {
+  background: #ffffff;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.chain-evidence-details dl,
+.evidence-record-stack dl {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.chain-evidence-details dl div,
+.evidence-record-stack dl div {
+  display: grid;
+  gap: 3px;
+}
+
+.chain-evidence-details dt,
+.evidence-record-stack dt {
+  color: #60748d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chain-evidence-details dd,
+.evidence-record-stack dd {
+  color: #253b56;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.evidence-record-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+@media (max-width: 760px) {
+  .advanced-inline-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .advanced-actions,
+  .advanced-summary-grid {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+}
+
 @media (max-width: 1100px) {
   .governance-two-column {
     grid-template-columns: 1fr;

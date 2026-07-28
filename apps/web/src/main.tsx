@@ -750,7 +750,7 @@ function App() {
         {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={loading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
         {activeView === "assets" && <><ProjectAssetConfig project={project} loading={loading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
         {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
-        {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} loading={loading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
+    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} loading={loading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
         {activeView === "knowledge" && <KnowledgeHubView project={project} findings={findings} validations={validations} evidence={evidence} summary={summary} />}
       </section>
     </main>
@@ -909,6 +909,12 @@ function GovernanceCenter({
   evidence,
   graph,
   retestComparisons,
+  scaScanHistory,
+  selectedScaScanId,
+  scaScanDiff,
+  dependencyGraph,
+  scaToolScanEnabled,
+  sandboxTemplates,
   loading,
   targetUrl,
   runCommand,
@@ -918,6 +924,11 @@ function GovernanceCenter({
   onTargetUrlChange,
   onRunCommandChange,
   onSandboxImageChange,
+  onScaToolScanChange,
+  onSelectScaScan,
+  onExportScaSbom,
+  onExportScaReport,
+  onRunSastAgentReview,
   onSelectDastRisk,
   onSelectSandboxRisk,
   onSelectSandboxValidation,
@@ -935,6 +946,12 @@ function GovernanceCenter({
   evidence: SandboxEvidence[];
   graph: EvidenceGraph | null;
   retestComparisons: Record<"sca" | "sast" | "agent", FindingRetestComparison | null>;
+  scaScanHistory: ScaScanHistoryItem[];
+  selectedScaScanId: string | null;
+  scaScanDiff: ScaScanDiff | null;
+  dependencyGraph: DependencyGraph | null;
+  scaToolScanEnabled: boolean;
+  sandboxTemplates: SandboxTemplate[];
   loading: boolean;
   targetUrl: string;
   runCommand: string;
@@ -944,6 +961,11 @@ function GovernanceCenter({
   onTargetUrlChange: (value: string) => void;
   onRunCommandChange: (value: string) => void;
   onSandboxImageChange: (value: string) => void;
+  onScaToolScanChange: (enabled: boolean) => void;
+  onSelectScaScan: (scanTaskId: string) => Promise<void>;
+  onExportScaSbom: (format: "cyclonedx" | "spdx") => Promise<void>;
+  onExportScaReport: () => Promise<void>;
+  onRunSastAgentReview: () => Promise<void>;
   onSelectDastRisk: (findingId: string) => void;
   onSelectSandboxRisk: (findingId: string) => void;
   onSelectSandboxValidation: (validationId: string) => void;
@@ -963,11 +985,11 @@ function GovernanceCenter({
       {scopes.map((item) => <button className={scope === item ? "active" : ""} key={item} onClick={() => setScope(item)}>{item === "overview" ? "综合总览" : MODULE_DISPLAY[item].name}</button>)}
     </nav>
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "sca" ? <ScaGovernanceView components={components} summary={summary} comparison={retestComparisons.sca} loading={loading} onRun={() => onRunModule("sca")} /> : null}
-    {scope === "sast" ? <FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} graph={graph} comparison={retestComparisons.sast} loading={loading} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} graph={graph} comparison={retestComparisons.agent} loading={loading} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={loading} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
+    {scope === "sast" ? <FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={loading} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={loading} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={loading} onTargetUrlChange={onTargetUrlChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
-    {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={loading} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
+    {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={loading} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
 }
 
@@ -1025,6 +1047,7 @@ function GovernanceOverview({ summary, enabledModules, components, findings, val
       <div><BookOpen size={22} /><div><h2>安全知识正在从项目结果中沉淀</h2><p>规则命中、误报结论、动态验证证据和修复经验会形成后续扫描可复用的项目安全上下文。</p></div></div>
       <div className="knowledge-preview-stats"><span><strong>{uniqueValues(findings.map((item) => item.rule_id)).length}</strong> 条规则经验</span><span><strong>{validations.length}</strong> 次动态验证</span><span><strong>{evidence.length}</strong> 份运行证据</span></div>
     </section>
+    <details className="advanced-details governance-advanced-details"><summary>查看完整治理闭环、全部攻击链与项目级证据图谱</summary><div className="advanced-details-body"><AspmView summary={summary} findings={findings} validations={validations} evidence={evidence} onUpdateFinding={onUpdateFinding} /><EvidenceGraphPanel graph={graph} /></div></details>
   </div>;
 }
 
@@ -1060,6 +1083,7 @@ function RiskEvidenceChainCard({ finding, validations, evidence, graph, canRunDa
       <ArrowRight size={16} />
       <ChainStep module="治理" title={statusLabel(normalizeFindingStatus(finding.status))} detail={finding.remediation_note ?? finding.ai_review?.remediation ?? "分配负责人并记录整改结论"} state={finding.status === "fixed" || finding.status === "closed" ? "done" : "waiting"} />
     </div>
+    {(relatedValidations.length > 0 || relatedEvidence.length > 0) ? <details className="chain-evidence-details"><summary>展开完整验证与取证详情</summary><div>{relatedValidations.map((item) => <section key={item.id}><strong>DAST · {dastVerdictLabel(item.verdict)}</strong><dl><div><dt>验证目标</dt><dd>{item.target_url}</dd></div><div><dt>请求 / 响应</dt><dd>{item.request_summary ?? "未记录"}<br />{item.response_summary ?? "未记录"}</dd></div><div><dt>复现与修复</dt><dd>{item.reproduction_steps ?? "未记录"}<br />{item.remediation_hint ?? "未记录"}</dd></div></dl></section>)}{relatedEvidence.map((item) => <section key={item.id}><strong>SANDBOX · 隔离运行记录</strong><dl><div><dt>命令 / 镜像</dt><dd>{item.run_command}<br />{item.runtime_profile ?? "默认运行环境"}</dd></div><div><dt>隔离策略</dt><dd>网络：{item.network_policy}；文件：{item.filesystem_policy}</dd></div><div><dt>观察结论</dt><dd>{item.evidence_summary ?? "未记录"}</dd></div><div><dt>账本</dt><dd>文件 {item.observed_files.length} 条；网络 {item.observed_network.length} 条；进程 {item.observed_processes.length} 条；工具调用 {item.observed_tool_calls.length} 条</dd></div></dl></section>)}</div></details> : null}
     <div className="risk-chain-footer"><div className="risk-chain-meta"><span>显式关系节点：{graphNodes.length}</span><span>DAST 记录：{relatedValidations.length}</span><span>SANDBOX 证据：{relatedEvidence.length}</span></div><div className="risk-chain-actions">{relatedValidations.length === 0 ? <button className="secondary-action" disabled={!canRunDast} onClick={() => onOpenDast(finding.id)}>{canRunDast ? "发起 DAST 验证" : "DAST 未接入"}</button> : relatedEvidence.length === 0 ? <button className="secondary-action" disabled={!canRunSandbox} onClick={() => onOpenSandbox(finding.id)}>{canRunSandbox ? "进入 SANDBOX 取证" : "SANDBOX 未接入"}</button> : <button className="secondary-action" onClick={() => onOpenSandbox(finding.id)}>查看关联证据</button>}</div></div>
   </article>;
 }
@@ -1113,7 +1137,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
   </section>;
 }
 
-function ScaGovernanceView({ components, summary, comparison, loading, onRun }: { components: Component[]; summary: AspmSummary | null; comparison: FindingRetestComparison | null; loading: boolean; onRun: () => Promise<void> }) {
+function ScaGovernanceView({ project, components, summary, comparison, scanHistory, selectedScanId, scanDiff, dependencyGraph, toolScanEnabled, loading, onToolScanChange, onSelectScan, onExportSbom, onExportReport, onRun }: { project: Project | null; components: Component[]; summary: AspmSummary | null; comparison: FindingRetestComparison | null; scanHistory: ScaScanHistoryItem[]; selectedScanId: string | null; scanDiff: ScaScanDiff | null; dependencyGraph: DependencyGraph | null; toolScanEnabled: boolean; loading: boolean; onToolScanChange: (enabled: boolean) => void; onSelectScan: (scanTaskId: string) => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportReport: () => Promise<void>; onRun: () => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", ecosystem: "all", severity: "all", risk: "all", dependency: "all" });
   const [page, setPage] = useState(1);
   const risky = components.filter(isRiskyScaComponent);
@@ -1133,10 +1157,27 @@ function ScaGovernanceView({ components, summary, comparison, loading, onRun }: 
     <table className="concise-table"><thead><tr><th>组件</th><th>风险状态</th><th>漏洞标识</th><th>建议动作</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td colSpan={4} className="empty-cell">没有符合筛选条件的组件。</td></tr> : pagination.items.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><span className="cell-subtext">{item.version ?? "版本未知"} · {item.ecosystem} · {dependencyTypeLabel(item.dependency_type)}</span></td><td>{riskStatusLabel(item.risk_status)}<span className="cell-subtext">{severityLabel(item.severity)}</span></td><td>{item.vulnerability_ids?.join(", ") || "无已知漏洞标识"}</td><td>{item.remediation ?? (isRiskyScaComponent(item) ? "确认可用安全版本后升级" : "暂不需要处理")}</td></tr>)}</tbody></table>
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
     <RetestComparisonPanel comparison={comparison} />
+    <ScaAdvancedDetails project={project} components={components} scanHistory={scanHistory} selectedScanId={selectedScanId} scanDiff={scanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={toolScanEnabled} loading={loading} onToolScanChange={onToolScanChange} onSelectScan={onSelectScan} onExportSbom={onExportSbom} onExportReport={onExportReport} />
   </ModuleGovernanceShell>;
 }
 
-function FindingModuleGovernance({ moduleKey, findings, graph, comparison, loading, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function ScaAdvancedDetails({ project, components, scanHistory, selectedScanId, scanDiff, dependencyGraph, toolScanEnabled, loading, onToolScanChange, onSelectScan, onExportSbom, onExportReport }: { project: Project | null; components: Component[]; scanHistory: ScaScanHistoryItem[]; selectedScanId: string | null; scanDiff: ScaScanDiff | null; dependencyGraph: DependencyGraph | null; toolScanEnabled: boolean; loading: boolean; onToolScanChange: (enabled: boolean) => void; onSelectScan: (scanTaskId: string) => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportReport: () => Promise<void> }) {
+  const [toolHealth, setToolHealth] = useState<ScaToolHealth | null>(null);
+  const [toolHealthLoading, setToolHealthLoading] = useState(false);
+  async function refreshToolHealth() {
+    setToolHealthLoading(true);
+    try { setToolHealth(await request<ScaToolHealth>("/sca/tool-health")); } catch { setToolHealth(null); } finally { setToolHealthLoading(false); }
+  }
+  return <details className="advanced-details"><summary>高级供应链分析：扫描历史、依赖图谱、SBOM 与工具链</summary><div className="advanced-details-body">
+    <section className="advanced-inline-action"><div><strong>导出与增强扫描</strong><span>SBOM 可用于资产盘点；Syft/Grype 依赖本机 Docker 与镜像，无法使用时基础 SCA 扫描仍可运行。</span></div><div className="advanced-actions"><label className="inline-check"><input type="checkbox" checked={toolScanEnabled} disabled={loading} onChange={(event) => onToolScanChange(event.target.checked)} />Syft/Grype 增强</label><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("cyclonedx")}>导出 CycloneDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("spdx")}>导出 SPDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportReport()}>导出 SCA 报告</button></div></section>
+    <ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} />
+    <section className="panel"><div className="panel-header"><h3>与上一批次的变化</h3><span>{scanDiff?.has_comparison ? "已生成对比" : "需要至少两次扫描"}</span></div><ScaScanDiffView diff={scanDiff} /></section>
+    <section className="panel"><div className="panel-header"><h3>扫描历史</h3><span>{scanHistory.length} 个批次</span></div><ScaScanHistoryTable history={scanHistory} selectedScanId={selectedScanId} loading={loading} onSelect={onSelectScan} /></section>
+    <section className="panel"><div className="panel-header"><h3>依赖图谱与升级杠杆</h3><span>{dependencyGraph?.summary.node_count ?? 0} 个节点</span></div><DependencyGraphView graph={dependencyGraph} /><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></section>
+  </div></details>;
+}
+
+function FindingModuleGovernance({ moduleKey, findings, validations, evidence, graph, comparison, loading, onRunReview, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRunReview?: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", severity: "all", status: "all", category: "all" });
   const [page, setPage] = useState(1);
   const high = findings.filter((item) => item.severity === "critical" || item.severity === "high").length;
@@ -1154,9 +1195,10 @@ function FindingModuleGovernance({ moduleKey, findings, graph, comparison, loadi
   useEffect(() => { setPage(1); }, [filters.keyword, filters.severity, filters.status, filters.category]);
   return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={findings.length ? "completed" : null} metrics={[["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : "当前没有检测结果，请先在安全检测中执行该模块。"} loading={loading} onRun={onRun}>
     <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
-    <ConciseFindingTable findings={pagination.items} graph={graph} onUpdateFinding={onUpdateFinding} />
+    <ConciseFindingTable findings={pagination.items} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} />
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
     <RetestComparisonPanel comparison={comparison} />
+    <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>规则化 Agent 复核</strong><span>对现有 SAST 结果补充分类、误报可能性、证据摘要与修复策略；这不是外部大模型自动修复。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>当前检查配置与说明文件中的权限风险，不会连接或真实执行 Agent、MCP Server 或插件。</span></div></section>}</div></details>
   </ModuleGovernanceShell>;
 }
 
@@ -1194,7 +1236,7 @@ function DastGovernanceView({ findings, validations, targetUrl, selectedFindingI
   </ModuleGovernanceShell>;
 }
 
-function SandboxGovernanceView({ findings, validations, evidence, graph, runCommand, sandboxImage, selectedFindingId, selectedValidationId, loading, onRunCommandChange, onSandboxImageChange, onSelectRisk, onSelectValidation, onRun }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; runCommand: string; sandboxImage: string; selectedFindingId: string; selectedValidationId: string; loading: boolean; onRunCommandChange: (value: string) => void; onSandboxImageChange: (value: string) => void; onSelectRisk: (findingId: string) => void; onSelectValidation: (validationId: string) => void; onRun: () => Promise<void> }) {
+function SandboxGovernanceView({ findings, validations, evidence, graph, templates, runCommand, sandboxImage, selectedFindingId, selectedValidationId, loading, onRunCommandChange, onSandboxImageChange, onSelectRisk, onSelectValidation, onRun }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; templates: SandboxTemplate[]; runCommand: string; sandboxImage: string; selectedFindingId: string; selectedValidationId: string; loading: boolean; onRunCommandChange: (value: string) => void; onSandboxImageChange: (value: string) => void; onSelectRisk: (findingId: string) => void; onSelectValidation: (validationId: string) => void; onRun: () => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", linked: "all", result: "all", runtime: "all" });
   const [page, setPage] = useState(1);
   const findingMap = new Map(findings.map((item) => [item.id, item]));
@@ -1222,6 +1264,7 @@ function SandboxGovernanceView({ findings, validations, evidence, graph, runComm
         <label><span>① 上游 DAST 验证（优先）</span><select value={selectedValidationId} onChange={(event) => onSelectValidation(event.target.value)}><option value="">不从 DAST 结果进入</option>{validations.filter((item) => item.finding_id || item.component_id).map((item) => <option key={item.id} value={item.id}>{dastVerdictLabel(item.verdict)} · {item.target_url}</option>)}</select></label>
         <label><span>或直接选择风险</span><select value={selectedFindingId} onChange={(event) => onSelectRisk(event.target.value)}><option value="">请选择风险</option>{findings.map((finding) => <option value={finding.id} key={finding.id}>{finding.source} · {severityLabel(finding.severity)} · {finding.title}</option>)}</select></label>
       </div>
+      {templates.length ? <label className="sandbox-template-picker"><span>可选：使用安全命令模板</span><select defaultValue="" onChange={(event) => { const template = templates.find((item) => item.name === event.target.value); if (template) { onRunCommandChange(template.command); onSandboxImageChange(template.image); } }}><option value="">手动填写命令和镜像</option>{templates.map((template) => <option key={template.name} value={template.name}>{template.name} · {template.description}</option>)}</select><small>模板只会填入命令和隔离镜像；仍需先选择要验证的风险或 DAST 记录。</small></label> : null}
       <div className="validation-form sandbox-command-form">
         <label><span>② 验证命令</span><input value={runCommand} onChange={(event) => onRunCommandChange(event.target.value)} placeholder="例如：python verify_sql_injection.py" /></label>
         <label><span>隔离镜像</span><input value={sandboxImage} onChange={(event) => onSandboxImageChange(event.target.value)} placeholder="python:3.12-slim" /></label>
@@ -1245,9 +1288,9 @@ function ModuleGovernanceShell({ moduleKey, lastStatus, metrics, action, loading
   </div>;
 }
 
-function ConciseFindingTable({ findings, graph, onUpdateFinding }: { findings: Finding[]; graph?: EvidenceGraph | null; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function ConciseFindingTable({ findings, validations, evidence, graph, onUpdateFinding }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph?: EvidenceGraph | null; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
-  return <><table className="concise-table"><thead><tr><th>风险问题</th><th>等级</th><th>位置</th><th>处理状态</th><th>验证证据</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={5} className="empty-cell">当前没有需要展示的风险问题。</td></tr> : findings.map((finding) => { const description = finding.ai_review?.description ?? finding.evidence ?? "暂无影响说明"; const evidenceNodes = findingEvidenceNodes(finding.id, graph); return <tr key={finding.id}><td><strong title={finding.title}>{truncateText(finding.title, 100)}</strong><span className="cell-subtext" title={description}>{truncateText(description, 140)}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span></td><td>{finding.file_path ?? "项目级问题"}<span className="cell-subtext">{finding.line_start ? `第 ${finding.line_start} 行` : finding.source}</span></td><td><select value={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></td><td><button className="secondary-action" onClick={() => setSelectedFinding(finding)}>{evidenceNodes.length ? `查看证据（${evidenceNodes.length}）` : "尚未验证"}</button></td></tr>; })}</tbody></table>{selectedFinding ? <FindingEvidenceDetail finding={selectedFinding} graph={graph ?? null} onClose={() => setSelectedFinding(null)} /> : null}</>;
+  return <><table className="concise-table"><thead><tr><th>风险问题</th><th>等级</th><th>位置</th><th>处理状态</th><th>验证证据</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={5} className="empty-cell">当前没有需要展示的风险问题。</td></tr> : findings.map((finding) => { const description = finding.ai_review?.description ?? finding.evidence ?? "暂无影响说明"; const evidenceNodes = findingEvidenceNodes(finding.id, graph); const validationCount = validations.filter((item) => item.finding_id === finding.id).length; const evidenceCount = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validations.some((validation) => validation.id === item.validation_id && validation.finding_id === finding.id))).length; return <tr key={finding.id}><td><strong title={finding.title}>{truncateText(finding.title, 100)}</strong><span className="cell-subtext" title={description}>{truncateText(description, 140)}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span></td><td>{finding.file_path ?? "项目级问题"}<span className="cell-subtext">{finding.line_start ? `第 ${finding.line_start} 行` : finding.source}</span></td><td><select value={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></td><td><button className="secondary-action" onClick={() => setSelectedFinding(finding)}>{validationCount || evidenceCount ? `查看证据（${validationCount + evidenceCount}）` : evidenceNodes.length ? `查看关系（${evidenceNodes.length}）` : "尚未验证"}</button></td></tr>; })}</tbody></table>{selectedFinding ? <FindingEvidenceDetail finding={selectedFinding} validations={validations} evidence={evidence} graph={graph ?? null} onClose={() => setSelectedFinding(null)} /> : null}</>;
 }
 
 function ModuleFilterBar({ children }: { children: React.ReactNode }) {
@@ -1281,19 +1324,23 @@ function RetestComparisonPanel({ comparison }: { comparison: FindingRetestCompar
   </section>;
 }
 
-function FindingEvidenceDetail({ finding, graph, onClose }: { finding: Finding; graph: EvidenceGraph | null; onClose: () => void }) {
+function FindingEvidenceDetail({ finding, validations, evidence, graph, onClose }: { finding: Finding; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; onClose: () => void }) {
   const nodes = findingEvidenceNodes(finding.id, graph);
-  const hasValidation = nodes.some((node) => node.kind === "validation");
-  const hasRuntimeEvidence = nodes.some((node) => node.kind === "evidence");
+  const relatedValidations = validations.filter((item) => item.finding_id === finding.id);
+  const validationIds = new Set(relatedValidations.map((item) => item.id));
+  const relatedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id)));
+  const hasValidation = relatedValidations.length > 0 || nodes.some((node) => node.kind === "validation");
+  const hasRuntimeEvidence = relatedEvidence.length > 0 || nodes.some((node) => node.kind === "evidence");
   const conclusion = hasValidation && hasRuntimeEvidence ? "已形成完整证据链" : hasRuntimeEvidence ? "已有运行证据" : hasValidation ? "已完成动态验证" : "仅发现，尚未验证";
   return <section className="finding-evidence-detail">
     <div className="panel-header"><div><h3>风险证据链</h3><span>{finding.title}</span></div><button className="secondary-action" onClick={onClose}>关闭</button></div>
     <div className="evidence-conclusion"><strong>{conclusion}</strong><span>{nodes.length ? "以下内容来自已保存的显式关联，不代表自动确认漏洞成立。" : "当前问题还没有关联 DAST 或 SANDBOX 证据。"}</span></div>
-    <ol className="evidence-timeline">
+      <ol className="evidence-timeline">
       <li><b>{finding.source}</b><div><strong>发现风险</strong><span>{finding.file_path ?? "项目级问题"} · {severityLabel(finding.severity)}</span></div></li>
-      {nodes.map((node) => <li key={node.id}><b>{node.module}</b><div><strong>{evidenceNodeStage(node)}</strong><span>{node.label}</span><small>{node.detail ?? "未记录证据摘要"} · {formatDateTime(node.created_at)}</small></div></li>)}
-    </ol>
-  </section>;
+        {nodes.map((node) => <li key={node.id}><b>{node.module}</b><div><strong>{evidenceNodeStage(node)}</strong><span>{node.label}</span><small>{node.detail ?? "未记录证据摘要"} · {formatDateTime(node.created_at)}</small></div></li>)}
+      </ol>
+      {(relatedValidations.length > 0 || relatedEvidence.length > 0) ? <div className="evidence-record-stack">{relatedValidations.map((item) => <details key={item.id} open><summary>DAST：{dastVerdictLabel(item.verdict)} · {item.target_url}</summary><dl><div><dt>请求</dt><dd>{item.request_summary ?? "未记录"}</dd></div><div><dt>响应</dt><dd>{item.response_summary ?? "未记录"}</dd></div><div><dt>复现过程</dt><dd>{item.reproduction_steps ?? "未记录"}</dd></div><div><dt>修复提示</dt><dd>{item.remediation_hint ?? "未记录"}</dd></div></dl></details>)}{relatedEvidence.map((item) => <details key={item.id} open><summary>SANDBOX：{item.run_command}</summary><dl><div><dt>隔离策略</dt><dd>网络：{item.network_policy}；文件：{item.filesystem_policy}</dd></div><div><dt>观察结论</dt><dd>{item.evidence_summary ?? "未记录"}</dd></div><div><dt>行为账本</dt><dd>文件 {item.observed_files.length} 条；网络 {item.observed_network.length} 条；进程 {item.observed_processes.length} 条；工具调用 {item.observed_tool_calls.length} 条</dd></div></dl></details>)}</div> : null}
+    </section>;
 }
 
 function findingEvidenceNodes(findingId: string, graph?: EvidenceGraph | null): EvidenceGraphNode[] {
