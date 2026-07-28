@@ -28,6 +28,7 @@ from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import ParsedComponent, dedupe_components, parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph
+from app.services.sca_python_environment import environment_metadata, inspect_python_environment
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
 
@@ -78,10 +79,14 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
 
     try:
         parsed = parse_dependency_tree(payload.source_path)
+        python_environment = inspect_python_environment(payload.source_path)
         tool_scan = scan_with_syft_grype(payload.source_path) if payload.enable_tool_scan else None
         tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
-        scan.scan_metadata = {"sca_tool_scan": tool_status.model_dump()}
-        parsed_components = merge_tool_components(parsed.components, tool_scan)
+        scan.scan_metadata = {
+            "sca_tool_scan": tool_status.model_dump(),
+            "python_environment": environment_metadata(python_environment),
+        }
+        parsed_components = merge_tool_components([*parsed.components, *python_environment.components], tool_scan)
         analyzed_components = apply_tool_vulnerabilities(analyze_components(parsed_components), tool_scan)
         records: list[ComponentRecord] = []
         for component in analyzed_components:

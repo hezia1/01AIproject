@@ -32,6 +32,7 @@ from app.repositories.mappers import (
 )
 from app.services.aspm_evidence_graph import build_attack_chains_v2, build_evidence_graph
 from app.services.finding_retest import build_finding_retest_comparison, current_finding_records
+from app.services.sca_dependency_graph import build_dependency_graph
 
 router = APIRouter()
 
@@ -151,6 +152,7 @@ def get_project_security_report(project_id: UUID, db: Session = Depends(get_db))
         findings=[finding_to_schema(item) for item in findings],
         validations=[dast_validation_to_schema(item) for item in validations],
         sandbox_evidence=[sandbox_evidence_to_schema(item) for item in evidence_records],
+        dependency_graph=build_dependency_graph(project, components),
         evidence_graph=build_evidence_graph(
             project_id, project.name, all_findings, components, validations, evidence_records
         ),

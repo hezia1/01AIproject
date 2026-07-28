@@ -2171,6 +2171,11 @@ th {
   stroke-width: 2;
 }
 
+.graph-edge.python_environment {
+  stroke: #7c3aed;
+  stroke-width: 2.4;
+}
+
 .graph-edge.lockfile_inferred {
   stroke-dasharray: 6 5;
 }

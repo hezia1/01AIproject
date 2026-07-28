@@ -5,6 +5,7 @@ from collections import defaultdict
 from app.db_models import ComponentRecord, ProjectRecord
 from app.services.sca_sbom import build_dependency_edge_records, component_ref, project_ref
 from app.services.sca_native_tree import build_native_dependency_edge_records
+from app.services.sca_python_environment import build_python_environment_dependency_edges
 
 
 SEVERITY_WEIGHT = {
@@ -73,12 +74,14 @@ def component_node(component: ComponentRecord) -> dict[str, object]:
 
 def graph_dependency_edges(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, str]]:
     inferred_edges = build_dependency_edge_records(project, components)
-    native_edges = build_native_dependency_edge_records(project, components)
-    if not native_edges:
+    npm_native_edges = build_native_dependency_edge_records(project, components)
+    python_environment_edges = build_python_environment_dependency_edges(project, components)
+    observed_edges = [*npm_native_edges, *python_environment_edges]
+    if not observed_edges:
         return inferred_edges
 
     manifest_edges = [edge for edge in inferred_edges if edge["quality"] == "manifest_direct"]
-    return dedupe_edges([*manifest_edges, *native_edges])
+    return dedupe_edges([*manifest_edges, *observed_edges])
 
 
 def build_upgrade_levers(
@@ -89,7 +92,13 @@ def build_upgrade_levers(
     by_ref = {component_ref(component): component for component in components}
     risky_transitives_by_parent: dict[str, list[ComponentRecord]] = defaultdict(list)
     edges = dependency_edges or graph_dependency_edges(project, components)
-    preferred_quality = "native_tree" if any(edge["quality"] == "native_tree" for edge in edges) else "lockfile_inferred"
+    preferred_quality = (
+        "python_environment"
+        if any(edge["quality"] == "python_environment" for edge in edges)
+        else "native_tree"
+        if any(edge["quality"] == "native_tree" for edge in edges)
+        else "lockfile_inferred"
+    )
     for edge in edges:
         if edge["quality"] != preferred_quality:
             continue
@@ -132,11 +141,12 @@ def graph_summary(nodes: list[dict[str, object]], edges: list[dict[str, object]]
         "manifest_direct_edge_count": sum(1 for edge in edges if edge["quality"] == "manifest_direct"),
         "lockfile_inferred_edge_count": sum(1 for edge in edges if edge["quality"] == "lockfile_inferred"),
         "native_tree_edge_count": sum(1 for edge in edges if edge["quality"] == "native_tree"),
+        "python_environment_edge_count": sum(1 for edge in edges if edge["quality"] == "python_environment"),
     }
 
 
 def dedupe_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:
-    priority = {"manifest_direct": 0, "native_tree": 2, "lockfile_inferred": 1}
+    priority = {"manifest_direct": 0, "native_tree": 2, "python_environment": 3, "lockfile_inferred": 1}
     deduped: dict[tuple[str, str], dict[str, str]] = {}
     for edge in edges:
         key = (edge["source"], edge["target"])

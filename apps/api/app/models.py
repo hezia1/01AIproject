@@ -681,6 +681,7 @@ class ProjectSecurityReport(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     validations: list[DastValidation] = Field(default_factory=list)
     sandbox_evidence: list[SandboxEvidence] = Field(default_factory=list)
+    dependency_graph: dict[str, object] = Field(default_factory=dict)
     evidence_graph: EvidenceGraph
     retest_comparisons: dict[str, FindingRetestComparison] = Field(default_factory=dict)
     capability_boundaries: dict[str, list[str]] = Field(default_factory=dict)
