@@ -430,6 +430,15 @@ class DastLinkSuggestionRequest(BaseModel):
     target_url: str = Field(min_length=1, max_length=1000)
 
 
+class DastVerificationStrategy(BaseModel):
+    id: str
+    name: str
+    description: str
+    scope_summary: str
+    check_items: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class SandboxLinkSuggestionRequest(BaseModel):
     project_id: UUID
     run_command: str = Field(min_length=1, max_length=1000)
@@ -446,6 +455,10 @@ class DastValidationCreate(BaseModel):
     link_source: str = "unlinked"
     link_confidence: int = Field(default=0, ge=0, le=100)
     validator: str | None = None
+    strategy_id: str = "web-baseline"
+    strategy_name: str | None = None
+    scope_summary: str | None = None
+    limitations: str | None = None
     evidence_summary: str | None = None
     request_summary: str | None = None
     response_summary: str | None = None
@@ -461,6 +474,7 @@ class DastProbeRequest(BaseModel):
     link_source: str = "unlinked"
     link_confidence: int = Field(default=0, ge=0, le=100)
     validator: str | None = "auto-dast"
+    strategy_id: str = "web-baseline"
 
 
 class DastValidation(DastValidationCreate):
@@ -476,6 +490,10 @@ class DastValidationUpdate(BaseModel):
     link_confidence: int | None = Field(default=None, ge=0, le=100)
     verdict: DastVerdict | None = None
     validator: str | None = None
+    strategy_id: str | None = None
+    strategy_name: str | None = None
+    scope_summary: str | None = None
+    limitations: str | None = None
     evidence_summary: str | None = None
     request_summary: str | None = None
     response_summary: str | None = None
@@ -499,6 +517,9 @@ class SandboxEvidenceCreate(BaseModel):
     observed_tool_calls: list[dict[str, object]] = Field(default_factory=list)
     evidence_summary: str | None = None
     operator: str | None = None
+    strategy_name: str | None = None
+    purpose: str | None = None
+    limitations: str | None = None
 
 
 class SandboxRunRequest(BaseModel):
@@ -512,6 +533,9 @@ class SandboxRunRequest(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=30)
     operator: str | None = "sandbox-runner"
     image: str | None = None
+    strategy_name: str | None = None
+    purpose: str | None = None
+    limitations: str | None = None
 
 
 class SandboxEvidence(SandboxEvidenceCreate):
@@ -535,6 +559,9 @@ class SandboxEvidenceUpdate(BaseModel):
     observed_tool_calls: list[dict[str, object]] | None = None
     evidence_summary: str | None = None
     operator: str | None = None
+    strategy_name: str | None = None
+    purpose: str | None = None
+    limitations: str | None = None
 
 
 class SandboxCommandTemplate(BaseModel):

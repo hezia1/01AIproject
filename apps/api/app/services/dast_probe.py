@@ -96,8 +96,6 @@ def build_probe_result(
 
     if error:
         verdict = DastVerdict.uncertain
-    elif risk_points >= 4:
-        verdict = DastVerdict.exploitable
     elif risk_points >= 1:
         verdict = DastVerdict.uncertain
     else:

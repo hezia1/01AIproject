@@ -10,6 +10,7 @@ from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, 
 from app.models import (
     DastLinkSuggestionRequest,
     DastProbeRequest,
+    DastVerificationStrategy,
     DastValidation,
     DastValidationCreate,
     DastValidationUpdate,
@@ -19,6 +20,7 @@ from app.models import (
 from app.repositories.mappers import dast_validation_to_schema
 from app.services.dast_probe import probe_target_url
 from app.services.evidence_link_suggestions import build_dast_link_suggestions
+from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
 
 router = APIRouter()
 
@@ -57,6 +59,19 @@ def ensure_dast_enabled(project_id: UUID, db: Session) -> None:
     )
     if project_module is None:
         raise HTTPException(status_code=400, detail="DAST module is not enabled for this project")
+
+
+@router.get("/projects/{project_id}/strategies", response_model=list[DastVerificationStrategy])
+def list_verification_strategies(
+    project_id: UUID,
+    finding_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> list[DastVerificationStrategy]:
+    ensure_dast_enabled(project_id, db)
+    finding = db.get(FindingRecord, str(finding_id)) if finding_id else None
+    if finding_id and (finding is None or finding.project_id != str(project_id)):
+        raise HTTPException(status_code=400, detail="finding_id does not belong to this project")
+    return recommended_dast_strategies(finding)
 
 
 def ensure_links_belong_to_project(
@@ -104,6 +119,11 @@ def create_validation(payload: DastValidationCreate, db: Session = Depends(get_d
         payload.link_confidence,
     )
 
+    finding = db.get(FindingRecord, str(payload.finding_id)) if payload.finding_id else None
+    try:
+        strategy = resolve_dast_strategy(payload.strategy_id, finding)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     record = DastValidationRecord(
         project_id=str(payload.project_id),
         finding_id=str(payload.finding_id) if payload.finding_id else None,
@@ -113,6 +133,10 @@ def create_validation(payload: DastValidationCreate, db: Session = Depends(get_d
         target_url=payload.target_url,
         verdict=payload.verdict.value,
         validator=payload.validator,
+        strategy_id=strategy.id,
+        strategy_name=payload.strategy_name or strategy.name,
+        scope_summary=payload.scope_summary or strategy.scope_summary,
+        limitations=payload.limitations or " ".join(strategy.limitations),
         evidence_summary=payload.evidence_summary,
         request_summary=payload.request_summary,
         response_summary=payload.response_summary,
@@ -136,7 +160,9 @@ def probe_target(payload: DastProbeRequest, db: Session = Depends(get_db)) -> Da
         payload.link_confidence,
     )
 
+    finding = db.get(FindingRecord, str(payload.finding_id)) if payload.finding_id else None
     try:
+        strategy = resolve_dast_strategy(payload.strategy_id, finding)
         probe = probe_target_url(payload.target_url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -150,6 +176,10 @@ def probe_target(payload: DastProbeRequest, db: Session = Depends(get_db)) -> Da
         target_url=probe.target_url,
         verdict=probe.verdict.value,
         validator=payload.validator or "auto-dast",
+        strategy_id=strategy.id,
+        strategy_name=strategy.name,
+        scope_summary=strategy.scope_summary,
+        limitations=" ".join(strategy.limitations),
         evidence_summary=probe.evidence_summary,
         request_summary=probe.request_summary,
         response_summary=probe.response_summary,

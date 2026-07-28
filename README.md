@@ -76,6 +76,7 @@ http://localhost:5173
 - 前端采用“默认简洁、详情按需展开”的展示方式：默认页只显示当前风险、下一步动作和每页 10 条结果；所有多条结果（含高级分析、攻击链、证据关系、扫描历史、图谱节点和单条风险的验证/取证记录）统一每页 10 条并提供翻页；单条风险可展开完整 DAST 请求/响应、SANDBOX 隔离策略与行为账本；综合总览可展开完整整改闭环、全部攻击链和项目级证据图谱。
 - SCA 模块的扫描历史、批次差异、依赖图谱、升级杠杆、工具链预检以及 CycloneDX / SPDX / SCA 报告导出均保留在“高级供应链分析”折叠区，避免占用日常治理视图。
 - SAST 模块的规则化 Agent 复核入口、SAST / AGENT 的风险分类与严重等级统计，均保留在各自的“高级分析与复核信息”折叠区；SANDBOX 的安全命令模板保留在运行时取证工作台。
+- DAST 现提供随上游风险变化的验证策略：策略会明确“本次会检查什么、只会做什么、不能证明什么”，并将策略、范围和能力边界随验证记录持久化；SANDBOX 会将取证目的、隔离策略和能力边界随运行证据持久化。
 
 ### 还缺少
 
@@ -88,7 +89,7 @@ http://localhost:5173
 ### 前端展示与能力边界
 
 - “代码中存在”不等同于“前端已开放”。本仓库已将现有的 SCA 高级分析、SAST Agent 复核、SANDBOX 模板、ASPM 完整整改闭环和证据图谱接回当前治理页；不再依赖不可访问的旧导航页面。
-- DAST 当前是**关联风险后的轻量 Web 基础验证**：会请求目标 URL，并检查 HTTP/HTTPS、响应状态、响应耗时、Server Header 和基础安全响应头。它的三色裁决不能替代 SQL 注入、鉴权绕过等业务漏洞的真实利用证明。
+- DAST 当前是**关联风险后的轻量 Web 基础验证**：会请求目标 URL，并检查 HTTP/HTTPS、响应状态、响应耗时、Server Header 和基础安全响应头。新的基础检查风险会标为“需要进一步确认”，不会再被标记为“确认可利用”；它不能替代 SQL 注入、鉴权绕过等业务漏洞的真实利用证明。
 - SANDBOX 当前是 Docker 受控执行：禁网、只读挂载、CPU/内存/PID 限制、危险命令拦截、输出脱敏及执行摘要均已实现；“文件、网络、进程、工具调用”当前主要是隔离策略与执行摘要，尚不是 eBPF/Sysmon 级真实行为探针。
 - 证据链只由用户明确选择的风险/DAST 记录，或高置信度推荐经执行确认后写入。独立 URL 检查和独立命令运行会明确标为不计入漏洞证据链。
 
@@ -236,6 +237,7 @@ GET  /api/agent/projects/{project_id}/findings
 POST  /api/dast/validations
 POST  /api/dast/probe
 POST  /api/dast/link-suggestions
+GET   /api/dast/projects/{project_id}/strategies?finding_id={finding_id}
 GET   /api/dast/projects/{project_id}/validations
 PATCH /api/dast/validations/{validation_id}
 ```

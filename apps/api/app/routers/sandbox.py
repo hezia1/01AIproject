@@ -94,6 +94,9 @@ def create_evidence(payload: SandboxEvidenceCreate, db: Session = Depends(get_db
         observed_tool_calls=payload.observed_tool_calls,
         evidence_summary=payload.evidence_summary,
         operator=payload.operator,
+        strategy_name=payload.strategy_name,
+        purpose=payload.purpose,
+        limitations=payload.limitations,
     )
     db.add(record)
     db.commit()
@@ -171,6 +174,9 @@ def run_evidence(payload: SandboxRunRequest, db: Session = Depends(get_db)) -> S
         ],
         evidence_summary=result.evidence_summary,
         operator=payload.operator or "sandbox-runner",
+        strategy_name=payload.strategy_name or "隔离受控执行",
+        purpose=payload.purpose or "在禁网、只读的容器中执行选定命令，补充运行时执行结果和隔离策略证据。",
+        limitations=payload.limitations or "命令执行成功不等于漏洞成立；当前不采集真实文件访问、网络连接或完整进程树。",
     )
     db.add(record)
     db.commit()
