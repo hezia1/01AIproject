@@ -18,19 +18,23 @@ SEVERITY_WEIGHT = {
 }
 
 
-def build_dependency_graph(project: ProjectRecord, components: list[ComponentRecord]) -> dict[str, object]:
+def build_dependency_graph(
+    project: ProjectRecord,
+    components: list[ComponentRecord],
+    dependency_edges: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
     nodes = [project_node(project)]
     nodes.extend(component_node(component) for component in components)
-    dependency_edges = graph_dependency_edges(project, components)
+    resolved_edges = dependency_edges if dependency_edges is not None else graph_dependency_edges(project, components)
     edges = [
         {
             "source": edge["source"],
             "target": edge["target"],
             "quality": edge["quality"],
         }
-        for edge in dependency_edges
+        for edge in resolved_edges
     ]
-    upgrade_levers = build_upgrade_levers(project, components, dependency_edges)
+    upgrade_levers = build_upgrade_levers(project, components, resolved_edges)
     return {
         "project_id": str(project.id),
         "nodes": nodes,
@@ -82,6 +86,26 @@ def graph_dependency_edges(project: ProjectRecord, components: list[ComponentRec
 
     manifest_edges = [edge for edge in inferred_edges if edge["quality"] == "manifest_direct"]
     return dedupe_edges([*manifest_edges, *observed_edges])
+
+
+def dependency_snapshot_edges(value: object) -> list[dict[str, str]] | None:
+    """Validate persisted scan metadata before using it as an immutable graph snapshot."""
+    if not isinstance(value, dict):
+        return None
+    raw_edges = value.get("edges")
+    if not isinstance(raw_edges, list):
+        return None
+    allowed_quality = {"manifest_direct", "lockfile_inferred", "native_tree", "python_environment"}
+    edges = [
+        {"source": item["source"], "target": item["target"], "quality": item["quality"]}
+        for item in raw_edges
+        if isinstance(item, dict)
+        and isinstance(item.get("source"), str)
+        and isinstance(item.get("target"), str)
+        and isinstance(item.get("quality"), str)
+        and item["quality"] in allowed_quality
+    ]
+    return dedupe_edges(edges)
 
 
 def build_upgrade_levers(

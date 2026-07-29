@@ -27,7 +27,7 @@ from app.models import (
 from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import ParsedComponent, dedupe_components, parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
-from app.services.sca_dependency_graph import build_dependency_graph
+from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
 from app.services.sca_python_environment import environment_metadata, inspect_python_environment
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
@@ -55,7 +55,8 @@ def get_sca_tool_health() -> ScaToolHealth:
 
 @router.post("/scan", response_model=ScaScanResult)
 def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaScanResult:
-    if db.get(ProjectRecord, str(payload.project_id)) is None:
+    project = db.get(ProjectRecord, str(payload.project_id))
+    if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
     project_module = db.scalar(
@@ -82,10 +83,6 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         python_environment = inspect_python_environment(payload.source_path)
         tool_scan = scan_with_syft_grype(payload.source_path) if payload.enable_tool_scan else None
         tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
-        scan.scan_metadata = {
-            "sca_tool_scan": tool_status.model_dump(),
-            "python_environment": environment_metadata(python_environment),
-        }
         parsed_components = merge_tool_components([*parsed.components, *python_environment.components], tool_scan)
         analyzed_components = apply_tool_vulnerabilities(analyze_components(parsed_components), tool_scan)
         records: list[ComponentRecord] = []
@@ -114,6 +111,17 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             records.append(record)
         db.flush()
         create_sca_findings(db, str(payload.project_id), scan.id, records)
+        dependency_graph = build_dependency_graph(project, records)
+        scan.scan_metadata = {
+            "sca_tool_scan": tool_status.model_dump(),
+            "python_environment": environment_metadata(python_environment),
+            "osv_lookup": osv_lookup_metadata(analyzed_components),
+            "dependency_snapshot": {
+                "captured_at": datetime.utcnow().isoformat(),
+                "edges": dependency_graph["edges"],
+                "summary": dependency_graph["summary"],
+            },
+        }
 
         scan.status = ScanStatus.completed.value
         scan.finished_at = datetime.utcnow()
@@ -196,6 +204,8 @@ def list_project_sca_scan_history(project_id: UUID, db: Session = Depends(get_db
                 vulnerable_count=sum(1 for component in components if component.risk_status == "vulnerable"),
                 license_risk_count=sum(1 for component in components if component.license_risk in {"restricted", "review_required", "unknown"}),
                 tool_status=scan_tool_status(scan),
+                osv_status=osv_lookup_status(scan),
+                osv_error_count=osv_lookup_error_count(scan),
             )
         )
     return history
@@ -304,7 +314,13 @@ def get_project_dependency_graph(
     if not records:
         raise HTTPException(status_code=400, detail="No SCA components found. Run SCA scan before building graph.")
 
-    return build_dependency_graph(project, records)
+    resolved_scan_id = scan_task_id or latest_sca_scan_id(db, project_id)
+    snapshot = db.get(ScanTaskRecord, str(resolved_scan_id)) if resolved_scan_id else None
+    return build_dependency_graph(
+        project,
+        records,
+        dependency_edges=dependency_snapshot_edges((snapshot.scan_metadata or {}).get("dependency_snapshot")) if snapshot else None,
+    )
 
 
 def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToolStatus:
@@ -336,6 +352,38 @@ def scan_tool_status(scan: ScanTaskRecord | None) -> ScaToolStatus | None:
     if not isinstance(value, dict):
         return None
     return ScaToolStatus(**value)
+
+
+def osv_lookup_metadata(components: list[ParsedComponent]) -> dict[str, object]:
+    errors = [component.osv_error for component in components if component.osv_error]
+    checked_count = sum(1 for component in components if component.osv_checked)
+    if errors:
+        status = "offline_degraded"
+    elif checked_count:
+        status = "available"
+    else:
+        status = "not_used"
+    return {
+        "status": status,
+        "checked_component_count": checked_count,
+        "error_count": len(errors),
+    }
+
+
+def osv_lookup_status(scan: ScanTaskRecord) -> str:
+    value = scan_metadata_value(scan, "osv_lookup")
+    return str(value.get("status") or "not_checked") if value else "not_checked"
+
+
+def osv_lookup_error_count(scan: ScanTaskRecord) -> int:
+    value = scan_metadata_value(scan, "osv_lookup")
+    return int(value.get("error_count") or 0) if value else 0
+
+
+def scan_metadata_value(scan: ScanTaskRecord, key: str) -> dict | None:
+    metadata = scan.scan_metadata or {}
+    value = metadata.get(key) if isinstance(metadata, dict) else None
+    return value if isinstance(value, dict) else None
 
 
 def create_sca_findings(

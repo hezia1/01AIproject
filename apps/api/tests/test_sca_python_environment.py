@@ -6,6 +6,7 @@ from app.services.sca_python_environment import (
     build_python_environment_edges_from_inspection,
     parse_pip_inspect_payload,
 )
+from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
 
 
 def test_pip_inspect_builds_actual_python_dependency_edges() -> None:
@@ -56,3 +57,20 @@ def component(project: ProjectRecord, name: str, version: str) -> ComponentRecor
         risk_status="not_checked",
         vulnerability_ids=[],
     )
+
+
+def test_persisted_dependency_snapshot_is_used_without_rechecking_the_environment() -> None:
+    project = ProjectRecord(id=str(uuid4()), name="Demo", source_path="C:/missing", default_branch="main")
+    requests = component(project, "requests", "2.32.0")
+    urllib3 = component(project, "urllib3", "2.2.1")
+    snapshot = {
+        "edges": [
+            {"source": f"project:{project.id}", "target": "PyPI:requests@2.32.0", "quality": "python_environment"},
+            {"source": "PyPI:requests@2.32.0", "target": "PyPI:urllib3@2.2.1", "quality": "python_environment"},
+        ]
+    }
+
+    graph = build_dependency_graph(project, [requests, urllib3], dependency_edges=dependency_snapshot_edges(snapshot))
+
+    assert graph["summary"]["python_environment_edge_count"] == 2
+    assert graph["summary"]["edge_count"] == 2

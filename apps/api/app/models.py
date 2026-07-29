@@ -315,6 +315,8 @@ class ScaScanHistoryItem(BaseModel):
     vulnerable_count: int = 0
     license_risk_count: int = 0
     tool_status: ScaToolStatus | None = None
+    osv_status: str = "not_checked"
+    osv_error_count: int = 0
 
 
 class ScaScanDiffItem(BaseModel):

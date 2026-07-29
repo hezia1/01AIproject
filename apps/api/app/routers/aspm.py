@@ -32,7 +32,7 @@ from app.repositories.mappers import (
 )
 from app.services.aspm_evidence_graph import build_attack_chains_v2, build_evidence_graph
 from app.services.finding_retest import build_finding_retest_comparison, current_finding_records
-from app.services.sca_dependency_graph import build_dependency_graph
+from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
 
 router = APIRouter()
 
@@ -144,15 +144,29 @@ def get_project_security_report(project_id: UUID, db: Session = Depends(get_db))
             .order_by(SandboxEvidenceRecord.created_at.desc())
         ).all()
     )
+    summary = get_project_summary(project_id, db)
+    latest_sca_scan = (
+        db.get(ScanTaskRecord, str(summary.sca_governance.latest_scan_id))
+        if summary.sca_governance.latest_scan_id
+        else None
+    )
+    snapshot_components = [
+        item for item in components
+        if latest_sca_scan is not None and str(item.scan_task_id) == str(latest_sca_scan.id)
+    ]
 
     return ProjectSecurityReport(
         project=project_to_schema(project),
-        summary=get_project_summary(project_id, db),
+        summary=summary,
         components=[component_to_schema(item) for item in components],
         findings=[finding_to_schema(item) for item in findings],
         validations=[dast_validation_to_schema(item) for item in validations],
         sandbox_evidence=[sandbox_evidence_to_schema(item) for item in evidence_records],
-        dependency_graph=build_dependency_graph(project, components),
+        dependency_graph=build_dependency_graph(
+            project,
+            snapshot_components or components,
+            dependency_edges=dependency_snapshot_edges((latest_sca_scan.scan_metadata or {}).get("dependency_snapshot")) if latest_sca_scan else None,
+        ),
         evidence_graph=build_evidence_graph(
             project_id, project.name, all_findings, components, validations, evidence_records
         ),
