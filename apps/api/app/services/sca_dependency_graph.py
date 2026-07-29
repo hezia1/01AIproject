@@ -95,7 +95,7 @@ def dependency_snapshot_edges(value: object) -> list[dict[str, str]] | None:
     raw_edges = value.get("edges")
     if not isinstance(raw_edges, list):
         return None
-    allowed_quality = {"manifest_direct", "lockfile_inferred", "native_tree", "python_environment"}
+    allowed_quality = {"manifest_direct", "lockfile_inferred", "native_tree", "python_environment", "maven_native_tree", "go_native_tree"}
     edges = [
         {"source": item["source"], "target": item["target"], "quality": item["quality"]}
         for item in raw_edges
@@ -119,6 +119,8 @@ def build_upgrade_levers(
     preferred_quality = (
         "python_environment"
         if any(edge["quality"] == "python_environment" for edge in edges)
+        else "maven_native_tree" if any(edge["quality"] == "maven_native_tree" for edge in edges)
+        else "go_native_tree" if any(edge["quality"] == "go_native_tree" for edge in edges)
         else "native_tree"
         if any(edge["quality"] == "native_tree" for edge in edges)
         else "lockfile_inferred"
@@ -166,11 +168,13 @@ def graph_summary(nodes: list[dict[str, object]], edges: list[dict[str, object]]
         "lockfile_inferred_edge_count": sum(1 for edge in edges if edge["quality"] == "lockfile_inferred"),
         "native_tree_edge_count": sum(1 for edge in edges if edge["quality"] == "native_tree"),
         "python_environment_edge_count": sum(1 for edge in edges if edge["quality"] == "python_environment"),
+        "maven_native_tree_edge_count": sum(1 for edge in edges if edge["quality"] == "maven_native_tree"),
+        "go_native_tree_edge_count": sum(1 for edge in edges if edge["quality"] == "go_native_tree"),
     }
 
 
 def dedupe_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:
-    priority = {"manifest_direct": 0, "native_tree": 2, "python_environment": 3, "lockfile_inferred": 1}
+    priority = {"manifest_direct": 0, "native_tree": 2, "python_environment": 4, "maven_native_tree": 3, "go_native_tree": 3, "lockfile_inferred": 1}
     deduped: dict[tuple[str, str], dict[str, str]] = {}
     for edge in edges:
         key = (edge["source"], edge["target"])

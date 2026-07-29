@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ from app.services.sca_parser import ParsedComponent
 
 SYFT_IMAGE = "anchore/syft:latest"
 GRYPE_IMAGE = "anchore/grype:latest"
+TRIVY_IMAGE = "aquasec/trivy:latest"
 TOOL_TIMEOUT_SECONDS = 120
 HEALTH_TIMEOUT_SECONDS = 20
 
@@ -26,6 +28,7 @@ class ToolVulnerability:
     severity: str | None
     summary: str | None
     remediation: str | None
+    tool: str = "grype"
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,7 @@ class ToolScanResult:
     vulnerabilities: list[ToolVulnerability]
     errors: list[str]
     grype_input: str | None = None
+    trivy_vulnerabilities: int = 0
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,19 @@ class ToolHealthResult:
     status: str
     recommended_grype_input: str
     checks: list[ToolHealthCheck]
+
+
+def offline_assets_dir() -> Path:
+    configured = os.getenv("SCA_OFFLINE_DIR")
+    return Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[3] / "artifacts" / "sca-offline"
+
+
+def grype_cache_dir() -> Path:
+    return offline_assets_dir() / "grype-cache"
+
+
+def trivy_cache_dir() -> Path:
+    return offline_assets_dir() / "trivy-cache"
 
 
 def check_syft_grype_health() -> ToolHealthResult:
@@ -84,8 +101,9 @@ def check_syft_grype_health() -> ToolHealthResult:
     checks.append(ToolHealthCheck(name="docker_engine", status="success", detail=f"server {docker_info[1]}"))
     checks.append(check_image("syft_image", SYFT_IMAGE, "docker pull anchore/syft:latest"))
     checks.append(check_image("grype_image", GRYPE_IMAGE, "docker pull anchore/grype:latest"))
+    checks.append(check_image("trivy_image", TRIVY_IMAGE, "docker pull aquasec/trivy:latest"))
 
-    grype_db = run_health_command(["docker", "run", "--rm", GRYPE_IMAGE, "db", "status"])
+    grype_db = run_health_command(["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"])
     if grype_db[0] == 0:
         checks.append(ToolHealthCheck(name="grype_db", status="success", detail=grype_db[1]))
     else:
@@ -97,6 +115,21 @@ def check_syft_grype_health() -> ToolHealthResult:
                 remediation="首次运行可能需要联网下载 Grype 漏洞库；如处于离线环境，需要提前准备 Grype DB。",
             )
         )
+
+    trivy_db = trivy_cache_dir() / "db" / "trivy.db"
+    trivy_java_db = trivy_cache_dir() / "java-db" / "trivy-java.db"
+    checks.append(ToolHealthCheck(
+        name="trivy_db",
+        status="success" if trivy_db.is_file() else "warning",
+        detail=str(trivy_db) if trivy_db.is_file() else "offline vulnerability DB not found",
+        remediation="在联网机器执行 Trivy 数据库下载，并将 artifacts/sca-offline/trivy-cache 带入沙箱。",
+    ))
+    checks.append(ToolHealthCheck(
+        name="trivy_java_db",
+        status="success" if trivy_java_db.is_file() else "warning",
+        detail=str(trivy_java_db) if trivy_java_db.is_file() else "offline Java DB not found",
+        remediation="如需扫描 Maven/JAR，预下载 Trivy Java 数据库。",
+    ))
 
     failed = any(check.status == "failed" for check in checks)
     warning = any(check.status == "warning" for check in checks)
@@ -147,6 +180,7 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
     errors: list[str] = []
     syft_components: list[ParsedComponent] = []
     grype_vulnerabilities: list[ToolVulnerability] = []
+    trivy_vulnerabilities: list[ToolVulnerability] = []
     grype_input: str | None = None
 
     syft_payload, syft_error = run_tool_json(root, SYFT_IMAGE, ["dir:/workspace", "-o", "cyclonedx-json"])
@@ -161,11 +195,18 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
     elif grype_payload:
         grype_vulnerabilities = parse_grype_json(grype_payload)
 
+    trivy_payload, trivy_error = run_trivy(root)
+    if trivy_error:
+        errors.append(f"Trivy failed: {trivy_error}")
+    elif trivy_payload:
+        trivy_vulnerabilities = parse_trivy_json(trivy_payload)
+
     return ToolScanResult(
         components=syft_components,
-        vulnerabilities=grype_vulnerabilities,
+        vulnerabilities=[*grype_vulnerabilities, *trivy_vulnerabilities],
         errors=errors,
         grype_input=grype_input,
+        trivy_vulnerabilities=len(trivy_vulnerabilities),
     )
 
 
@@ -178,12 +219,25 @@ def run_grype(root: Path, syft_payload: dict | None) -> tuple[dict | None, str |
                 root,
                 GRYPE_IMAGE,
                 ["sbom:/tmp/sca/syft.cdx.json", "-o", "json"],
-                extra_mounts=[(Path(temp_dir), "/tmp/sca")],
+                container_env={"XDG_CACHE_HOME": "/cache", "GRYPE_DB_AUTO_UPDATE": "false"},
+                extra_mounts=[(Path(temp_dir), "/tmp/sca"), (grype_cache_dir(), "/cache")],
             )
             return payload, error, "syft-sbom"
 
-    payload, error = run_tool_json(root, GRYPE_IMAGE, ["dir:/workspace", "-o", "json"])
+    payload, error = run_tool_json(root, GRYPE_IMAGE, ["dir:/workspace", "-o", "json"], extra_mounts=[(grype_cache_dir(), "/cache")], container_env={"XDG_CACHE_HOME": "/cache", "GRYPE_DB_AUTO_UPDATE": "false"})
     return payload, error, "directory"
+
+
+def run_trivy(root: Path) -> tuple[dict | None, str | None]:
+    cache_dir = trivy_cache_dir()
+    if not (cache_dir / "db" / "trivy.db").is_file():
+        return None, "offline DB not found; Trivy scan was skipped"
+    return run_tool_json(
+        root,
+        TRIVY_IMAGE,
+        ["fs", "--scanners", "vuln", "--format", "json", "--skip-db-update", "--skip-java-db-update", "--cache-dir", "/cache", "/workspace"],
+        extra_mounts=[(cache_dir, "/cache")],
+    )
 
 
 def temporary_sbom_dir(root: Path) -> tempfile.TemporaryDirectory:
@@ -198,6 +252,7 @@ def run_tool_json(
     image: str,
     args: list[str],
     extra_mounts: list[tuple[Path, str]] | None = None,
+    container_env: dict[str, str] | None = None,
 ) -> tuple[dict | None, str | None]:
     command = [
         "docker",
@@ -209,7 +264,10 @@ def run_tool_json(
         "/workspace",
     ]
     for host_path, container_path in extra_mounts or []:
+        host_path.mkdir(parents=True, exist_ok=True)
         command.extend(["-v", f"{host_path}:{container_path}:ro"])
+    for key, value in (container_env or {}).items():
+        command.extend(["-e", f"{key}={value}"])
     command.extend([image, *args])
     try:
         completed = subprocess.run(
@@ -288,6 +346,42 @@ def parse_grype_json(payload: dict) -> list[ToolVulnerability]:
             )
         )
     return vulnerabilities
+
+
+def parse_trivy_json(payload: dict) -> list[ToolVulnerability]:
+    vulnerabilities: list[ToolVulnerability] = []
+    for result in payload.get("Results", []):
+        if not isinstance(result, dict):
+            continue
+        ecosystem = trivy_ecosystem(str(result.get("Target") or ""))
+        for item in result.get("Vulnerabilities", []) or []:
+            if not isinstance(item, dict) or not isinstance(item.get("PkgName"), str) or not isinstance(item.get("VulnerabilityID"), str):
+                continue
+            fixed = item.get("FixedVersion")
+            vulnerabilities.append(ToolVulnerability(
+                ecosystem=ecosystem,
+                name=item["PkgName"],
+                version=str(item.get("InstalledVersion")) if item.get("InstalledVersion") else None,
+                vulnerability_id=item["VulnerabilityID"],
+                severity=normalize_severity(item.get("Severity")),
+                summary=item.get("Title") if isinstance(item.get("Title"), str) else None,
+                remediation=f"升级到修复版本：{fixed}" if fixed else None,
+                tool="trivy",
+            ))
+    return vulnerabilities
+
+
+def trivy_ecosystem(target: str) -> str:
+    lower = target.lower()
+    if "package" in lower or "npm" in lower or "yarn" in lower or "pnpm" in lower:
+        return "npm"
+    if "requirements" in lower or "poetry" in lower or "pipfile" in lower:
+        return "pypi"
+    if "pom.xml" in lower:
+        return "maven"
+    if "go.mod" in lower:
+        return "go"
+    return "unknown"
 
 
 def ecosystem_from_purl(purl: str | None) -> str | None:

@@ -29,6 +29,7 @@ from app.services.sca_parser import ParsedComponent, dedupe_components, parse_de
 from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
 from app.services.sca_python_environment import environment_metadata, inspect_python_environment
+from app.services.sca_artifacts import collect_artifact_hashes
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
 
@@ -116,6 +117,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             "sca_tool_scan": tool_status.model_dump(),
             "python_environment": environment_metadata(python_environment),
             "osv_lookup": osv_lookup_metadata(analyzed_components),
+            "artifact_hashes": collect_artifact_hashes(payload.source_path, parsed_components),
             "dependency_snapshot": {
                 "captured_at": datetime.utcnow().isoformat(),
                 "edges": dependency_graph["edges"],
@@ -275,6 +277,12 @@ def export_project_sca_report(
         top_risk_components=top_risk_components(components),
         trend=build_scan_diff_result(db, project_id, resolved_scan_id),
         recommendations=report_recommendations(components),
+        evidence={
+            "artifact_hashes": scan_metadata_value(scan, "artifact_hashes") or {},
+            "python_environment": scan_metadata_value(scan, "python_environment") or {},
+            "osv_lookup": scan_metadata_value(scan, "osv_lookup") or {},
+            "dependency_snapshot": scan_metadata_value(scan, "dependency_snapshot") or {},
+        },
     )
 
 
@@ -340,6 +348,7 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         syft_component_count=len(tool_scan.components),
         grype_vulnerability_count=len(tool_scan.vulnerabilities),
         grype_input=tool_scan.grype_input,
+        trivy_vulnerability_count=tool_scan.trivy_vulnerabilities,
         errors=tool_scan.errors,
     )
 
@@ -548,7 +557,7 @@ def apply_tool_vulnerabilities(
                 severity=highest_severity,
                 risk_summary=risk_summary,
                 remediation=remediation,
-                risk_source=merge_risk_source(component.risk_source, "grype"),
+                risk_source=merge_risk_source(component.risk_source, matches[0].tool),
             )
         )
     return updated

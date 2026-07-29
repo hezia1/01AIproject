@@ -429,3 +429,18 @@ AI网安项目/
 - DAST 需要可访问的目标 Web 地址。
 - SANDBOX 需要 Docker Desktop 和待使用的本地/已拉取镜像。
 - 平台目前没有登录、权限与租户隔离，不应直接暴露到公网。
+
+### SCA 离线增强扫描（沙箱准备）
+
+- SCA 会对依赖清单和本地已安装 Python 包的 `RECORD` 文件记录 SHA-256；哈希仅作为扫描批次证据保存，不上传包内容。
+- 依赖图优先使用可获得的真实关系：npm `npm ls`、Python `pip inspect`、Maven `mvn dependency:tree`、Go `go mod graph`；工具或依赖缓存不可用时自动回退到锁文件推断。
+- Trivy 支持完全离线运行：将 `artifacts/sca-offline/trivy-cache` 预下载到沙箱，并在扫描中强制跳过在线数据库更新；缺少缓存会在工具预检和扫描结果中明确提示。
+- Grype 支持从 `artifacts/sca-offline/grype-cache` 读取已导入的离线漏洞库，扫描时禁用自动更新。若 Docker 容器无法联网，可在 Windows 主机下载数据库压缩包后执行 `grype db import` 导入。
+- `artifacts/` 是本地运行资源，已由 Git 忽略。联网机器上准备好 Syft、Grype、Trivy 镜像和离线缓存后，将整个 `artifacts/sca-offline` 目录与镜像 tar 包带入沙箱。
+
+```text
+artifacts/sca-offline/
+  images/       # syft.tar、grype.tar、trivy.tar
+  grype-cache/  # Grype 导入后的离线漏洞库
+  trivy-cache/  # Trivy 漏洞库与 Java 索引库
+```

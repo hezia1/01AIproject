@@ -14,3 +14,6 @@ dist/
 data/
 outputs/
 logs/
+
+# Downloaded scanners and offline vulnerability databases are local deployment assets.
+artifacts/

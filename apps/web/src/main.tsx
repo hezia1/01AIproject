@@ -15,7 +15,7 @@ type ProjectAssetDraft = Pick<ProjectDraft, "runtime_url" | "api_base_url" | "sa
 type ProjectModule = { project_id: string; module_key: ModuleKey; enabled: boolean; config: Record<string, unknown> };
 type ProjectAssetProbe = { project_id: string; source_path: string | null; path_exists: boolean; sca_files: string[]; source_files: string[]; agent_files: string[]; recommended_tasks: ("sca" | "sast" | "agent")[]; message: string };
 type Component = { id: string; ecosystem: string; name: string; version: string | null; dependency_type: string; source_file: string; package_manager: string | null; license?: string | null; risk_status?: string; vulnerability_ids?: string[]; severity?: Severity | null; risk_summary?: string | null; remediation?: string | null; license_risk?: string | null; risk_source?: string | null; osv_checked?: boolean; osv_error?: string | null };
-type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: number; grype_vulnerability_count: number; grype_input?: string | null; errors: string[] };
+type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: number; grype_vulnerability_count: number; trivy_vulnerability_count?: number; grype_input?: string | null; errors: string[] };
 type ScaToolHealthCheck = { name: string; status: string; detail: string | null; remediation: string | null };
 type ScaToolHealth = { status: string; recommended_grype_input: string; checks: ScaToolHealthCheck[] };
 type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[]; tool_status?: ScaToolStatus | null };
@@ -1807,6 +1807,7 @@ function ScaGovernancePanel({ summary }: { summary?: ScaGovernanceSummary }) {
       <div><span>增强引擎</span><strong>{toolStatus ? toolStatusLabel(toolStatus.status) : "未启用"}</strong></div>
       <div><span>Syft 组件</span><strong>{toolStatus?.syft_component_count ?? 0}</strong></div>
       <div><span>Grype 漏洞</span><strong>{toolStatus?.grype_vulnerability_count ?? 0}</strong></div>
+      <div><span>Trivy 漏洞</span><strong>{toolStatus?.trivy_vulnerability_count ?? 0}</strong></div>
       <div><span>Grype 输入</span><strong>{grypeInputLabel(toolStatus?.grype_input)}</strong></div>
       <div><span>扫描状态</span><strong>{scanStatusLabel(summary?.latest_scan_status)}</strong></div>
     </div>
@@ -1839,7 +1840,7 @@ function buildSecurityReportHtml(report: SecurityReport) {
 }
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character] ?? character)); }
 function safeFilename(value: string) { return value.replace(/[\\/:*?"<>|]/g, "-").trim() || "project"; }
-function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "grype" ? "Grype" : value === "syft" ? "Syft" : value === "osv+grype" ? "OSV + Grype" : value === "local_rule+grype" ? "本地规则 + Grype" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
+function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "grype" ? "Grype" : value === "trivy" ? "Trivy（离线库）" : value === "syft" ? "Syft" : value === "osv+grype" ? "OSV + Grype" : value === "osv+trivy" ? "OSV + Trivy" : value === "local_rule+grype" ? "本地规则 + Grype" : value === "local_rule+trivy" ? "本地规则 + Trivy" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
 function riskStatusLabel(value?: string | null) { return value === "vulnerable" ? "存在漏洞" : value === "license-risk" ? "许可证风险" : value === "review-required" ? "需要复核" : value === "clean" ? "无风险" : value === "not_checked" ? "未检查" : value ?? "未知"; }
 function severityLabel(value?: string | null) { return value === "critical" ? "严重" : value === "high" ? "高危" : value === "medium" ? "中危" : value === "low" ? "低危" : value === "info" ? "提示" : value === "none" ? "无等级" : value ?? "-"; }
 function dependencyTypeLabel(value?: string | null) { return value === "runtime" ? "运行依赖" : value === "development" ? "开发依赖" : value === "optional" ? "可选依赖" : value === "peer" ? "对等依赖" : value === "test" ? "测试依赖" : value === "transitive" ? "传递依赖" : value === "compile" ? "编译依赖" : value === "provided" ? "容器提供" : value === "system" ? "系统依赖" : value === "import" ? "导入依赖" : value ?? "-"; }
@@ -1863,7 +1864,7 @@ function moduleOverviewText(moduleKey: Exclude<ModuleKey, "aspm">, components: C
   if (moduleKey === "dast") return `${validations.length} 条验证记录，${validations.filter((item) => item.verdict === "uncertain").length} 项需要补充验证`;
   return `${evidence.length} 条沙箱证据，${evidence.filter((item) => item.finding_id || item.component_id || item.validation_id).length} 条已关联`;
 }
-function toolHealthNameLabel(value?: string | null) { return value === "docker_cli" ? "Docker CLI" : value === "docker_engine" ? "Docker Engine" : value === "syft_image" ? "Syft 镜像" : value === "grype_image" ? "Grype 镜像" : value === "grype_db" ? "Grype 漏洞库" : value === "api" ? "后端 API" : value ?? "-"; }
+function toolHealthNameLabel(value?: string | null) { return value === "docker_cli" ? "Docker CLI" : value === "docker_engine" ? "Docker Engine" : value === "syft_image" ? "Syft 镜像" : value === "grype_image" ? "Grype 镜像" : value === "grype_db" ? "Grype 离线漏洞库" : value === "trivy_image" ? "Trivy 镜像" : value === "trivy_db" ? "Trivy 离线漏洞库" : value === "trivy_java_db" ? "Trivy Java 索引库" : value === "api" ? "后端 API" : value ?? "-"; }
 function scaChangeTypeLabel(value?: string | null) { return value === "added" ? "新增组件" : value === "removed" ? "移除组件" : value === "version_changed" ? "版本变化" : value === "risk_added" ? "新增风险" : value === "risk_removed" ? "风险消失" : value === "risk_changed" ? "风险变化" : value === "license_risk_changed" ? "许可证变化" : value ?? "-"; }
 function normalizeFindingStatus(status: FindingStatus) { return status === "pending" ? "open" : status === "retest" ? "fixing" : status === "closed" ? "fixed" : status; }
 function statusLabel(status: FindingStatus) { return status === "open" ? "待确认" : status === "confirmed" ? "已确认" : status === "fixing" ? "修复中" : status === "fixed" ? "已修复" : status === "accepted_risk" ? "接受风险" : status === "false_positive" ? "误报" : status; }
@@ -1879,6 +1880,8 @@ function dependencyEdgeSummary(components: Component[], graph?: DependencyGraph 
       manifestDirect: graph.summary.manifest_direct_edge_count ?? 0,
       nativeTree: graph.summary.native_tree_edge_count ?? 0,
       pythonEnvironment: graph.summary.python_environment_edge_count ?? 0,
+      mavenNativeTree: graph.summary.maven_native_tree_edge_count ?? 0,
+      goNativeTree: graph.summary.go_native_tree_edge_count ?? 0,
       lockfileInferred: graph.summary.lockfile_inferred_edge_count ?? 0,
       total: graph.summary.edge_count ?? 0,
     };
@@ -1891,9 +1894,9 @@ function dependencyEdgeSummary(components: Component[], graph?: DependencyGraph 
       if (componentsShareDependencyContext(parent, child)) lockfileInferred += 1;
     }
   }
-  return { manifestDirect: direct.length, nativeTree: 0, pythonEnvironment: 0, lockfileInferred, total: direct.length + lockfileInferred };
+  return { manifestDirect: direct.length, nativeTree: 0, pythonEnvironment: 0, mavenNativeTree: 0, goNativeTree: 0, lockfileInferred, total: direct.length + lockfileInferred };
 }
-function dependencyRelationshipSourceLabel(value: string) { return value === "python_environment" ? "Python 实际环境（pip inspect）" : value === "native_tree" ? "NPM 原生依赖树" : value === "lockfile_inferred" ? "锁文件推断" : value === "manifest_direct" ? "项目依赖清单" : value; }
+function dependencyRelationshipSourceLabel(value: string) { return value === "python_environment" ? "Python 实际环境（pip inspect）" : value === "native_tree" ? "NPM 原生依赖树" : value === "maven_native_tree" ? "Maven 原生依赖树" : value === "go_native_tree" ? "Go 原生依赖树" : value === "lockfile_inferred" ? "锁文件推断" : value === "manifest_direct" ? "项目依赖清单" : value; }
 function graphLayout(graph: DependencyGraph) {
   const groups = {
     project: graph.nodes.filter((node) => node.kind === "project"),

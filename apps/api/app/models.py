@@ -275,6 +275,7 @@ class ScaToolStatus(BaseModel):
     syft_component_count: int = 0
     grype_vulnerability_count: int = 0
     grype_input: str | None = None
+    trivy_vulnerability_count: int = 0
     errors: list[str] = Field(default_factory=list)
 
 
@@ -378,6 +379,7 @@ class ScaReport(BaseModel):
     top_risk_components: list[ScaReportComponent] = Field(default_factory=list)
     trend: ScaScanDiffResult | None = None
     recommendations: list[str] = Field(default_factory=list)
+    evidence: dict[str, object] = Field(default_factory=dict)
 
 
 class SastScanRequest(BaseModel):

@@ -10,6 +10,7 @@ from app.services.sca_sbom import component_ref, project_ref
 
 
 NPM_TREE_TIMEOUT_SECONDS = 45
+NATIVE_TREE_TIMEOUT_SECONDS = 60
 
 
 def build_native_dependency_edge_records(project: ProjectRecord, components: list[ComponentRecord]) -> list[dict[str, str]]:
@@ -21,6 +22,8 @@ def build_native_dependency_edge_records(project: ProjectRecord, components: lis
 
     edges: list[dict[str, str]] = []
     edges.extend(build_npm_dependency_edges(project, root, components))
+    edges.extend(build_maven_dependency_edges(project, root, components))
+    edges.extend(build_go_dependency_edges(project, root, components))
     return dedupe_edges(edges)
 
 
@@ -67,6 +70,77 @@ def run_npm_ls(root: Path) -> dict | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def build_maven_dependency_edges(project: ProjectRecord, root: Path, components: list[ComponentRecord]) -> list[dict[str, str]]:
+    if shutil.which("mvn") is None or not (root / "pom.xml").exists():
+        return []
+    completed = run_native_command(["mvn", "-q", "dependency:tree", "-Dverbose"], root)
+    if completed is None:
+        return []
+    refs = component_refs_by_name_version(components, "maven")
+    edges: list[dict[str, str]] = []
+    stack: list[tuple[int, str]] = []
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        marker = raw_line.find("+-")
+        if marker < 0:
+            marker = raw_line.find("\\-")
+        if marker < 0:
+            continue
+        coordinate = raw_line[marker + 2:].strip().split(" ", 1)[0]
+        parts = coordinate.split(":")
+        if len(parts) < 4:
+            continue
+        name, version = f"{parts[0]}:{parts[1]}", parts[-2]
+        ref = refs.get((name.lower(), version)) or refs.get((name.lower(), None))
+        if ref is None:
+            continue
+        level = max(0, marker // 3)
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        parent = stack[-1][1] if stack else project_ref(project)
+        edges.append({"source": parent, "target": ref, "quality": "maven_native_tree"})
+        stack.append((level, ref))
+    return edges
+
+
+def build_go_dependency_edges(project: ProjectRecord, root: Path, components: list[ComponentRecord]) -> list[dict[str, str]]:
+    if shutil.which("go") is None or not (root / "go.mod").exists():
+        return []
+    completed = run_native_command(["go", "mod", "graph"], root)
+    if completed is None:
+        return []
+    refs = component_refs_by_name_version(components, "go")
+    edges: list[dict[str, str]] = []
+    for line in completed.stdout.splitlines():
+        parts = line.strip().split()
+        if len(parts) != 2:
+            continue
+        parent_name, parent_version = split_go_coordinate(parts[0])
+        child_name, child_version = split_go_coordinate(parts[1])
+        child = refs.get((child_name.lower(), child_version)) or refs.get((child_name.lower(), None))
+        if child is None:
+            continue
+        parent = refs.get((parent_name.lower(), parent_version)) or refs.get((parent_name.lower(), None)) or project_ref(project)
+        if parent != child:
+            edges.append({"source": parent, "target": child, "quality": "go_native_tree"})
+    return edges
+
+
+def split_go_coordinate(value: str) -> tuple[str, str | None]:
+    name, separator, version = value.rpartition("@")
+    return (name, version) if separator else (value, None)
+
+
+def run_native_command(command: list[str], root: Path) -> subprocess.CompletedProcess[str] | None:
+    try:
+        completed = subprocess.run(command, cwd=str(root), shell=False, capture_output=True, text=True, timeout=NATIVE_TREE_TIMEOUT_SECONDS, encoding="utf-8", errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return completed if completed.returncode == 0 else None
 
 
 def collect_npm_child_edges(
