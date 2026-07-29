@@ -372,3 +372,58 @@ PATCH /api/findings/{finding_id}/status
 - 报告显式写入当前能力边界，避免把基础 Web 检查、受控沙箱执行或规则化复核误读为已经完成的真实漏洞利用、行为探针或 AI 自主分析。
 - SCA 新增 Python 原生依赖树：当待检测项目内存在 `.venv` 或 `venv` 时，平台以隔离模式读取 pip 的已安装包元数据，不执行项目业务代码；会识别直接请求组件与其实际依赖关系。
 - SCA 依赖图谱与项目安全报告会明确区分“Python 实际环境（pip inspect）”“NPM 原生依赖树”“锁文件推断”和“项目依赖清单”。未找到项目内 Python 环境时，扫描会自动回退到已有清单与锁文件解析，不需要安装任何额外工具。
+
+## 当前代码结构（2026-07-29）
+
+以下结构仅列出项目源码、配置、迁移、测试、文档与演示输入；`.venv`、`node_modules`、`__pycache__` 和前端构建产物 `dist` 均为本地生成目录，不属于业务源码。
+
+```text
+AI网安项目/
+├─ README.md                         # 项目说明、启动方式、能力边界
+├─ alembic.ini                       # Alembic 迁移配置
+├─ apps/
+│  ├─ api/                           # FastAPI 后端
+│  │  ├─ app/
+│  │  │  ├─ main.py                  # API 入口与路由注册
+│  │  │  ├─ db.py / db_models.py     # 数据库连接与持久化模型
+│  │  │  ├─ models.py                # Pydantic 请求/响应模型
+│  │  │  ├─ module_registry.py       # 六个安全模块定义
+│  │  │  ├─ routers/                 # 项目、模块、SCA、SAST、AGENT、DAST、SANDBOX、ASPM API
+│  │  │  ├─ services/                # 扫描、验证、图谱、报告、复测等核心逻辑
+│  │  │  ├─ repositories/mappers.py  # 数据库记录与 API 模型转换
+│  │  │  └─ rules/                   # SCA 本地漏洞与许可证规则
+│  │  ├─ migrations/                 # 数据库迁移脚本
+│  │  └─ tests/                      # 后端单元测试
+│  └─ web/                           # React + Vite 前端
+│     ├─ src/main.tsx                # 页面、状态、API 调用（当前集中在单文件）
+│     └─ src/styles.css              # 全局样式
+├─ infra/docker-compose.yml          # PostgreSQL / Redis 本地基础设施
+├─ docs/                             # PRD、架构、模块设计、交接与路线图
+├─ outputs/                          # SCA、SAST、AGENT 演示输入与 UI 验证材料
+└─ .agents/                          # 预留的 Agent 编排配置目录
+```
+
+运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。其中 `routers` 只处理接口和参数，`services` 承担扫描、证据关联、图谱、复测和导出等业务逻辑。
+
+## 当前模块欠缺功能（2026-07-29）
+
+下表是当前代码状态的简明清单。“欠缺”表示尚未实现，不会在前端中伪装为已完成能力。
+
+| 模块 | 当前仍欠缺的主要能力 |
+| --- | --- |
+| SCA | 真实包文件哈希采集；Python/Maven/Go 等全部生态的原生完整依赖树；更深层的传递影响分析；组织级许可证策略、审批与例外管理；规则启停和规则管理界面；Trivy 等更多工具接入；离线漏洞库与漏洞数据库更新时间管理。 |
+| SAST | 更稳定的 Semgrep 镜像与配置管理；自定义规则库管理界面；AST、数据流和污点分析；真实外部 AI 复核；修复补丁生成；与 DAST/SANDBOX 的自动联动验证。已知的前端 `Failed to fetch` 问题仍按当前决策暂不处理。 |
+| AGENT | 不运行真实 Agent；不连接真实 MCP Server；不执行插件工具调用；没有完整工具权限矩阵、Agent 行为回放或外部 AI 驱动的信任评分。当前以配置/指令文件静态检查为主。 |
+| DAST | 当前仅为关联风险后的轻量 Web 基础验证，不做爬虫、登录态管理、业务漏洞利用证明、攻击 payload 生成、OWASP ZAP/Nuclei 接入、自动漏洞复现链和自动复测。DAST 深化仍按当前计划后置。 |
+| SANDBOX | 当前记录的是隔离策略、执行摘要和结构化账本，不采集真实文件访问、网络连接、完整进程树或工具调用事件；未接入 eBPF/Sysmon 等探针；不支持交互式程序、复杂多步骤编排或恶意样本级强隔离。 |
+| ASPM / 治理 | 风险评分尚未接入 CVSS、EPSS、资产暴露面和业务重要性；自动关联仍为可解释规则，不是语义模型或图推理；没有 SLA、工单、审批、组织/租户权限、完整审计日志、CI/CD 门禁、扫描任务队列和后台 Worker；现有导出为项目安全报告，不是完整合规报告体系。 |
+| 安全知识中枢 | 已能组织项目上下文、规则、验证、证据和治理结论，但还不能自动生成规则、进行跨项目知识推荐，或基于反馈自主演进。 |
+| 前端工程结构 | 功能当前集中在 `apps/web/src/main.tsx`，尚未按项目管理、检测中心、治理中心、知识中枢、通用组件和 API 客户端拆分。 |
+
+### 使用前的外部条件
+
+- SCA 基础扫描不需要额外下载；Syft/Grype 增强扫描需要 Docker 与对应镜像。
+- SAST 的 Semgrep 增强需要本机 Semgrep CLI 或 Docker 镜像。
+- DAST 需要可访问的目标 Web 地址。
+- SANDBOX 需要 Docker Desktop 和待使用的本地/已拉取镜像。
+- 平台目前没有登录、权限与租户隔离，不应直接暴露到公网。
