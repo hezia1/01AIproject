@@ -108,6 +108,25 @@ class ComponentRecord(Base):
     osv_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
+
+class ScaPolicyExceptionRecord(Base):
+    __tablename__ = "sca_policy_exceptions"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    ecosystem: Mapped[str] = mapped_column(String(40), nullable=False)
+    package_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    package_version: Mapped[str | None] = mapped_column(String(160))
+    exception_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
+    requester: Mapped[str | None] = mapped_column(String(120))
+    approver: Mapped[str | None] = mapped_column(String(120))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    approval_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
 class DastValidationRecord(Base):
     __tablename__ = "dast_validations"
 
