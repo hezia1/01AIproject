@@ -7,7 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import ComponentRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord
+from app.db_models import ComponentRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord, ScaPolicyExceptionRecord
+from app.services.sca_license_policy import load_license_policies
+from app.services.sca_vulnerability_rules import load_vulnerability_rules
 from app.models import (
     Component,
     ModuleKey,
@@ -34,6 +36,43 @@ from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
 
 router = APIRouter()
+
+
+@router.get("/policies")
+def list_sca_policies() -> dict[str, object]:
+    return {"vulnerability_rules": [{"id": item.vulnerability_id, "ecosystem": item.ecosystem, "package": item.package, "enabled": item.enabled, "severity": item.severity.value} for item in load_vulnerability_rules()], "license_policies": [{"id": item.policy_id, "policy": item.policy, "keywords": list(item.keywords), "approval_required": item.approval_required} for item in load_license_policies()]}
+
+
+@router.get("/projects/{project_id}/exceptions")
+def list_policy_exceptions(project_id: UUID, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return [exception_payload(item) for item in db.scalars(select(ScaPolicyExceptionRecord).where(ScaPolicyExceptionRecord.project_id == str(project_id)).order_by(ScaPolicyExceptionRecord.created_at.desc())).all()]
+
+
+@router.post("/projects/{project_id}/exceptions", status_code=201)
+def create_policy_exception(project_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    required = ("ecosystem", "package_name", "exception_type", "reason")
+    if any(not str(payload.get(key) or "").strip() for key in required):
+        raise HTTPException(status_code=400, detail="ecosystem, package_name, exception_type and reason are required")
+    item = ScaPolicyExceptionRecord(project_id=str(project_id), ecosystem=str(payload["ecosystem"]), package_name=str(payload["package_name"]), package_version=str(payload.get("package_version") or "") or None, exception_type=str(payload["exception_type"]), reason=str(payload["reason"]), requester=str(payload.get("requester") or "") or None, expires_at=parse_exception_date(payload.get("expires_at")))
+    db.add(item); db.commit(); db.refresh(item)
+    return exception_payload(item)
+
+
+@router.patch("/exceptions/{exception_id}")
+def update_policy_exception(exception_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    item = db.get(ScaPolicyExceptionRecord, str(exception_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="SCA policy exception not found")
+    if payload.get("status") in {"pending", "approved", "rejected", "revoked"}: item.status = str(payload["status"])
+    for field in ("approver", "approval_note"):
+        if field in payload: setattr(item, field, str(payload[field]) if payload[field] is not None else None)
+    if "expires_at" in payload: item.expires_at = parse_exception_date(payload.get("expires_at"))
+    item.updated_at = datetime.utcnow(); db.commit(); db.refresh(item)
+    return exception_payload(item)
 
 
 @router.get("/tool-health", response_model=ScaToolHealth)
@@ -111,6 +150,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             db.add(record)
             records.append(record)
         db.flush()
+        apply_approved_exceptions(db, str(payload.project_id), records)
         create_sca_findings(db, str(payload.project_id), scan.id, records)
         dependency_graph = build_dependency_graph(project, records)
         scan.scan_metadata = {
@@ -393,6 +433,29 @@ def scan_metadata_value(scan: ScanTaskRecord, key: str) -> dict | None:
     metadata = scan.scan_metadata or {}
     value = metadata.get(key) if isinstance(metadata, dict) else None
     return value if isinstance(value, dict) else None
+
+
+def parse_exception_date(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="expires_at must be ISO-8601") from exc
+
+
+def exception_payload(item: ScaPolicyExceptionRecord) -> dict[str, object]:
+    return {"id": item.id, "project_id": item.project_id, "ecosystem": item.ecosystem, "package_name": item.package_name, "package_version": item.package_version, "exception_type": item.exception_type, "reason": item.reason, "status": item.status, "requester": item.requester, "approver": item.approver, "expires_at": item.expires_at, "approval_note": item.approval_note, "created_at": item.created_at, "updated_at": item.updated_at}
+
+
+def apply_approved_exceptions(db: Session, project_id: str, components: list[ComponentRecord]) -> None:
+    now = datetime.utcnow()
+    allowed = db.scalars(select(ScaPolicyExceptionRecord).where(ScaPolicyExceptionRecord.project_id == project_id, ScaPolicyExceptionRecord.status == "approved")).all()
+    for component in components:
+        matched = next((item for item in allowed if item.ecosystem.lower() == component.ecosystem.lower() and item.package_name.lower() == component.name.lower() and (not item.package_version or item.package_version == component.version) and (item.expires_at is None or item.expires_at > now)), None)
+        if matched:
+            component.risk_status = "accepted-risk"
+            component.risk_summary = f"{component.risk_summary or ''} 已批准例外：{matched.reason}".strip()
 
 
 def create_sca_findings(
