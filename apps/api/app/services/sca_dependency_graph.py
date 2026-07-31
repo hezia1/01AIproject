@@ -40,8 +40,29 @@ def build_dependency_graph(
         "nodes": nodes,
         "edges": edges,
         "upgrade_levers": upgrade_levers,
+        "impact_paths": build_impact_paths(project, components, resolved_edges),
         "summary": graph_summary(nodes, edges, components),
     }
+
+
+def build_impact_paths(project: ProjectRecord, components: list[ComponentRecord], edges: list[dict[str, str]]) -> list[dict[str, object]]:
+    by_ref = {component_ref(item): item for item in components}
+    parents: dict[str, list[str]] = defaultdict(list)
+    for edge in edges:
+        parents[edge["target"]].append(edge["source"])
+    results: list[dict[str, object]] = []
+    for ref, component in by_ref.items():
+        if not is_risky_component(component):
+            continue
+        paths: list[list[str]] = []
+        def visit(node: str, chain: list[str]) -> None:
+            if len(chain) > 8: return
+            if node == project_ref(project): paths.append(list(reversed(chain))); return
+            for parent in parents.get(node, []):
+                if parent not in chain: visit(parent, [*chain, parent])
+        visit(ref, [ref])
+        results.append({"component_id": ref, "component": component.name, "severity": component.severity, "risk_status": component.risk_status, "paths": paths[:10]})
+    return sorted(results, key=lambda item: SEVERITY_WEIGHT.get(item["severity"], 0), reverse=True)
 
 
 def project_node(project: ProjectRecord) -> dict[str, object]:

@@ -3,6 +3,7 @@ from dataclasses import replace
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -369,6 +370,20 @@ def get_project_dependency_graph(
         records,
         dependency_edges=dependency_snapshot_edges((snapshot.scan_metadata or {}).get("dependency_snapshot")) if snapshot else None,
     )
+
+
+@router.get("/projects/{project_id}/gate")
+def sca_gate(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    components = load_project_components(db, project_id)
+    blocked = [item for item in components if item.risk_status != "accepted-risk" and item.severity in {"critical", "high"}]
+    return {"project_id": str(project_id), "decision": "block" if blocked else "pass", "blocked_component_count": len(blocked), "accepted_risk_count": sum(1 for item in components if item.risk_status == "accepted-risk"), "reason": "存在未豁免的严重或高危供应链风险" if blocked else "未发现未豁免的严重或高危供应链风险"}
+
+
+@router.get("/projects/{project_id}/report.html", response_class=HTMLResponse)
+def export_sca_report_html(project_id: UUID, db: Session = Depends(get_db)) -> str:
+    report = export_project_sca_report(project_id, db=db)
+    rows = "".join(f"<tr><td>{item.name}</td><td>{item.version or '-'}</td><td>{item.severity or '-'}</td><td>{item.risk_status}</td><td>{', '.join(item.vulnerability_ids)}</td></tr>" for item in report.top_risk_components)
+    return f"<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>SCA报告</title><style>body{{font:14px Arial;margin:32px}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:8px;text-align:left}}th{{background:#eef3fa}}</style><h1>{report.project['name']} · SCA供应链风险报告</h1><p>扫描批次：{report.scan['scan_task_id']}；风险组件：{report.summary.get('risky_component_count', 0)}</p><h2>高风险组件</h2><table><tr><th>组件</th><th>版本</th><th>等级</th><th>状态</th><th>漏洞</th></tr>{rows}</table><h2>修复建议</h2><ul>{''.join(f'<li>{item}</li>' for item in report.recommendations)}</ul></html>"
 
 
 def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToolStatus:
