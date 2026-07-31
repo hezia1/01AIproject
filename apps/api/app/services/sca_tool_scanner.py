@@ -68,6 +68,21 @@ def trivy_cache_dir() -> Path:
     return offline_assets_dir() / "trivy-cache"
 
 
+def database_detail(database: Path) -> str:
+    if not database.is_file():
+        return "offline database not found"
+    metadata = database.with_name("metadata.json")
+    details = [f"{database.name} · {database.stat().st_size // (1024 * 1024)} MB"]
+    if metadata.is_file():
+        try:
+            payload = json.loads(metadata.read_text(encoding="utf-8"))
+            for key in ("UpdatedAt", "DownloadedAt", "NextUpdate", "Version"):
+                if payload.get(key): details.append(f"{key}: {payload[key]}")
+        except (OSError, json.JSONDecodeError):
+            pass
+    return " · ".join(details)
+
+
 def check_syft_grype_health() -> ToolHealthResult:
     checks: list[ToolHealthCheck] = []
     docker_path = shutil.which("docker")
@@ -121,13 +136,13 @@ def check_syft_grype_health() -> ToolHealthResult:
     checks.append(ToolHealthCheck(
         name="trivy_db",
         status="success" if trivy_db.is_file() else "warning",
-        detail=str(trivy_db) if trivy_db.is_file() else "offline vulnerability DB not found",
+        detail=database_detail(trivy_db),
         remediation="在联网机器执行 Trivy 数据库下载，并将 artifacts/sca-offline/trivy-cache 带入沙箱。",
     ))
     checks.append(ToolHealthCheck(
         name="trivy_java_db",
         status="success" if trivy_java_db.is_file() else "warning",
-        detail=str(trivy_java_db) if trivy_java_db.is_file() else "offline Java DB not found",
+        detail=database_detail(trivy_java_db),
         remediation="如需扫描 Maven/JAR，预下载 Trivy Java 数据库。",
     ))
 

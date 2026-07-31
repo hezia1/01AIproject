@@ -1,5 +1,6 @@
 ﻿from datetime import datetime
 from dataclasses import replace
+from html import escape
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -380,10 +381,39 @@ def sca_gate(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, objec
 
 
 @router.get("/projects/{project_id}/report.html", response_class=HTMLResponse)
-def export_sca_report_html(project_id: UUID, db: Session = Depends(get_db)) -> str:
-    report = export_project_sca_report(project_id, db=db)
-    rows = "".join(f"<tr><td>{item.name}</td><td>{item.version or '-'}</td><td>{item.severity or '-'}</td><td>{item.risk_status}</td><td>{', '.join(item.vulnerability_ids)}</td></tr>" for item in report.top_risk_components)
-    return f"<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>SCA报告</title><style>body{{font:14px Arial;margin:32px}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:8px;text-align:left}}th{{background:#eef3fa}}</style><h1>{report.project['name']} · SCA供应链风险报告</h1><p>扫描批次：{report.scan['scan_task_id']}；风险组件：{report.summary.get('risky_component_count', 0)}</p><h2>高风险组件</h2><table><tr><th>组件</th><th>版本</th><th>等级</th><th>状态</th><th>漏洞</th></tr>{rows}</table><h2>修复建议</h2><ul>{''.join(f'<li>{item}</li>' for item in report.recommendations)}</ul></html>"
+def export_sca_report_html(
+    project_id: UUID,
+    scan_task_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> str:
+    report = export_project_sca_report(project_id, scan_task_id=scan_task_id, db=db)
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.name)}</td>"
+        f"<td>{escape(item.version or '-')}</td>"
+        f"<td>{escape(item.severity or '-')}</td>"
+        f"<td>{escape(item.risk_status)}</td>"
+        f"<td>{escape(', '.join(item.vulnerability_ids))}</td>"
+        "</tr>"
+        for item in report.top_risk_components
+    )
+    recommendations = "".join(f"<li>{escape(item)}</li>" for item in report.recommendations)
+    return (
+        "<!doctype html><html lang='zh-CN'><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>SCA 报告</title>"
+        "<style>body{font:14px Arial,sans-serif;margin:32px;color:#172b4d}"
+        "table{border-collapse:collapse;width:100%;margin:12px 0}"
+        "td,th{border:1px solid #c7d2e0;padding:8px;text-align:left;vertical-align:top}"
+        "th{background:#eef3fa}h1{margin-bottom:4px}h2{margin-top:28px}"
+        "@media print{body{margin:16px}}</style>"
+        f"<h1>{escape(str(report.project['name']))} · SCA 供应链风险报告</h1>"
+        f"<p>扫描批次：{escape(str(report.scan['scan_task_id']))}；"
+        f"风险组件：{report.summary.get('risky_component_count', 0)}</p>"
+        "<h2>高风险组件</h2>"
+        "<table><tr><th>组件</th><th>版本</th><th>等级</th><th>状态</th><th>漏洞</th></tr>"
+        f"{rows}</table><h2>修复建议</h2><ul>{recommendations}</ul></html>"
+    )
 
 
 def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToolStatus:
@@ -467,7 +497,7 @@ def apply_approved_exceptions(db: Session, project_id: str, components: list[Com
     now = datetime.utcnow()
     allowed = db.scalars(select(ScaPolicyExceptionRecord).where(ScaPolicyExceptionRecord.project_id == project_id, ScaPolicyExceptionRecord.status == "approved")).all()
     for component in components:
-        matched = next((item for item in allowed if item.ecosystem.lower() == component.ecosystem.lower() and item.package_name.lower() == component.name.lower() and (not item.package_version or item.package_version == component.version) and (item.expires_at is None or item.expires_at > now)), None)
+        matched = next((item for item in allowed if item.ecosystem.lower() in {"unknown", component.ecosystem.lower()} and item.package_name.lower() == component.name.lower() and (not item.package_version or item.package_version == component.version) and (item.expires_at is None or item.expires_at > now)), None)
         if matched:
             component.risk_status = "accepted-risk"
             component.risk_summary = f"{component.risk_summary or ''} 已批准例外：{matched.reason}".strip()

@@ -28,6 +28,7 @@ type DependencyGraphEdge = { source: string; target: string; quality: string };
 type UpgradeLever = { component_id: string; component: string; ecosystem: string; version: string | null; risk_transitive_count: number; highest_severity: Severity | null; affected_components: string[]; recommendation: string };
 type DependencyGraph = { project_id: string; nodes: DependencyGraphNode[]; edges: DependencyGraphEdge[]; upgrade_levers: UpgradeLever[]; impact_paths?: { component: string; severity: Severity | null; risk_status: string; paths: string[][] }[]; summary: Record<string, number> };
 type ScaException = { id: string; ecosystem: string; package_name: string; package_version: string | null; exception_type: string; reason: string; status: string; requester: string | null; approver: string | null; expires_at: string | null; approval_note: string | null };
+type ScaPolicies = { vulnerability_rules: { id: string; ecosystem: string; package: string; enabled: boolean; severity: Severity }[]; license_policies: { id: string; policy: string; keywords: string[]; approval_required: boolean }[] };
 type AiReview = { summary: string; false_positive_likelihood: string; remediation: string; category?: string | null; cwe?: string | null; owasp?: string | null; language?: string | null; description?: string | null; trust_impact?: string | null; agent_pipeline?: string[]; review_verdict?: string | null; evidence_summary?: string | null; fix_strategy?: string | null; priority?: string | null };
 type Finding = { id: string; component_id?: string | null; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
 type DastStrategy = { id: string; name: string; description: string; scope_summary: string; check_items: string[]; limitations: string[] };
@@ -733,7 +734,7 @@ function App() {
     setLoading(true);
     try {
       const scanQuery = selectedScaScanId ? `?scan_task_id=${selectedScaScanId}` : "";
-      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/report${scanQuery}`);
+      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/report.html${scanQuery}`);
       if (!response.ok) {
         let detail = `${response.status} ${response.statusText}`;
         try {
@@ -742,16 +743,16 @@ function App() {
         } catch { /* keep HTTP status */ }
         throw new Error(detail);
       }
-      const report = await response.json();
-      const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+      const report = await response.text();
+      const blob = new Blob([report], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       const scanSuffix = selectedScaScanId ? `-${selectedScaScanId.slice(0, 8)}` : "";
-      link.download = `${project.name || "project"}${scanSuffix}-sca-report.json`;
+      link.download = `${project.name || "project"}${scanSuffix}-sca-report.html`;
       link.click();
       URL.revokeObjectURL(url);
-      setStatus("SCA 报告已导出");
+      setStatus("SCA HTML 报告已导出；可用浏览器“打印为 PDF”交付");
     } catch (error) {
       console.error(error);
       setStatus(`SCA 报告导出失败：${errorMessage(error)}`);
@@ -1258,19 +1259,79 @@ function ScaAdvancedDetails({ project, components, scanHistory, selectedScanId, 
   return <details className="advanced-details"><summary>高级供应链分析：扫描历史、依赖图谱、SBOM 与工具链</summary><div className="advanced-details-body">
     <section className="advanced-inline-action"><div><strong>导出与增强扫描</strong><span>SBOM 可用于资产盘点；Syft/Grype 依赖本机 Docker 与镜像，无法使用时基础 SCA 扫描仍可运行。</span></div><div className="advanced-actions"><label className="inline-check"><input type="checkbox" checked={toolScanEnabled} disabled={loading} onChange={(event) => onToolScanChange(event.target.checked)} />Syft/Grype 增强</label><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("cyclonedx")}>导出 CycloneDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("spdx")}>导出 SPDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportReport()}>导出 SCA 报告</button></div></section>
     <ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} />
-    <ScaExceptionPanel project={project} />
+    <ScaExceptionPanel project={project} components={components} />
+    <ScaPolicyPanel />
     <section className="panel"><div className="panel-header"><h3>与上一批次的变化</h3><span>{scanDiff?.has_comparison ? "已生成对比" : "需要至少两次扫描"}</span></div><ScaScanDiffView diff={scanDiff} /></section>
     <section className="panel"><div className="panel-header"><h3>扫描历史</h3><span>{scanHistory.length} 个批次</span></div><ScaScanHistoryTable history={scanHistory} selectedScanId={selectedScanId} loading={loading} onSelect={onSelectScan} /></section>
-    <section className="panel"><div className="panel-header"><h3>依赖图谱与升级杠杆</h3><span>{dependencyGraph?.summary.node_count ?? 0} 个节点</span></div><DependencyGraphView graph={dependencyGraph} /><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></section>
+    <section className="panel"><div className="panel-header"><h3>依赖图谱与升级杠杆</h3><span>{dependencyGraph?.summary.node_count ?? 0} 个节点</span></div><DependencyGraphView graph={dependencyGraph} /><ImpactPathTable paths={dependencyGraph?.impact_paths ?? []} nodes={dependencyGraph?.nodes ?? []} /><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></section>
   </div></details>;
 }
 
-function ScaExceptionPanel({ project }: { project: Project | null }) {
-  const [items, setItems] = useState<ScaException[]>([]); const [name, setName] = useState(""); const [reason, setReason] = useState("");
-  const refresh = async () => { if (project) setItems(await request<ScaException[]>(`/sca/projects/${project.id}/exceptions`)); };
+function ScaExceptionPanel({ project, components }: { project: Project | null; components: Component[] }) {
+  const [items, setItems] = useState<ScaException[]>([]);
+  const [selectedKey, setSelectedKey] = useState("");
+  const [reason, setReason] = useState("");
+  const [requester, setRequester] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const riskyComponents = components.filter((item) => isRiskyScaComponent(item) && item.risk_status !== "accepted-risk");
+  const componentKey = (item: Component) => `${item.ecosystem}\u0000${item.name}\u0000${item.version ?? ""}`;
+  const selected = riskyComponents.find((item) => componentKey(item) === selectedKey);
+  const refresh = async () => {
+    if (!project) return;
+    try { setError(""); setItems(await request<ScaException[]>(`/sca/projects/${project.id}/exceptions`)); }
+    catch (requestError) { setError(`例外记录加载失败：${errorMessage(requestError)}`); }
+  };
+  const update = async (item: ScaException, status: "approved" | "rejected" | "revoked") => {
+    setSaving(true);
+    try { setError(""); await request(`/sca/exceptions/${item.id}`, { method: "PATCH", body: JSON.stringify({ status }) }); await refresh(); }
+    catch (requestError) { setError(`例外状态更新失败：${errorMessage(requestError)}`); }
+    finally { setSaving(false); }
+  };
+  const submit = async () => {
+    if (!project || !selected || !reason.trim()) return;
+    setSaving(true);
+    try {
+      setError("");
+      await request(`/sca/projects/${project.id}/exceptions`, { method: "POST", body: JSON.stringify({ ecosystem: selected.ecosystem, package_name: selected.name, package_version: selected.version, exception_type: "risk_acceptance", reason: reason.trim(), requester: requester.trim() || null, expires_at: expiresAt || null }) });
+      setSelectedKey(""); setReason(""); setRequester(""); setExpiresAt(""); await refresh();
+    } catch (requestError) { setError(`例外申请提交失败：${errorMessage(requestError)}`); }
+    finally { setSaving(false); }
+  };
   useEffect(() => { void refresh(); }, [project?.id]);
+  useEffect(() => { setPage(1); }, [items.length]);
   if (!project) return null;
-  return <section className="panel full"><div className="panel-header"><h3>风险例外审批</h3><button className="secondary-action" onClick={() => void refresh()}>刷新</button></div><p>仅批准且未过期的例外会在下次扫描中标记为“已接受风险”，不会删除风险证据。</p><div className="filter-grid"><input placeholder="组件名" value={name} onChange={e => setName(e.target.value)} /><input placeholder="临时接受风险的原因" value={reason} onChange={e => setReason(e.target.value)} /><button className="secondary-action" disabled={!name || !reason} onClick={async () => { await request(`/sca/projects/${project.id}/exceptions`, { method: "POST", body: JSON.stringify({ ecosystem: "unknown", package_name: name, exception_type: "risk_acceptance", reason }) }); setName(""); setReason(""); await refresh(); }}>提交申请</button></div><table><thead><tr><th>组件</th><th>理由</th><th>状态</th><th>审批</th></tr></thead><tbody>{items.length ? items.map(item => <tr key={item.id}><td>{item.ecosystem} · {item.package_name}<span className="cell-subtext">{item.package_version ?? "全部版本"}</span></td><td>{item.reason}</td><td>{item.status}</td><td>{item.status === "pending" ? <><button onClick={async () => { await request(`/sca/exceptions/${item.id}`, { method: "PATCH", body: JSON.stringify({ status: "approved" }) }); await refresh(); }}>批准</button><button onClick={async () => { await request(`/sca/exceptions/${item.id}`, { method: "PATCH", body: JSON.stringify({ status: "rejected" }) }); await refresh(); }}>拒绝</button></> : item.approver ?? "-"}</td></tr>) : <tr><td colSpan={4} className="empty-cell">暂无例外申请。</td></tr>}</tbody></table></section>;
+  const pagination = paginate(items, page);
+  return <section className="panel full"><div className="panel-header"><div><h3>风险例外审批</h3><span>仅用于有明确业务理由且限定范围的临时接受风险</span></div><button className="secondary-action" disabled={saving} onClick={() => void refresh()}>刷新</button></div><p>批准且未过期的例外会在下一次 SCA 扫描中标记为“已接受风险”，但原始漏洞证据、扫描历史和门禁审计仍会保留。</p><div className="filter-grid"><select value={selectedKey} onChange={(event) => setSelectedKey(event.target.value)}><option value="">选择一个当前风险组件</option>{riskyComponents.map((item) => <option key={item.id} value={componentKey(item)}>{item.name} {item.version ?? "版本未知"} · {item.ecosystem} · {severityLabel(item.severity)}</option>)}</select><input placeholder="接受风险的业务原因（必填）" value={reason} onChange={(event) => setReason(event.target.value)} /><input placeholder="申请人（可选）" value={requester} onChange={(event) => setRequester(event.target.value)} /><label><span>失效日期（可选）</span><input type="date" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label><button className="secondary-action" disabled={saving || !selected || !reason.trim()} onClick={() => void submit()}>{saving ? "处理中" : "提交例外申请"}</button></div>{riskyComponents.length === 0 ? <div className="empty-project">当前扫描没有可申请例外的风险组件。</div> : null}{error ? <div className="report-error">{error}</div> : null}<table className="compact-table"><thead><tr><th>组件与范围</th><th>业务理由</th><th>状态 / 到期</th><th>审批操作</th></tr></thead><tbody>{items.length ? pagination.items.map((item) => <tr key={item.id}><td><strong>{item.package_name}</strong><span className="cell-subtext">{item.ecosystem} · {item.package_version ?? "全部版本"}</span></td><td>{item.reason}<span className="cell-subtext">申请人：{item.requester ?? "未填写"}</span></td><td>{scaExceptionStatusLabel(item.status)}<span className="cell-subtext">{item.expires_at ? `到期：${formatDateTime(item.expires_at)}` : "未设置到期日"}</span></td><td>{item.status === "pending" ? <><button className="secondary-action" disabled={saving} onClick={() => void update(item, "approved")}>批准</button><button className="secondary-action" disabled={saving} onClick={() => void update(item, "rejected")}>拒绝</button></> : item.status === "approved" ? <><span className="cell-subtext">{item.approver ?? "已批准"}</span><button className="secondary-action" disabled={saving} onClick={() => void update(item, "revoked")}>撤销</button></> : item.approver ?? "-"}</td></tr>) : <tr><td colSpan={4} className="empty-cell">暂无例外申请。</td></tr>}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={items.length} onPageChange={setPage} /></section>;
+}
+
+function ScaPolicyPanel() {
+  const [policies, setPolicies] = useState<ScaPolicies | null>(null);
+  const [error, setError] = useState("");
+  const [rulePage, setRulePage] = useState(1);
+  const [licensePage, setLicensePage] = useState(1);
+  const refresh = async () => {
+    try { setError(""); setPolicies(await request<ScaPolicies>("/sca/policies")); }
+    catch (requestError) { setError(`本地策略加载失败：${errorMessage(requestError)}`); }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const rules = policies?.vulnerability_rules ?? [];
+  const licenses = policies?.license_policies ?? [];
+  const rulePagination = paginate(rules, rulePage);
+  const licensePagination = paginate(licenses, licensePage);
+  useEffect(() => { setRulePage(1); }, [rules.length]);
+  useEffect(() => { setLicensePage(1); }, [licenses.length]);
+  return <section className="panel full"><div className="panel-header"><div><h3>本地 SCA 策略</h3><span>当前扫描使用的漏洞规则与许可证处置要求</span></div><button className="secondary-action" onClick={() => void refresh()}>刷新</button></div><p>这里展示当前生效的本地策略，便于审计扫描依据；策略文件由平台管理员随代码版本维护，页面不会伪装成实时联网情报。</p>{error ? <div className="report-error">{error}</div> : null}<h4>漏洞匹配规则 · {rules.length} 条</h4><table className="compact-table"><thead><tr><th>漏洞标识</th><th>生态 / 组件</th><th>等级</th><th>状态</th></tr></thead><tbody>{rules.length ? rulePagination.items.map((item) => <tr key={item.id}><td>{item.id}</td><td>{item.ecosystem} · {item.package}</td><td>{severityLabel(item.severity)}</td><td>{item.enabled ? "已启用" : "未启用"}</td></tr>) : <tr><td colSpan={4} className="empty-cell">暂无本地漏洞规则。</td></tr>}</tbody></table><Pagination page={rulePagination.page} pageCount={rulePagination.pageCount} total={rules.length} onPageChange={setRulePage} /><h4>许可证策略 · {licenses.length} 条</h4><table className="compact-table"><thead><tr><th>策略</th><th>识别关键词</th><th>是否需审批</th></tr></thead><tbody>{licenses.length ? licensePagination.items.map((item) => <tr key={item.id}><td>{item.policy}</td><td>{item.keywords.join("、") || "-"}</td><td>{item.approval_required ? "需要审批" : "不需要审批"}</td></tr>) : <tr><td colSpan={3} className="empty-cell">暂无许可证策略。</td></tr>}</tbody></table><Pagination page={licensePagination.page} pageCount={licensePagination.pageCount} total={licenses.length} onPageChange={setLicensePage} /></section>;
+}
+
+function ImpactPathTable({ paths, nodes }: { paths: NonNullable<DependencyGraph["impact_paths"]>; nodes: DependencyGraphNode[] }) {
+  const [page, setPage] = useState(1);
+  const labels = new Map(nodes.map((node) => [node.id, node.label]));
+  const pagination = paginate(paths, page);
+  useEffect(() => { setPage(1); }, [paths.length]);
+  return <section className="impact-paths"><div className="panel-header"><h4>风险影响路径</h4><span>从风险组件向上追溯到项目</span></div>{paths.length === 0 ? <div className="empty-project">暂无可追溯的风险依赖路径。</div> : <><table className="compact-table"><thead><tr><th>风险组件</th><th>等级 / 状态</th><th>影响路径</th></tr></thead><tbody>{pagination.items.map((item) => <tr key={`${item.component}-${item.risk_status}`}><td>{item.component}</td><td>{severityLabel(item.severity)}<span className="cell-subtext">{riskStatusLabel(item.risk_status)}</span></td><td>{item.paths.length ? <details><summary>查看 {item.paths.length} 条路径</summary>{item.paths.map((path, index) => <span className="cell-subtext" key={`${item.component}-${index}`}>{path.map((id) => labels.get(id) ?? id).join(" → ")}</span>)}</details> : "未找到从项目到该组件的依赖关系"}</td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={paths.length} onPageChange={setPage} /></>}</section>;
 }
 
 function FindingModuleGovernance({ moduleKey, findings, validations, evidence, graph, comparison, loading, onRunReview, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRunReview?: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
@@ -1851,8 +1912,9 @@ function buildSecurityReportHtml(report: SecurityReport) {
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character] ?? character)); }
 function safeFilename(value: string) { return value.replace(/[\\/:*?"<>|]/g, "-").trim() || "project"; }
 function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "grype" ? "Grype" : value === "trivy" ? "Trivy（离线库）" : value === "syft" ? "Syft" : value === "osv+grype" ? "OSV + Grype" : value === "osv+trivy" ? "OSV + Trivy" : value === "local_rule+grype" ? "本地规则 + Grype" : value === "local_rule+trivy" ? "本地规则 + Trivy" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
-function riskStatusLabel(value?: string | null) { return value === "vulnerable" ? "存在漏洞" : value === "license-risk" ? "许可证风险" : value === "review-required" ? "需要复核" : value === "clean" ? "无风险" : value === "not_checked" ? "未检查" : value ?? "未知"; }
+function riskStatusLabel(value?: string | null) { return value === "vulnerable" ? "存在漏洞" : value === "license-risk" ? "许可证风险" : value === "review-required" ? "需要复核" : value === "accepted-risk" ? "已接受风险" : value === "clean" ? "无风险" : value === "not_checked" ? "未检查" : value ?? "未知"; }
 function severityLabel(value?: string | null) { return value === "critical" ? "严重" : value === "high" ? "高危" : value === "medium" ? "中危" : value === "low" ? "低危" : value === "info" ? "提示" : value === "none" ? "无等级" : value ?? "-"; }
+function scaExceptionStatusLabel(value: string) { return value === "pending" ? "待审批" : value === "approved" ? "已批准" : value === "rejected" ? "已拒绝" : value === "revoked" ? "已撤销" : value; }
 function dependencyTypeLabel(value?: string | null) { return value === "runtime" ? "运行依赖" : value === "development" ? "开发依赖" : value === "optional" ? "可选依赖" : value === "peer" ? "对等依赖" : value === "test" ? "测试依赖" : value === "transitive" ? "传递依赖" : value === "compile" ? "编译依赖" : value === "provided" ? "容器提供" : value === "system" ? "系统依赖" : value === "import" ? "导入依赖" : value ?? "-"; }
 function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需合规复核" : value === "restricted" ? "受限需审批" : value === "unknown" ? "未知需确认" : value ?? "-"; }
 function scanStatusLabel(value?: string | null) { return value === "queued" ? "排队中" : value === "running" ? "运行中" : value === "completed" ? "已完成" : value === "failed" ? "失败" : value ?? "-"; }
