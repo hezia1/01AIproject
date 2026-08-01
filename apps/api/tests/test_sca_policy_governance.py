@@ -77,7 +77,7 @@ def test_effective_gate_policy_and_kev_blocking_are_machine_readable() -> None:
         dependency_type="runtime", source_file="requirements.txt", risk_status="vulnerable", vulnerability_ids=["CVE-2026-1000"],
         severity="medium", risk_metadata={"risk_score": 98, "kev": True},
     )
-    scan = ScanTaskRecord(id=str(uuid4()), project_id=str(project_id), scan_type="sca", status="completed", finished_at=datetime.utcnow())
+    scan = ScanTaskRecord(id=str(uuid4()), project_id=str(project_id), scan_type="sca", status="completed", finished_at=datetime.now())
     policy = effective_gate_policy([{"policy_kind": "gate", "policy_id": "default", "enabled": True, "config": {"min_risk_score": 90, "block_severities": []}}])
 
     result = build_sca_gate_result(project_id, uuid4(), [component], scan, policy)

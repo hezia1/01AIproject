@@ -807,7 +807,7 @@ def build_sca_gate_result(
     stale = False
     max_age = int(policy.get("max_scan_age_hours", 0))
     if max_age and scan and scan.finished_at:
-        stale = (datetime.utcnow() - scan.finished_at).total_seconds() > max_age * 3600
+        stale = (datetime.now() - scan.finished_at).total_seconds() > max_age * 3600
     if scan is None:
         stale = True
     if stale:
