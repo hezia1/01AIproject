@@ -65,12 +65,12 @@ def parse_policy(item: dict[str, object]) -> LicensePolicy:
     )
 
 
-def assess_license(license_name: str | None) -> LicenseAssessment:
+def assess_license(license_name: str | None, policies: tuple[LicensePolicy, ...] | None = None) -> LicenseAssessment:
     label = license_name.strip() if license_name else "unknown"
     normalized = label.lower()
     matched = [
         policy
-        for policy in load_license_policies()
+        for policy in (policies or load_license_policies())
         if any(license_keyword_matches(normalized, keyword) for keyword in policy.keywords)
     ]
     if not matched:

@@ -28,7 +28,10 @@ type DependencyGraphEdge = { source: string; target: string; quality: string };
 type UpgradeLever = { component_id: string; component: string; ecosystem: string; version: string | null; risk_transitive_count: number; highest_severity: Severity | null; affected_components: string[]; recommendation: string };
 type DependencyGraph = { project_id: string; nodes: DependencyGraphNode[]; edges: DependencyGraphEdge[]; upgrade_levers: UpgradeLever[]; impact_paths?: { component: string; severity: Severity | null; risk_status: string; paths: string[][] }[]; summary: Record<string, number> };
 type ScaException = { id: string; ecosystem: string; package_name: string; package_version: string | null; exception_type: string; reason: string; status: string; requester: string | null; approver: string | null; expires_at: string | null; approval_note: string | null };
-type ScaPolicies = { vulnerability_rules: { id: string; ecosystem: string; package: string; enabled: boolean; severity: Severity }[]; license_policies: { id: string; policy: string; keywords: string[]; approval_required: boolean }[] };
+type ScaPolicies = { scope?: string; override_count?: number; vulnerability_rules: { id: string; ecosystem: string; package: string; enabled: boolean; severity: Severity; affected?: string; fixed_version?: string; source?: string }[]; license_policies: { id: string; policy: string; keywords: string[]; approval_required: boolean; enabled?: boolean; source?: string }[] };
+type ScaPolicyAudit = { id: string; event_type: string; actor: string | null; details: Record<string, unknown>; created_at: string };
+type ScaGate = { decision: "pass" | "block"; exit_code: number; reason: string; blocked_component_count: number; accepted_risk_count: number; ci_usage: string; blocked_components: { name: string; version: string | null; ecosystem: string; severity: Severity | null; vulnerability_ids: string[] }[] };
+type ScaEvidence = { scan_task_id: string; artifact_hashes: Record<string, unknown>; osv_mirror: Record<string, unknown>; native_dependency_sources: Record<string, { status: string; manifest: string; tool: string; edge_count: number; detail: string }>; policy_snapshot: Record<string, unknown>; gate: ScaGate };
 type AiReview = { summary: string; false_positive_likelihood: string; remediation: string; category?: string | null; cwe?: string | null; owasp?: string | null; language?: string | null; description?: string | null; trust_impact?: string | null; agent_pipeline?: string[]; review_verdict?: string | null; evidence_summary?: string | null; fix_strategy?: string | null; priority?: string | null };
 type Finding = { id: string; component_id?: string | null; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
 type DastStrategy = { id: string; name: string; description: string; scope_summary: string; check_items: string[]; limitations: string[] };
@@ -1259,8 +1262,11 @@ function ScaAdvancedDetails({ project, components, scanHistory, selectedScanId, 
   return <details className="advanced-details"><summary>高级供应链分析：扫描历史、依赖图谱、SBOM 与工具链</summary><div className="advanced-details-body">
     <section className="advanced-inline-action"><div><strong>导出与增强扫描</strong><span>SBOM 可用于资产盘点；Syft/Grype 依赖本机 Docker 与镜像，无法使用时基础 SCA 扫描仍可运行。</span></div><div className="advanced-actions"><label className="inline-check"><input type="checkbox" checked={toolScanEnabled} disabled={loading} onChange={(event) => onToolScanChange(event.target.checked)} />Syft/Grype 增强</label><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("cyclonedx")}>导出 CycloneDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("spdx")}>导出 SPDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportReport()}>导出 SCA 报告</button></div></section>
     <ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} />
+    <OsvMirrorPanel />
+    <ScaEvidencePanel project={project} selectedScanId={selectedScanId} />
     <ScaExceptionPanel project={project} components={components} />
     <ScaPolicyPanel />
+    <ScaPolicyOverridePanel project={project} />
     <section className="panel"><div className="panel-header"><h3>与上一批次的变化</h3><span>{scanDiff?.has_comparison ? "已生成对比" : "需要至少两次扫描"}</span></div><ScaScanDiffView diff={scanDiff} /></section>
     <section className="panel"><div className="panel-header"><h3>扫描历史</h3><span>{scanHistory.length} 个批次</span></div><ScaScanHistoryTable history={scanHistory} selectedScanId={selectedScanId} loading={loading} onSelect={onSelectScan} /></section>
     <section className="panel"><div className="panel-header"><h3>依赖图谱与升级杠杆</h3><span>{dependencyGraph?.summary.node_count ?? 0} 个节点</span></div><DependencyGraphView graph={dependencyGraph} /><ImpactPathTable paths={dependencyGraph?.impact_paths ?? []} nodes={dependencyGraph?.nodes ?? []} /><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></section>
@@ -1324,6 +1330,108 @@ function ScaPolicyPanel() {
   useEffect(() => { setRulePage(1); }, [rules.length]);
   useEffect(() => { setLicensePage(1); }, [licenses.length]);
   return <section className="panel full"><div className="panel-header"><div><h3>本地 SCA 策略</h3><span>当前扫描使用的漏洞规则与许可证处置要求</span></div><button className="secondary-action" onClick={() => void refresh()}>刷新</button></div><p>这里展示当前生效的本地策略，便于审计扫描依据；策略文件由平台管理员随代码版本维护，页面不会伪装成实时联网情报。</p>{error ? <div className="report-error">{error}</div> : null}<h4>漏洞匹配规则 · {rules.length} 条</h4><table className="compact-table"><thead><tr><th>漏洞标识</th><th>生态 / 组件</th><th>等级</th><th>状态</th></tr></thead><tbody>{rules.length ? rulePagination.items.map((item) => <tr key={item.id}><td>{item.id}</td><td>{item.ecosystem} · {item.package}</td><td>{severityLabel(item.severity)}</td><td>{item.enabled ? "已启用" : "未启用"}</td></tr>) : <tr><td colSpan={4} className="empty-cell">暂无本地漏洞规则。</td></tr>}</tbody></table><Pagination page={rulePagination.page} pageCount={rulePagination.pageCount} total={rules.length} onPageChange={setRulePage} /><h4>许可证策略 · {licenses.length} 条</h4><table className="compact-table"><thead><tr><th>策略</th><th>识别关键词</th><th>是否需审批</th></tr></thead><tbody>{licenses.length ? licensePagination.items.map((item) => <tr key={item.id}><td>{item.policy}</td><td>{item.keywords.join("、") || "-"}</td><td>{item.approval_required ? "需要审批" : "不需要审批"}</td></tr>) : <tr><td colSpan={3} className="empty-cell">暂无许可证策略。</td></tr>}</tbody></table><Pagination page={licensePagination.page} pageCount={licensePagination.pageCount} total={licenses.length} onPageChange={setLicensePage} /></section>;
+}
+
+function ScaEvidencePanel({ project, selectedScanId }: { project: Project | null; selectedScanId: string | null }) {
+  const [evidence, setEvidence] = useState<ScaEvidence | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const refresh = async () => {
+    if (!project) return;
+    setLoading(true);
+    try {
+      setError("");
+      const suffix = selectedScanId ? `?scan_task_id=${selectedScanId}` : "";
+      setEvidence(await request<ScaEvidence>(`/sca/projects/${project.id}/evidence${suffix}`));
+    } catch (requestError) {
+      setEvidence(null);
+      setError(`SCA 证据加载失败：${errorMessage(requestError)}`);
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { void refresh(); }, [project?.id, selectedScanId]);
+  if (!project) return null;
+  const artifacts = objectValue(evidence?.artifact_hashes);
+  const files = listValue(artifacts.files);
+  const packages = listValue(artifacts.packages);
+  const mirror = objectValue(evidence?.osv_mirror);
+  const snapshot = objectValue(evidence?.policy_snapshot);
+  const sources = Object.entries(evidence?.native_dependency_sources ?? {});
+  return <section className="panel full"><div className="panel-header"><div><h3>SCA 证据、离线情报与 CI 门禁</h3><span>仅展示当前扫描实际捕获的来源与边界</span></div><button className="secondary-action" disabled={loading} onClick={() => void refresh()}>刷新</button></div>{error ? <div className="report-error">{error}</div> : null}{!evidence ? <div className="empty-project">完成一次 SCA 扫描后显示包哈希、离线情报、原生依赖来源和门禁结论。</div> : <div className="content-grid"><div className="panel"><div className="panel-header"><h4>CI 门禁</h4><span className={`risk-badge ${evidence.gate.decision === "block" ? "exploitable" : "not_exploitable"}`}>{evidence.gate.decision === "block" ? "阻断" : "通过"}</span></div><p>{evidence.gate.reason}</p><div className="kv-list"><div><span>阻断组件</span><strong>{evidence.gate.blocked_component_count}</strong></div><div><span>已接受风险</span><strong>{evidence.gate.accepted_risk_count}</strong></div><div><span>进程退出码</span><strong>{evidence.gate.exit_code}</strong></div></div><details><summary>CI 调用约定</summary><p>{evidence.gate.ci_usage}</p></details></div><div className="panel"><div className="panel-header"><h4>包与清单哈希</h4><span>{textValue(artifacts.status)}</span></div><div className="kv-list"><div><span>依赖清单</span><strong>{files.length}</strong></div><div><span>本地包证据</span><strong>{packages.length}</strong></div><div><span>算法</span><strong>{textValue(artifacts.algorithm)}</strong></div></div><p>仅对本地实际可访问的清单、安装记录、包描述或 Maven JAR 计算 SHA-256；缺失包文件不会被伪造。</p></div><div className="panel"><div className="panel-header"><h4>OSV 离线镜像</h4><span>{textValue(mirror.status)}</span></div><div className="kv-list"><div><span>记录数</span><strong>{textValue(mirror.entry_count)}</strong></div><div><span>更新时间</span><strong>{textValue(mirror.updated_at)}</strong></div></div><p>{textValue(mirror.detail)}</p></div><div className="panel"><div className="panel-header"><h4>策略快照</h4><span>本批次</span></div><div className="kv-list"><div><span>漏洞规则</span><strong>{textValue(snapshot.enabled_vulnerability_rule_count)}</strong></div><div><span>许可证策略</span><strong>{textValue(snapshot.enabled_license_policy_count)}</strong></div><div><span>策略覆盖</span><strong>{textValue(snapshot.override_count)}</strong></div></div></div><div className="panel full"><div className="panel-header"><h4>原生依赖来源</h4><span>扫描快照</span></div><table className="compact-table"><thead><tr><th>生态</th><th>来源</th><th>状态</th><th>关系数</th><th>说明</th></tr></thead><tbody>{sources.length ? sources.map(([ecosystem, item]) => <tr key={ecosystem}><td>{ecosystem}</td><td>{item.manifest} · {item.tool}</td><td>{item.status}</td><td>{item.edge_count}</td><td>{item.detail}</td></tr>) : <tr><td colSpan={5} className="empty-cell">当前扫描未记录原生依赖来源。</td></tr>}</tbody></table></div></div>}</section>;
+}
+
+function OsvMirrorPanel() {
+  const [status, setStatus] = useState<Record<string, unknown> | null>(null);
+  const [source, setSource] = useState("manual-import");
+  const [rawEntries, setRawEntries] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async () => {
+    try { setError(""); setStatus(await request<Record<string, unknown>>("/sca/osv-mirror/status")); }
+    catch (requestError) { setStatus(null); setError(`OSV 镜像状态加载失败：${errorMessage(requestError)}`); }
+  };
+  const importMirror = async () => {
+    try {
+      const entries = JSON.parse(rawEntries);
+      if (!Array.isArray(entries)) throw new Error("请输入 JSON 数组 entries");
+      setSaving(true); setError("");
+      setStatus(await request<Record<string, unknown>>("/sca/osv-mirror/import", { method: "POST", body: JSON.stringify({ entries, source: source.trim() || "manual-import" }) }));
+      setRawEntries("");
+    } catch (requestError) { setError(`OSV 镜像导入失败：${errorMessage(requestError)}`); }
+    finally { setSaving(false); }
+  };
+  useEffect(() => { void refresh(); }, []);
+  return <section className="panel full"><div className="panel-header"><div><h3>OSV 离线镜像</h3><span>本地镜像优先于在线 OSV；未命中时才尝试在线查询</span></div><button className="secondary-action" disabled={saving} onClick={() => void refresh()}>刷新状态</button></div><div className="kv-list"><div><span>状态</span><strong>{textValue(status?.status)}</strong></div><div><span>记录数</span><strong>{textValue(status?.entry_count)}</strong></div><div><span>路径</span><strong>{textValue(status?.path)}</strong></div></div><p>{textValue(status?.detail)}</p><details><summary>导入本地 OSV 镜像 JSON</summary><p>输入 JSON 数组；每条记录需包含 ecosystem、package、version 或 affected，以及 vulnerabilities。导入文件仅写入被 Git 忽略的离线资源目录。</p><div className="filter-grid"><input value={source} onChange={(event) => setSource(event.target.value)} placeholder="情报来源标识" /><textarea value={rawEntries} onChange={(event) => setRawEntries(event.target.value)} placeholder='[{"ecosystem":"pypi","package":"example","version":"1.0.0","vulnerabilities":[{"id":"CVE-...","severity":"high","summary":"..."}]}]' /><button className="secondary-action" disabled={saving || !rawEntries.trim()} onClick={() => void importMirror()}>{saving ? "导入中" : "导入镜像"}</button></div></details>{error ? <div className="report-error">{error}</div> : null}</section>;
+}
+
+function ScaPolicyOverridePanel({ project }: { project: Project | null }) {
+  const [policies, setPolicies] = useState<ScaPolicies | null>(null);
+  const [audit, setAudit] = useState<ScaPolicyAudit[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [scope, setScope] = useState<"project" | "platform">("project");
+  const [policyKind, setPolicyKind] = useState<"vulnerability" | "license">("vulnerability");
+  const [policyId, setPolicyId] = useState("");
+  const [policyConfig, setPolicyConfig] = useState("");
+  const refresh = async () => {
+    if (!project) return;
+    try {
+      setError("");
+      const [policyData, auditData] = await Promise.all([
+        request<ScaPolicies>(`/sca/policies?project_id=${project.id}`),
+        request<ScaPolicyAudit[]>(`/sca/projects/${project.id}/policy-audit`),
+      ]);
+      setPolicies(policyData); setAudit(auditData);
+    } catch (requestError) { setError(`策略治理数据加载失败：${errorMessage(requestError)}`); }
+  };
+  const toggle = async (policyKind: "vulnerability" | "license", policyId: string, enabled: boolean) => {
+    if (!project) return;
+    setSaving(true);
+    try {
+      setError("");
+      await request("/sca/policies/overrides", { method: "POST", body: JSON.stringify({ project_id: project.id, policy_kind: policyKind, policy_id: policyId, enabled, actor: "platform-admin", change_note: `通过治理页${enabled ? "启用" : "停用"}策略` }) });
+      await refresh();
+    } catch (requestError) { setError(`策略更新失败：${errorMessage(requestError)}`); }
+    finally { setSaving(false); }
+  };
+  const saveCustomPolicy = async () => {
+    if (!policyId.trim() || !policyConfig.trim()) return;
+    setSaving(true);
+    try {
+      const config = JSON.parse(policyConfig);
+      if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("策略配置必须是 JSON 对象");
+      setError("");
+      await request("/sca/policies/overrides", { method: "POST", body: JSON.stringify({ project_id: scope === "project" ? project?.id : null, policy_kind: policyKind, policy_id: policyId.trim(), enabled: true, config, actor: "platform-admin", change_note: "通过治理页新增或覆盖策略" }) });
+      setPolicyId(""); setPolicyConfig(""); await refresh();
+    } catch (requestError) { setError(`策略保存失败：${errorMessage(requestError)}`); }
+    finally { setSaving(false); }
+  };
+  useEffect(() => { void refresh(); }, [project?.id]);
+  if (!project) return null;
+  const rows = [
+    ...(policies?.vulnerability_rules ?? []).map((item) => ({ kind: "vulnerability" as const, id: item.id, title: item.id, detail: `${item.ecosystem} · ${item.package} · ${item.affected ?? "-"}`, enabled: item.enabled, source: item.source ?? "packaged" })),
+    ...(policies?.license_policies ?? []).map((item) => ({ kind: "license" as const, id: item.id, title: item.id, detail: `${item.policy} · ${item.keywords.join("、") || "无关键词"}`, enabled: item.enabled !== false, source: item.source ?? "packaged" })),
+  ];
+  return <section className="panel full"><div className="panel-header"><div><h3>项目级策略覆盖与审计</h3><span>覆盖不改写随代码发布的基线规则，并在后续扫描快照中留痕</span></div><button className="secondary-action" disabled={saving} onClick={() => void refresh()}>刷新</button></div>{error ? <div className="report-error">{error}</div> : null}<table className="compact-table"><thead><tr><th>策略</th><th>范围</th><th>来源</th><th>状态</th><th>操作</th></tr></thead><tbody>{rows.length ? rows.map((item) => <tr key={`${item.kind}-${item.id}`}><td><strong>{item.title}</strong><span className="cell-subtext">{item.detail}</span></td><td>当前项目</td><td>{item.source}</td><td>{item.enabled ? "已启用" : "已停用"}</td><td><button className="secondary-action" disabled={saving} onClick={() => void toggle(item.kind, item.id, !item.enabled)}>{item.enabled ? "停用" : "启用"}</button></td></tr>) : <tr><td colSpan={5} className="empty-cell">暂无可管理策略。</td></tr>}</tbody></table><details className="advanced-details"><summary>新增或覆盖策略</summary><p>漏洞策略 JSON 需包含 ecosystem、package、affected、severity、summary、fixed_version；许可证策略需包含 keywords、policy、summary、remediation。选择“平台级”会应用于所有本地项目。</p><div className="filter-grid"><select value={scope} onChange={(event) => setScope(event.target.value as "project" | "platform")}><option value="project">当前项目</option><option value="platform">平台级</option></select><select value={policyKind} onChange={(event) => setPolicyKind(event.target.value as "vulnerability" | "license")}><option value="vulnerability">漏洞规则</option><option value="license">许可证策略</option></select><input value={policyId} onChange={(event) => setPolicyId(event.target.value)} placeholder="策略 ID，例如 CUSTOM-CVE-2026-001" /><textarea value={policyConfig} onChange={(event) => setPolicyConfig(event.target.value)} placeholder='{"ecosystem":"npm","package":"example","affected":"<2.0.0","severity":"high","summary":"...","fixed_version":"2.0.0"}' /><button className="secondary-action" disabled={saving || !policyId.trim() || !policyConfig.trim()} onClick={() => void saveCustomPolicy()}>保存策略</button></div></details><details className="advanced-details"><summary>策略审计记录（最近 {audit.length} 条）</summary>{audit.length ? <table className="compact-table"><thead><tr><th>时间</th><th>事件</th><th>操作人</th><th>详情</th></tr></thead><tbody>{audit.slice(0, 10).map((item) => <tr key={item.id}><td>{formatDateTime(item.created_at)}</td><td>{item.event_type}</td><td>{item.actor ?? "-"}</td><td>{Object.entries(item.details).map(([key, value]) => <span className="cell-subtext" key={key}>{key}: {textValue(value)}</span>)}</td></tr>)}</tbody></table> : <div className="empty-project">暂无项目级策略变更记录。</div>}</details></section>;
 }
 
 function ImpactPathTable({ paths, nodes }: { paths: NonNullable<DependencyGraph["impact_paths"]>; nodes: DependencyGraphNode[] }) {
@@ -1911,7 +2019,7 @@ function buildSecurityReportHtml(report: SecurityReport) {
 }
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character] ?? character)); }
 function safeFilename(value: string) { return value.replace(/[\\/:*?"<>|]/g, "-").trim() || "project"; }
-function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "grype" ? "Grype" : value === "trivy" ? "Trivy（离线库）" : value === "syft" ? "Syft" : value === "osv+grype" ? "OSV + Grype" : value === "osv+trivy" ? "OSV + Trivy" : value === "local_rule+grype" ? "本地规则 + Grype" : value === "local_rule+trivy" ? "本地规则 + Trivy" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
+function sourceLabel(value?: string | null) { return value === "osv" ? "OSV" : value === "osv_mirror" ? "OSV 本地镜像" : value === "osv_mirror+grype" ? "OSV 本地镜像 + Grype" : value === "osv_mirror+trivy" ? "OSV 本地镜像 + Trivy" : value === "local_rule" ? "本地规则" : value === "license_rule" ? "许可证" : value === "grype" ? "Grype" : value === "trivy" ? "Trivy（离线库）" : value === "syft" ? "Syft" : value === "osv+grype" ? "OSV + Grype" : value === "osv+trivy" ? "OSV + Trivy" : value === "local_rule+grype" ? "本地规则 + Grype" : value === "local_rule+trivy" ? "本地规则 + Trivy" : value === "version_missing" ? "版本缺失" : value === "osv_error" ? "OSV 失败" : value === "clean" ? "无风险" : value === "not_supported" ? "不支持" : value ?? "未知"; }
 function riskStatusLabel(value?: string | null) { return value === "vulnerable" ? "存在漏洞" : value === "license-risk" ? "许可证风险" : value === "review-required" ? "需要复核" : value === "accepted-risk" ? "已接受风险" : value === "clean" ? "无风险" : value === "not_checked" ? "未检查" : value ?? "未知"; }
 function severityLabel(value?: string | null) { return value === "critical" ? "严重" : value === "high" ? "高危" : value === "medium" ? "中危" : value === "low" ? "低危" : value === "info" ? "提示" : value === "none" ? "无等级" : value ?? "-"; }
 function scaExceptionStatusLabel(value: string) { return value === "pending" ? "待审批" : value === "approved" ? "已批准" : value === "rejected" ? "已拒绝" : value === "revoked" ? "已撤销" : value; }
@@ -1919,7 +2027,7 @@ function dependencyTypeLabel(value?: string | null) { return value === "runtime"
 function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需合规复核" : value === "restricted" ? "受限需审批" : value === "unknown" ? "未知需确认" : value ?? "-"; }
 function scanStatusLabel(value?: string | null) { return value === "queued" ? "排队中" : value === "running" ? "运行中" : value === "completed" ? "已完成" : value === "failed" ? "失败" : value ?? "-"; }
 function toolStatusLabel(value?: string | null) { return value === "disabled" ? "未启用" : value === "success" ? "成功" : value === "partial_failed" ? "部分失败" : value === "failed" ? "失败" : value ?? "未知"; }
-function osvLookupStatusLabel(value?: string | null) { return value === "available" ? "OSV 已连接" : value === "offline_degraded" ? "离线降级" : value === "not_used" ? "未使用" : "历史批次未记录"; }
+function osvLookupStatusLabel(value?: string | null) { return value === "available" ? "OSV 已连接" : value === "mirror_used" ? "本地 OSV 镜像" : value === "offline_degraded" ? "离线降级" : value === "not_used" ? "未使用" : "历史批次未记录"; }
 function grypeInputLabel(value?: string | null) { return value === "syft-sbom" ? "Syft SBOM" : value === "directory" ? "目录回退" : "-"; }
 function toolHealthStatusLabel(value?: string | null) { return value === "success" ? "可用" : value === "warning" ? "有警告" : value === "failed" ? "不可用" : value ?? "未检查"; }
 function relationTypeLabel(value: string) { return value === "reported_by" ? "产生风险" : value === "validated_by" ? "动态验证" : value === "observed_by" ? "运行时取证" : value; }

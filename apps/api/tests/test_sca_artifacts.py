@@ -27,3 +27,21 @@ def test_accepts_new_native_tree_snapshot_qualities() -> None:
 
     assert edges is not None
     assert {edge["quality"] for edge in edges} == {"maven_native_tree", "go_native_tree"}
+
+
+def test_collects_local_node_and_maven_package_evidence(tmp_path: Path) -> None:
+    node_manifest = tmp_path / "node_modules" / "left-pad" / "package.json"
+    node_manifest.parent.mkdir(parents=True)
+    node_manifest.write_text('{"name":"left-pad","version":"1.3.0"}', encoding="utf-8")
+    jar = tmp_path / ".m2" / "repository" / "org" / "example" / "demo" / "1.0.0" / "demo-1.0.0.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"demo-jar")
+    hashes = collect_artifact_hashes(
+        str(tmp_path),
+        [
+            ParsedComponent("npm", "left-pad", "1.3.0", "runtime", "package.json", "npm"),
+            ParsedComponent("maven", "org.example:demo", "1.0.0", "runtime", "pom.xml", "maven"),
+        ],
+    )
+
+    assert {item["kind"] for item in hashes["packages"]} == {"npm_installed_manifest", "maven_local_jar"}

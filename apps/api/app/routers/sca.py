@@ -5,12 +5,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import ComponentRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord, ScaPolicyExceptionRecord
+from app.db_models import (
+    ComponentRecord,
+    FindingRecord,
+    ProjectModuleRecord,
+    ProjectRecord,
+    ScanTaskRecord,
+    ScaPolicyAuditRecord,
+    ScaPolicyExceptionRecord,
+    ScaPolicyOverrideRecord,
+)
 from app.services.sca_license_policy import load_license_policies
+from app.services.sca_osv_mirror import import_osv_mirror, osv_mirror_status
+from app.services.sca_policy_overrides import effective_license_policies, effective_vulnerability_rules
 from app.services.sca_vulnerability_rules import load_vulnerability_rules
 from app.models import (
     Component,
@@ -32,6 +43,7 @@ from app.repositories.mappers import component_to_schema
 from app.services.sca_parser import ParsedComponent, dedupe_components, parse_dependency_tree
 from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
+from app.services.sca_native_tree import native_dependency_source_summary
 from app.services.sca_python_environment import environment_metadata, inspect_python_environment
 from app.services.sca_artifacts import collect_artifact_hashes
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
@@ -41,8 +53,136 @@ router = APIRouter()
 
 
 @router.get("/policies")
-def list_sca_policies() -> dict[str, object]:
-    return {"vulnerability_rules": [{"id": item.vulnerability_id, "ecosystem": item.ecosystem, "package": item.package, "enabled": item.enabled, "severity": item.severity.value} for item in load_vulnerability_rules()], "license_policies": [{"id": item.policy_id, "policy": item.policy, "keywords": list(item.keywords), "approval_required": item.approval_required} for item in load_license_policies()]}
+def list_sca_policies(project_id: UUID | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
+    if project_id is not None and db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    overrides = scoped_policy_overrides(db, project_id)
+    vulnerability_rules = effective_vulnerability_rules(load_vulnerability_rules(), overrides)
+    license_policies = effective_license_policies(load_license_policies(), overrides)
+    return {
+        "scope": "project" if project_id else "platform",
+        "vulnerability_rules": [
+            {
+                "id": item.vulnerability_id,
+                "ecosystem": item.ecosystem,
+                "package": item.package,
+                "enabled": item.enabled,
+                "severity": item.severity.value,
+                "affected": item.affected,
+                "fixed_version": item.fixed_version,
+                "source": policy_source(item.vulnerability_id, "vulnerability", overrides),
+            }
+            for item in vulnerability_rules
+        ],
+        "license_policies": [
+            {
+                "id": item.policy_id,
+                "policy": item.policy,
+                "keywords": list(item.keywords),
+                "approval_required": item.approval_required,
+                "enabled": bool(item.keywords),
+                "source": policy_source(item.policy_id, "license", overrides),
+            }
+            for item in license_policies
+        ],
+        "override_count": len(overrides),
+    }
+
+
+@router.post("/policies/overrides", status_code=201)
+def create_policy_override(payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    project_id = parse_optional_project_id(payload.get("project_id"), db)
+    policy_kind = str(payload.get("policy_kind") or "").strip().lower()
+    policy_id = str(payload.get("policy_id") or "").strip()
+    if policy_kind not in {"vulnerability", "license"} or not policy_id:
+        raise HTTPException(status_code=400, detail="policy_kind (vulnerability|license) and policy_id are required")
+    config = payload.get("config")
+    if config is not None and not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="config must be an object")
+    item = ScaPolicyOverrideRecord(
+        project_id=project_id,
+        policy_kind=policy_kind,
+        policy_id=policy_id,
+        enabled=bool(payload.get("enabled", True)),
+        config=config or {},
+        actor=string_or_none(payload.get("actor")),
+        change_note=string_or_none(payload.get("change_note")),
+    )
+    try:
+        validate_policy_override(item, [*scoped_policy_overrides(db, UUID(project_id) if project_id else None), item])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.add(item)
+    db.flush()
+    record_policy_audit(db, item, "policy_override_created")
+    db.commit()
+    db.refresh(item)
+    return policy_override_payload(item)
+
+
+@router.patch("/policies/overrides/{override_id}")
+def update_policy_override(override_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    item = db.get(ScaPolicyOverrideRecord, str(override_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="SCA policy override not found")
+    if "enabled" in payload:
+        item.enabled = bool(payload["enabled"])
+    if "config" in payload:
+        if not isinstance(payload["config"], dict):
+            raise HTTPException(status_code=400, detail="config must be an object")
+        item.config = dict(payload["config"])
+    if "actor" in payload:
+        item.actor = string_or_none(payload.get("actor"))
+    if "change_note" in payload:
+        item.change_note = string_or_none(payload.get("change_note"))
+    item.updated_at = datetime.utcnow()
+    try:
+        validate_policy_override(item, scoped_policy_overrides(db, UUID(item.project_id) if item.project_id else None))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_policy_audit(db, item, "policy_override_updated")
+    db.commit()
+    db.refresh(item)
+    return policy_override_payload(item)
+
+
+@router.get("/projects/{project_id}/policy-audit")
+def list_policy_audit(project_id: UUID, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    records = db.scalars(
+        select(ScaPolicyAuditRecord)
+        .where(or_(ScaPolicyAuditRecord.project_id.is_(None), ScaPolicyAuditRecord.project_id == str(project_id)))
+        .order_by(ScaPolicyAuditRecord.created_at.desc())
+        .limit(100)
+    ).all()
+    return [
+        {
+            "id": str(record.id),
+            "event_type": record.event_type,
+            "actor": record.actor,
+            "details": record.details or {},
+            "created_at": record.created_at,
+        }
+        for record in records
+    ]
+
+
+@router.get("/osv-mirror/status")
+def get_osv_mirror_status() -> dict[str, object]:
+    return osv_mirror_status()
+
+
+@router.post("/osv-mirror/import", status_code=201)
+def import_local_osv_mirror(payload: dict[str, object]) -> dict[str, object]:
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="entries must be a JSON array")
+    try:
+        return import_osv_mirror(entries, string_or_none(payload.get("source")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/projects/{project_id}/exceptions")
@@ -126,7 +266,13 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         tool_scan = scan_with_syft_grype(payload.source_path) if payload.enable_tool_scan else None
         tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
         parsed_components = merge_tool_components([*parsed.components, *python_environment.components], tool_scan)
-        analyzed_components = apply_tool_vulnerabilities(analyze_components(parsed_components), tool_scan)
+        policy_overrides = scoped_policy_overrides(db, payload.project_id)
+        vulnerability_rules = effective_vulnerability_rules(load_vulnerability_rules(), policy_overrides)
+        license_policies = effective_license_policies(load_license_policies(), policy_overrides)
+        analyzed_components = apply_tool_vulnerabilities(
+            analyze_components(parsed_components, vulnerability_rules, license_policies),
+            tool_scan,
+        )
         records: list[ComponentRecord] = []
         for component in analyzed_components:
             record = ComponentRecord(
@@ -159,7 +305,10 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             "sca_tool_scan": tool_status.model_dump(),
             "python_environment": environment_metadata(python_environment),
             "osv_lookup": osv_lookup_metadata(analyzed_components),
+            "osv_mirror": osv_mirror_status(),
             "artifact_hashes": collect_artifact_hashes(payload.source_path, parsed_components),
+            "native_dependency_sources": native_dependency_source_summary(payload.source_path, dependency_graph["edges"]),
+            "policy_snapshot": policy_snapshot(vulnerability_rules, license_policies, policy_overrides),
             "dependency_snapshot": {
                 "captured_at": datetime.utcnow().isoformat(),
                 "edges": dependency_graph["edges"],
@@ -323,6 +472,9 @@ def export_project_sca_report(
             "artifact_hashes": scan_metadata_value(scan, "artifact_hashes") or {},
             "python_environment": scan_metadata_value(scan, "python_environment") or {},
             "osv_lookup": scan_metadata_value(scan, "osv_lookup") or {},
+            "osv_mirror": scan_metadata_value(scan, "osv_mirror") or {},
+            "native_dependency_sources": scan_metadata_value(scan, "native_dependency_sources") or {},
+            "policy_snapshot": scan_metadata_value(scan, "policy_snapshot") or {},
             "dependency_snapshot": scan_metadata_value(scan, "dependency_snapshot") or {},
         },
     )
@@ -374,10 +526,30 @@ def get_project_dependency_graph(
 
 
 @router.get("/projects/{project_id}/gate")
-def sca_gate(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
-    components = load_project_components(db, project_id)
-    blocked = [item for item in components if item.risk_status != "accepted-risk" and item.severity in {"critical", "high"}]
-    return {"project_id": str(project_id), "decision": "block" if blocked else "pass", "blocked_component_count": len(blocked), "accepted_risk_count": sum(1 for item in components if item.risk_status == "accepted-risk"), "reason": "存在未豁免的严重或高危供应链风险" if blocked else "未发现未豁免的严重或高危供应链风险"}
+def sca_gate(project_id: UUID, scan_task_id: UUID | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    components = load_project_components(db, project_id, scan_task_id)
+    return build_sca_gate_result(project_id, scan_task_id, components)
+
+
+@router.get("/projects/{project_id}/evidence")
+def get_sca_evidence(project_id: UUID, scan_task_id: UUID | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    resolved_scan_id = scan_task_id or latest_sca_scan_id(db, project_id)
+    if resolved_scan_id is None:
+        raise HTTPException(status_code=400, detail="No completed SCA scans found")
+    scan = db.get(ScanTaskRecord, str(resolved_scan_id))
+    components = load_project_components(db, project_id, resolved_scan_id)
+    return {
+        "scan_task_id": str(resolved_scan_id),
+        "artifact_hashes": scan_metadata_value(scan, "artifact_hashes") or {},
+        "osv_mirror": scan_metadata_value(scan, "osv_mirror") or {},
+        "native_dependency_sources": scan_metadata_value(scan, "native_dependency_sources") or {},
+        "policy_snapshot": scan_metadata_value(scan, "policy_snapshot") or {},
+        "gate": build_sca_gate_result(project_id, resolved_scan_id, components),
+    }
 
 
 @router.get("/projects/{project_id}/report.html", response_class=HTMLResponse)
@@ -410,10 +582,132 @@ def export_sca_report_html(
         f"<h1>{escape(str(report.project['name']))} · SCA 供应链风险报告</h1>"
         f"<p>扫描批次：{escape(str(report.scan['scan_task_id']))}；"
         f"风险组件：{report.summary.get('risky_component_count', 0)}</p>"
+        f"<p>门禁结论：{escape(str(sca_gate(project_id, scan_task_id, db)['decision']))}</p>"
         "<h2>高风险组件</h2>"
         "<table><tr><th>组件</th><th>版本</th><th>等级</th><th>状态</th><th>漏洞</th></tr>"
         f"{rows}</table><h2>修复建议</h2><ul>{recommendations}</ul></html>"
     )
+
+
+def scoped_policy_overrides(db: Session, project_id: UUID | None) -> list[ScaPolicyOverrideRecord]:
+    conditions = [ScaPolicyOverrideRecord.project_id.is_(None)]
+    if project_id is not None:
+        conditions.append(ScaPolicyOverrideRecord.project_id == str(project_id))
+    return db.scalars(
+        select(ScaPolicyOverrideRecord)
+        .where(or_(*conditions))
+        .order_by(ScaPolicyOverrideRecord.created_at.asc())
+    ).all()
+
+
+def parse_optional_project_id(value: object, db: Session) -> str | None:
+    if value in {None, ""}:
+        return None
+    try:
+        project_id = UUID(str(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="project_id must be a UUID") from exc
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return str(project_id)
+
+
+def string_or_none(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def validate_policy_override(item: ScaPolicyOverrideRecord, overrides: list[ScaPolicyOverrideRecord]) -> None:
+    if item.policy_kind == "vulnerability":
+        effective_vulnerability_rules(load_vulnerability_rules(), overrides)
+    elif item.policy_kind == "license":
+        effective_license_policies(load_license_policies(), overrides)
+    else:
+        raise ValueError("Unsupported SCA policy kind")
+
+
+def policy_source(policy_id: str, kind: str, overrides: list[ScaPolicyOverrideRecord]) -> str:
+    matched = [item for item in overrides if item.policy_kind == kind and item.policy_id == policy_id]
+    if not matched:
+        return "packaged"
+    effective = sorted(
+        matched,
+        key=lambda item: (item.project_id is not None, item.updated_at or item.created_at),
+    )[-1]
+    return "project_override" if effective.project_id else "platform_override"
+
+
+def policy_override_payload(item: ScaPolicyOverrideRecord) -> dict[str, object]:
+    return {
+        "id": str(item.id),
+        "project_id": item.project_id,
+        "policy_kind": item.policy_kind,
+        "policy_id": item.policy_id,
+        "enabled": item.enabled,
+        "config": item.config or {},
+        "actor": item.actor,
+        "change_note": item.change_note,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+def record_policy_audit(db: Session, item: ScaPolicyOverrideRecord, event_type: str) -> None:
+    db.add(
+        ScaPolicyAuditRecord(
+            project_id=item.project_id,
+            policy_override_id=item.id,
+            event_type=event_type,
+            actor=item.actor,
+            details={
+                "policy_kind": item.policy_kind,
+                "policy_id": item.policy_id,
+                "enabled": item.enabled,
+                "change_note": item.change_note,
+            },
+        )
+    )
+
+
+def policy_snapshot(vulnerability_rules, license_policies, overrides: list[ScaPolicyOverrideRecord]) -> dict[str, object]:
+    return {
+        "vulnerability_rule_count": len(vulnerability_rules),
+        "enabled_vulnerability_rule_count": sum(1 for rule in vulnerability_rules if rule.enabled),
+        "license_policy_count": len(license_policies),
+        "enabled_license_policy_count": sum(1 for policy in license_policies if policy.keywords),
+        "override_count": len(overrides),
+        "override_ids": [str(item.id) for item in overrides],
+    }
+
+
+def build_sca_gate_result(project_id: UUID, scan_task_id: UUID | None, components: list[ComponentRecord]) -> dict[str, object]:
+    blocked = [
+        item
+        for item in components
+        if item.risk_status != "accepted-risk" and item.severity in {"critical", "high"}
+    ]
+    accepted = [item for item in components if item.risk_status == "accepted-risk"]
+    decision = "block" if blocked else "pass"
+    return {
+        "project_id": str(project_id),
+        "scan_task_id": str(scan_task_id) if scan_task_id else None,
+        "decision": decision,
+        "exit_code": 2 if decision == "block" else 0,
+        "blocked_component_count": len(blocked),
+        "accepted_risk_count": len(accepted),
+        "reason": "存在未豁免的严重或高危供应链风险" if blocked else "未发现未豁免的严重或高危供应链风险",
+        "blocked_components": [
+            {
+                "name": item.name,
+                "version": item.version,
+                "ecosystem": item.ecosystem,
+                "severity": item.severity,
+                "vulnerability_ids": item.vulnerability_ids or [],
+            }
+            for item in blocked[:50]
+        ],
+        "ci_usage": "GET /api/sca/projects/{project_id}/gate?scan_task_id={scan_task_id}; exit_code 为 0 代表 pass，2 代表 block。",
+    }
 
 
 def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToolStatus:
@@ -451,8 +745,11 @@ def scan_tool_status(scan: ScanTaskRecord | None) -> ScaToolStatus | None:
 def osv_lookup_metadata(components: list[ParsedComponent]) -> dict[str, object]:
     errors = [component.osv_error for component in components if component.osv_error]
     checked_count = sum(1 for component in components if component.osv_checked)
+    mirror_checked_count = sum(1 for component in components if component.risk_source == "osv_mirror")
     if errors:
         status = "offline_degraded"
+    elif mirror_checked_count:
+        status = "mirror_used"
     elif checked_count:
         status = "available"
     else:
@@ -460,6 +757,7 @@ def osv_lookup_metadata(components: list[ParsedComponent]) -> dict[str, object]:
     return {
         "status": status,
         "checked_component_count": checked_count,
+        "mirror_checked_component_count": mirror_checked_count,
         "error_count": len(errors),
     }
 

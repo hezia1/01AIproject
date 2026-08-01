@@ -1,0 +1,40 @@
+name: SCA Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Project UUID registered in the AI security platform
+        required: true
+        type: string
+      scan_task_id:
+        description: Completed SCA scan UUID to gate
+        required: true
+        type: string
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required endpoint configuration
+        env:
+          SCA_API_BASE: ${{ secrets.SCA_API_BASE }}
+        run: test -n "$SCA_API_BASE"
+      - name: Evaluate SCA gate
+        id: sca_gate
+        env:
+          SCA_API_BASE: ${{ secrets.SCA_API_BASE }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          SCAN_TASK_ID: ${{ inputs.scan_task_id }}
+        run: |
+          response="$(curl --fail-with-body --silent --show-error "$SCA_API_BASE/api/sca/projects/$PROJECT_ID/gate?scan_task_id=$SCAN_TASK_ID")"
+          echo "$response" | jq .
+          decision="$(echo "$response" | jq -r '.decision')"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          if [ "$decision" != "pass" ]; then
+            echo "SCA gate blocked this build."
+            exit 2
+          fi
+      - name: Gate passed
+        if: steps.sca_gate.outputs.decision == 'pass'
+        run: echo "SCA gate passed."

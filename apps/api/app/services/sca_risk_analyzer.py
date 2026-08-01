@@ -3,10 +3,11 @@
 from dataclasses import replace
 
 from app.models import Severity
-from app.services.sca_license_policy import assess_license, format_license_summary
+from app.services.sca_license_policy import LicensePolicy, assess_license, format_license_summary
+from app.services.sca_osv_mirror import lookup_osv_mirror
 from app.services.osv_client import OsvLookupError, supports_osv, query_osv
 from app.services.sca_parser import ParsedComponent
-from app.services.sca_vulnerability_rules import load_vulnerability_rules, matches_vulnerability_rule
+from app.services.sca_vulnerability_rules import VulnerabilityRule, load_vulnerability_rules, matches_vulnerability_rule
 
 SEVERITY_WEIGHT = {
     Severity.critical: 5,
@@ -17,22 +18,30 @@ SEVERITY_WEIGHT = {
 }
 
 
-def analyze_components(components: list[ParsedComponent]) -> list[ParsedComponent]:
-    return [analyze_component(component) for component in components]
+def analyze_components(
+    components: list[ParsedComponent],
+    vulnerability_rules: tuple[VulnerabilityRule, ...] | None = None,
+    license_policies: tuple[LicensePolicy, ...] | None = None,
+) -> list[ParsedComponent]:
+    return [analyze_component(component, vulnerability_rules, license_policies) for component in components]
 
 
-def analyze_component(component: ParsedComponent) -> ParsedComponent:
+def analyze_component(
+    component: ParsedComponent,
+    vulnerability_rules: tuple[VulnerabilityRule, ...] | None = None,
+    license_policies: tuple[LicensePolicy, ...] | None = None,
+) -> ParsedComponent:
     matched_rules = [
         rule
-        for rule in load_vulnerability_rules()
+        for rule in (vulnerability_rules or load_vulnerability_rules())
         if matches_vulnerability_rule(component.ecosystem, component.name, component.version, rule)
     ]
-    osv_vulnerabilities, osv_checked, osv_error = lookup_osv_vulnerabilities(component)
+    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(component)
     vulnerability_ids = [item.vulnerability_id for item in osv_vulnerabilities] + [
         rule.vulnerability_id for rule in matched_rules
     ]
     severity = highest_severity([item.severity for item in osv_vulnerabilities] + [rule.severity for rule in matched_rules])
-    license_assessment = assess_license(component.license)
+    license_assessment = assess_license(component.license, license_policies)
     license_policy = license_assessment.policy
 
     summaries: list[str] = []
@@ -65,6 +74,7 @@ def analyze_component(component: ParsedComponent) -> ParsedComponent:
         version_missing=component.version is None,
         osv_checked=osv_checked,
         osv_error=osv_error,
+        osv_mirror_matched=mirror_matched,
     )
 
     return replace(
@@ -83,11 +93,14 @@ def analyze_component(component: ParsedComponent) -> ParsedComponent:
 
 def lookup_osv_vulnerabilities(component: ParsedComponent):
     if not supports_osv(component.ecosystem) or component.version is None:
-        return [], False, None
+        return [], False, None, False
+    mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, component.version)
+    if mirror_matched:
+        return mirrored, True, None, True
     try:
-        return query_osv(component.ecosystem, component.name, component.version), True, None
+        return query_osv(component.ecosystem, component.name, component.version), True, None, False
     except OsvLookupError as exc:
-        return [], True, str(exc)[:300]
+        return [], True, str(exc)[:300], False
 
 
 def determine_risk_source(
@@ -97,7 +110,10 @@ def determine_risk_source(
     version_missing: bool,
     osv_checked: bool,
     osv_error: str | None,
+    osv_mirror_matched: bool,
 ) -> str:
+    if osv_mirror_matched:
+        return "osv_mirror"
     if osv_matched:
         return "osv"
     if local_matched:

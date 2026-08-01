@@ -57,7 +57,8 @@ class ToolHealthResult:
 
 def offline_assets_dir() -> Path:
     configured = os.getenv("SCA_OFFLINE_DIR")
-    return Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[3] / "artifacts" / "sca-offline"
+    # services/ -> app/ -> api/ -> apps/ -> repository root
+    return Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[4] / "artifacts" / "sca-offline"
 
 
 def grype_cache_dir() -> Path:

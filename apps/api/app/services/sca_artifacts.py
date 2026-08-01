@@ -8,7 +8,7 @@ from app.services.sca_parser import ParsedComponent
 
 MANIFEST_NAMES = {
     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "requirements.txt",
-    "poetry.lock", "Pipfile.lock", "pom.xml", "go.mod", "go.sum",
+    "poetry.lock", "Pipfile.lock", "pom.xml", "go.mod", "go.sum", "gradle.lockfile",
 }
 
 
@@ -36,23 +36,44 @@ def installed_package_hashes(root: Path, components: list[ParsedComponent]) -> l
     results: list[dict[str, object]] = []
     seen: set[str] = set()
     for component in components:
-        if component.ecosystem != "pypi":
-            continue
-        normalized = component.name.lower().replace("-", "_")
-        for environment in (root / ".venv", root / "venv"):
-            site_packages = environment / "Lib" / "site-packages"
-            if not site_packages.is_dir():
+        candidates = artifact_candidates(root, component)
+        for path, kind in candidates:
+            if not path.is_file():
                 continue
-            candidates = list(site_packages.glob(f"{normalized}-*.dist-info/RECORD"))
-            for record in candidates[:1]:
-                key = str(record.resolve())
-                if key in seen:
-                    continue
-                seen.add(key)
-                entry = file_hash(record, root, "installed_package_record")
-                entry.update({"ecosystem": component.ecosystem, "name": component.name, "version": component.version})
-                results.append(entry)
+            key = str(path.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            entry = file_hash(path, root, kind)
+            entry.update({"ecosystem": component.ecosystem, "name": component.name, "version": component.version})
+            results.append(entry)
     return results
+
+
+def artifact_candidates(root: Path, component: ParsedComponent) -> list[tuple[Path, str]]:
+    if component.ecosystem == "pypi":
+        normalized = component.name.lower().replace("-", "_")
+        return [
+            (record, "python_installed_record")
+            for environment in (root / ".venv", root / "venv")
+            for record in (environment / "Lib" / "site-packages").glob(f"{normalized}-*.dist-info/RECORD")
+        ]
+    if component.ecosystem == "npm":
+        package_path = root / "node_modules"
+        for segment in component.name.split("/"):
+            package_path /= segment
+        return [(package_path / "package.json", "npm_installed_manifest")]
+    if component.ecosystem == "maven" and component.version and ":" in component.name:
+        group, artifact = component.name.split(":", 1)
+        base = root / ".m2" / "repository" / Path(*group.split(".")) / artifact / component.version
+        return [
+            (base / f"{artifact}-{component.version}.jar", "maven_local_jar"),
+            (base / f"{artifact}-{component.version}.pom", "maven_local_pom"),
+        ]
+    if component.ecosystem == "go":
+        vendor_root = root / "vendor" / Path(*component.name.split("/"))
+        return [(vendor_root / "go.mod", "go_vendor_module_manifest")]
+    return []
 
 
 def file_hash(path: Path, root: Path, kind: str) -> dict[str, object]:

@@ -197,3 +197,38 @@ def dedupe_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:
     for edge in edges:
         deduped[(edge["source"], edge["target"])] = edge
     return sorted(deduped.values(), key=lambda edge: (edge["source"], edge["target"]))
+
+
+def native_dependency_source_summary(source_path: str, edges: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    """Explain which native dependency sources actually contributed to this immutable scan snapshot."""
+    root = Path(source_path).expanduser().resolve()
+    specifications = {
+        "npm": ("package.json", "npm", "native_tree"),
+        "maven": ("pom.xml", "mvn", "maven_native_tree"),
+        "go": ("go.mod", "go", "go_native_tree"),
+    }
+    summary: dict[str, dict[str, object]] = {}
+    for ecosystem, (manifest, command, quality) in specifications.items():
+        edge_count = sum(1 for edge in edges if edge.get("quality") == quality)
+        manifest_found = (root / manifest).is_file()
+        tool_found = shutil.which(command) is not None
+        if edge_count:
+            status = "captured"
+            detail = f"已使用 {command} 原生依赖树捕获 {edge_count} 条关系。"
+        elif not manifest_found:
+            status = "not_applicable"
+            detail = f"未发现 {manifest}。"
+        elif not tool_found:
+            status = "tool_unavailable"
+            detail = f"已发现 {manifest}，但本机未找到 {command}。已保留清单/锁文件推断。"
+        else:
+            status = "fallback_used"
+            detail = f"{command} 未产生可映射的原生关系；已保留清单/锁文件推断。"
+        summary[ecosystem] = {
+            "status": status,
+            "manifest": manifest,
+            "tool": command,
+            "edge_count": edge_count,
+            "detail": detail,
+        }
+    return summary

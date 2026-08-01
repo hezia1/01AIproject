@@ -127,6 +127,37 @@ class ScaPolicyExceptionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
+
+class ScaPolicyOverrideRecord(Base):
+    """Persist platform or project scoped SCA policy changes without mutating packaged defaults."""
+
+    __tablename__ = "sca_policy_overrides"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"))
+    policy_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    policy_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    change_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ScaPolicyAuditRecord(Base):
+    """Append-only local audit trail for SCA policy governance operations."""
+
+    __tablename__ = "sca_policy_audit"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"))
+    policy_override_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
 class DastValidationRecord(Base):
     __tablename__ = "dast_validations"
 
