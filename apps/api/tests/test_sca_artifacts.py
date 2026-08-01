@@ -2,11 +2,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.db_models import ComponentRecord, ProjectRecord
-from app.services.sca_artifacts import collect_artifact_hashes
+from app.services.sca_artifacts import collect_artifact_hashes, source_fingerprint
+from app.services.sca_ci import run_local_sca
 from app.services.sca_dependency_graph import dependency_snapshot_edges
 from app.services.sca_parser import ParsedComponent
 from app.services.sca_parser import parse_dependency_tree
 from app.services.sca_sbom import package_url
+from app.routers.sca import validate_sca_source_path
 
 
 def test_collects_reproducible_manifest_and_installed_package_hashes(tmp_path: Path) -> None:
@@ -64,3 +66,24 @@ def test_parses_common_additional_ecosystem_lockfiles_and_builds_purls(tmp_path:
         for item in components.values()
     ]
     assert {package_url(item) for item in records} >= {"pkg:composer/acme/lib@1.2.3", "pkg:cargo/serde@1.0.0", "pkg:nuget/Newtonsoft.Json@13.0.3", "pkg:gem/rack@3.1.0"}
+
+
+def test_local_ci_scan_writes_reproducible_input_fingerprint_without_network(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "requirements.txt").write_text("demo-package==1.0.0\n", encoding="utf-8")
+    monkeypatch.setenv("SCA_OFFLINE_ONLY", "true")
+
+    result = run_local_sca(str(tmp_path))
+    fingerprint = source_fingerprint(str(tmp_path))
+
+    assert result["gate"]["decision"] == "pass"
+    assert result["sarif"]["version"] == "2.1.0"
+    assert fingerprint["status"] == "available"
+    assert len(str(fingerprint["sha256"])) == 64
+
+
+def test_api_sca_scan_path_is_restricted_to_configured_project_root(tmp_path: Path) -> None:
+    project = ProjectRecord(id=str(uuid4()), name="demo", source_path=str(tmp_path), default_branch="main")
+    child = tmp_path / "service"
+    child.mkdir()
+
+    assert validate_sca_source_path(project, str(child)) == str(child.resolve())

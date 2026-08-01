@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from dataclasses import replace
+import os
 
 from app.models import Severity
 from app.services.sca_license_policy import LicensePolicy, assess_license, format_license_summary
@@ -108,6 +109,8 @@ def lookup_osv_vulnerabilities(component: ParsedComponent):
     mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, component.version)
     if mirror_matched:
         return mirrored, True, None, True
+    if os.getenv("SCA_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"}:
+        return [], False, "SCA offline-only mode: no matching local OSV record", False
     try:
         return query_osv(component.ecosystem, component.name, component.version), True, None, False
     except OsvLookupError as exc:

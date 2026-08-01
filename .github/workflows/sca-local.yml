@@ -1,0 +1,40 @@
+name: Local SCA Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      offline:
+        description: Run without online OSV requests
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install local SCA runtime
+        run: pip install -r apps/api/requirements.txt
+      - name: Scan repository and create SARIF
+        id: sca
+        shell: bash
+        run: |
+          set +e
+          if [ "${{ inputs.offline }}" = "true" ]; then offline="--offline"; else offline=""; fi
+          python scripts/sca_ci.py --source . $offline --json sca-result.json --sarif sca-result.sarif --fail-on-block
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sca-evidence
+          path: |
+            sca-result.json
+            sca-result.sarif
+      - name: Enforce SCA gate
+        if: steps.sca.outputs.exit_code != '0'
+        run: exit ${{ steps.sca.outputs.exit_code }}

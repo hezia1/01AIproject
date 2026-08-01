@@ -33,6 +33,32 @@ def collect_artifact_hashes(source_path: str, components: list[ParsedComponent])
     }
 
 
+def source_fingerprint(source_path: str) -> dict[str, object]:
+    """Return a stable digest of SCA inputs without retaining source contents."""
+    root = Path(source_path).expanduser().resolve()
+    if not root.is_dir():
+        return {"status": "unavailable", "sha256": None, "file_count": 0}
+    candidates = [
+        path for path in root.rglob("*")
+        if path.is_file() and (path.name in MANIFEST_NAMES or path.suffix.lower() == ".csproj")
+        and not any(part in {".git", "node_modules", ".venv", "venv", "target", "dist", "build"} for part in path.parts)
+    ]
+    digest = hashlib.sha256()
+    records: list[dict[str, object]] = []
+    for path in sorted(candidates):
+        record = file_hash(path, root, "scan_input")
+        digest.update(record["path"].encode("utf-8"))
+        digest.update(str(record["sha256"]).encode("ascii"))
+        records.append(record)
+    return {
+        "status": "available" if records else "not_found",
+        "algorithm": "sha256",
+        "sha256": digest.hexdigest() if records else None,
+        "file_count": len(records),
+        "files": records,
+    }
+
+
 def installed_package_hashes(root: Path, components: list[ParsedComponent]) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
     seen: set[str] = set()

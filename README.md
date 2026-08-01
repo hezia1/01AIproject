@@ -100,8 +100,8 @@ http://localhost:5173
 已实现：
 
 - 解析依赖文件并生成组件清单。
-- 支持 `package.json`、`requirements.txt`、`pom.xml`、`go.mod`。
-- 支持 lockfile 解析第一版：`package-lock.json`、`yarn.lock`、`pnpm-lock.yaml`、`poetry.lock`、`Pipfile.lock`。
+- 支持 npm、PyPI、Maven、Go、Ruby/Bundler、Composer、Cargo、NuGet 的常见清单与锁文件。
+- 支持 `package-lock.json`、`yarn.lock`、`pnpm-lock.yaml`、`poetry.lock`、`Pipfile.lock`、`Gemfile.lock`、`composer.lock`、`Cargo.lock`、`packages.lock.json` 等锁文件。
 - 组件去重、依赖类型、直接/传递依赖标记、来源文件、包管理器字段。
 - 接入 OSV 漏洞库查询。
 - 本地漏洞规则库第一版：独立 JSON 规则文件，覆盖 npm、PyPI、Maven、Go 示例规则。
@@ -120,6 +120,11 @@ http://localhost:5173
 - 本地 OSV 镜像：可在前端导入 JSON 漏洞快照；扫描优先命中该镜像，再尝试在线 OSV 与本地规则降级，镜像状态会写入扫描证据。
 - 策略治理第一版：支持平台级和项目级漏洞/许可证策略覆盖、启停、自定义策略，以及持久化变更审计。
 - SCA 门禁与证据快照：提供扫描级门禁结果（`pass` / `block`、CI 退出码）、策略快照、哈希证据与依赖来源；附带 GitHub Actions 消费模板。
+- 离线 CVSS / EPSS / KEV 情报：前端可导入结构化情报，组件快照保留综合风险分、在野利用标识、修复版本和情报来源。
+- VEX：支持对特定组件漏洞保留“未受影响、已修复、受影响、调查中”结论；不删除原始漏洞证据。
+- 例外审批状态机：持久化申请角色、审批角色、状态流转和审批历史；当前未接入独立身份认证时，角色仅用于流程校验与审计。
+- 可配置门禁：按严重等级、许可证策略、综合风险分、KEV、扫描新鲜度和关键漏洞情报完整性阻断。
+- 本地 CI CLI：`python scripts/sca_ci.py --source . --offline --json sca-result.json --sarif sca-result.sarif --fail-on-block`，输出扫描输入指纹、JSON 和 SARIF。
 - 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
 - 前端组件风险清单分页，每页 10 条，并展示依赖类型分布、许可证策略分布、CycloneDX 和 SPDX 导出按钮。
 - 前端组件清单支持按生态、依赖类型、风险状态、严重等级和许可证策略筛选。
@@ -156,11 +161,11 @@ GET  /api/sca/tool-health
 当前边界：
 
 - 哈希仅覆盖扫描源码目录中实际可访问的组件证据文件，不会伪造任意第三方包二进制的哈希。
-- npm 可采集原生依赖树；Maven、Go 是否可采集取决于本机工具与项目缓存，失败时会明确标记为回退推断；Python 尚未提供 `pipdeptree` 等完整原生依赖树。
+- Python 在项目 `.venv`/`venv` 存在时通过 `pip inspect` 采集实际安装依赖；npm/Maven/Go 的原生依赖树取决于本机工具与项目缓存，失败时会明确标记为回退推断。Ruby、Composer、Cargo、NuGet 当前以清单/锁文件为准。
 - 传递影响当前基于已解析依赖图与升级路径，不包含跨模块的语义图推理或自动攻击链推断。
-- 策略覆盖、启停和变更审计已持久化；由于当前项目没有身份与组织租户体系，尚不提供按角色分级的审批流和权限隔离。
-- 本地 OSV 镜像需要人工或外部作业导入，未内置定时同步、签名校验或商业漏洞情报源适配器。
-- CI 工作流是调用已部署 API 的门禁模板；实际流水线仍需配置 `SCA_API_BASE` 并在部署环境执行扫描。
+- 策略覆盖、例外审批、VEX 和审计已持久化；由于当前项目没有身份与组织租户体系，声明的角色不等同于防篡改的 IAM 权限隔离。
+- OSV、CVSS、EPSS、KEV 均支持本地导入与快照留痕；自动定时同步、签名校验和商业情报源需要由部署环境配置具体数据服务，平台不会声称这些数据实时或已验证。
+- `.github/workflows/sca-local.yml` 可在 CI 本地执行扫描并上传 SARIF/JSON；`.github/workflows/sca-gate.yml` 仍用于调用已部署 API 的扫描门禁。
 
 ### 2. SAST 智能静态审计
 

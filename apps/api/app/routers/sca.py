@@ -48,7 +48,7 @@ from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
 from app.services.sca_native_tree import native_dependency_source_summary
 from app.services.sca_python_environment import environment_metadata, inspect_python_environment
-from app.services.sca_artifacts import collect_artifact_hashes
+from app.services.sca_artifacts import collect_artifact_hashes, source_fingerprint
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
 
@@ -335,6 +335,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
     if project_module is None:
         raise HTTPException(status_code=400, detail="SCA module is not enabled for this project")
 
+    source_path = validate_sca_source_path(project, payload.source_path)
     scan = ScanTaskRecord(
         project_id=str(payload.project_id),
         scan_type="sca",
@@ -345,9 +346,9 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
     db.flush()
 
     try:
-        parsed = parse_dependency_tree(payload.source_path)
-        python_environment = inspect_python_environment(payload.source_path)
-        tool_scan = scan_with_syft_grype(payload.source_path) if payload.enable_tool_scan else None
+        parsed = parse_dependency_tree(source_path)
+        python_environment = inspect_python_environment(source_path)
+        tool_scan = scan_with_syft_grype(source_path) if payload.enable_tool_scan else None
         tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
         parsed_components = merge_tool_components([*parsed.components, *python_environment.components], tool_scan)
         policy_overrides = scoped_policy_overrides(db, payload.project_id)
@@ -394,8 +395,9 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             "osv_lookup": osv_lookup_metadata(analyzed_components),
             "osv_mirror": osv_mirror_status(),
             "intelligence": intelligence_status(),
-            "artifact_hashes": collect_artifact_hashes(payload.source_path, parsed_components),
-            "native_dependency_sources": native_dependency_source_summary(payload.source_path, dependency_graph["edges"]),
+            "artifact_hashes": collect_artifact_hashes(source_path, parsed_components),
+            "source_fingerprint": source_fingerprint(source_path),
+            "native_dependency_sources": native_dependency_source_summary(source_path, dependency_graph["edges"]),
             "policy_snapshot": policy_snapshot(vulnerability_rules, license_policies, policy_overrides, gate_policy),
             "dependency_snapshot": {
                 "captured_at": datetime.utcnow().isoformat(),
@@ -424,7 +426,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
     return ScaScanResult(
         project_id=payload.project_id,
         scan_task_id=UUID(str(scan.id)),
-        source_path=payload.source_path,
+        source_path=source_path,
         scanned_files=parsed.scanned_files,
         component_count=len(records),
         components=[component_to_schema(record) for record in records],
@@ -701,6 +703,20 @@ def parse_optional_project_id(value: object, db: Session) -> str | None:
     if db.get(ProjectRecord, str(project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return str(project_id)
+
+
+def validate_sca_source_path(project: ProjectRecord, source_path: str) -> str:
+    from pathlib import Path
+
+    target = Path(source_path).expanduser().resolve()
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="source_path must be an existing directory")
+    if not project.source_path:
+        return str(target)
+    configured = Path(project.source_path).expanduser().resolve()
+    if target != configured and configured not in target.parents:
+        raise HTTPException(status_code=400, detail="source_path must be the configured project path or one of its subdirectories")
+    return str(target)
 
 
 def string_or_none(value: object) -> str | None:
