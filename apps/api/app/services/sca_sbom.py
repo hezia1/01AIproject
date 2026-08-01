@@ -417,6 +417,14 @@ def package_url(component: ComponentRecord) -> str | None:
         return f"pkg:maven/{group_id}/{artifact_id}@{normalized_version}"
     if component.ecosystem == "go":
         return f"pkg:golang/{component.name}@{normalized_version}"
+    if component.ecosystem == "composer":
+        return f"pkg:composer/{component.name}@{normalized_version}"
+    if component.ecosystem == "gem":
+        return f"pkg:gem/{component.name}@{normalized_version}"
+    if component.ecosystem == "cargo":
+        return f"pkg:cargo/{component.name}@{normalized_version}"
+    if component.ecosystem == "nuget":
+        return f"pkg:nuget/{component.name}@{normalized_version}"
     return None
 
 

@@ -2,6 +2,7 @@
 
 import json
 import re
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.etree import ElementTree
@@ -43,6 +44,11 @@ DEPENDENCY_FILE_NAMES = {
     "Pipfile.lock",
     "pom.xml",
     "go.mod",
+    "Gemfile.lock",
+    "composer.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "packages.lock.json",
 }
 
 DEPENDENCY_TYPE_PRIORITY = {
@@ -76,11 +82,15 @@ def parse_dependency_tree(source_path: str) -> ScaParseOutput:
 def iter_dependency_files(root: Path):
     ignored_dirs = {".git", "node_modules", ".venv", "venv", "dist", "build", "target"}
     for path in root.rglob("*"):
-        if not path.is_file() or path.name not in DEPENDENCY_FILE_NAMES:
+        if not path.is_file() or not is_dependency_file(path):
             continue
         if any(part in ignored_dirs for part in path.parts):
             continue
         yield path
+
+
+def is_dependency_file(path: Path) -> bool:
+    return path.name in DEPENDENCY_FILE_NAMES or path.suffix.lower() == ".csproj"
 
 
 def parse_dependency_file(file_path: Path, relative_path: str) -> list[ParsedComponent]:
@@ -102,6 +112,18 @@ def parse_dependency_file(file_path: Path, relative_path: str) -> list[ParsedCom
         return parse_pom_xml(file_path, relative_path)
     if file_path.name == "go.mod":
         return parse_go_mod(file_path, relative_path)
+    if file_path.name == "Gemfile.lock":
+        return parse_gemfile_lock(file_path, relative_path)
+    if file_path.name == "composer.lock":
+        return parse_composer_lock(file_path, relative_path)
+    if file_path.name == "Cargo.toml":
+        return parse_cargo_toml(file_path, relative_path)
+    if file_path.name == "Cargo.lock":
+        return parse_cargo_lock(file_path, relative_path)
+    if file_path.name == "packages.lock.json":
+        return parse_nuget_lock(file_path, relative_path)
+    if file_path.suffix.lower() == ".csproj":
+        return parse_csproj(file_path, relative_path)
     return []
 
 
@@ -541,6 +563,96 @@ def parse_go_mod(file_path: Path, relative_path: str) -> list[ParsedComponent]:
                 package_manager="go modules",
             )
         )
+    return components
+
+
+def parse_gemfile_lock(file_path: Path, relative_path: str) -> list[ParsedComponent]:
+    components: list[ParsedComponent] = []
+    section = ""
+    for raw_line in file_path.read_text(encoding="utf-8-sig").splitlines():
+        if raw_line and not raw_line.startswith(" "):
+            section = raw_line.strip()
+            continue
+        match = re.match(r"\s{4}([A-Za-z0-9_.-]+) \(([^)]+)\)", raw_line)
+        if match and section == "GEM":
+            components.append(ParsedComponent("gem", match.group(1), match.group(2), "transitive", relative_path, "bundler"))
+        direct = re.match(r"\s{2}([A-Za-z0-9_.-]+)(?: \([^)]*\))?", raw_line)
+        if direct and section == "DEPENDENCIES":
+            components.append(ParsedComponent("gem", direct.group(1), None, "runtime", relative_path, "bundler"))
+    return components
+
+
+def parse_composer_lock(file_path: Path, relative_path: str) -> list[ParsedComponent]:
+    data = json.loads(file_path.read_text(encoding="utf-8-sig"))
+    components: list[ParsedComponent] = []
+    for key, dependency_type in (("packages", "transitive"), ("packages-dev", "development")):
+        packages = data.get(key, [])
+        if not isinstance(packages, list):
+            continue
+        for item in packages:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                continue
+            licenses = item.get("license")
+            license_name = licenses[0] if isinstance(licenses, list) and licenses and isinstance(licenses[0], str) else None
+            components.append(ParsedComponent("composer", item["name"], normalize_version(str(item.get("version") or "")), dependency_type, relative_path, "composer", license_name))
+    return components
+
+
+def parse_cargo_toml(file_path: Path, relative_path: str) -> list[ParsedComponent]:
+    data = tomllib.loads(file_path.read_text(encoding="utf-8-sig"))
+    components: list[ParsedComponent] = []
+    for section, dependency_type in (("dependencies", "runtime"), ("dev-dependencies", "development"), ("build-dependencies", "development")):
+        dependencies = data.get(section, {})
+        if not isinstance(dependencies, dict):
+            continue
+        for name, value in dependencies.items():
+            version = value if isinstance(value, str) else value.get("version") if isinstance(value, dict) else None
+            components.append(ParsedComponent("cargo", str(name), normalize_version(str(version or "")), dependency_type, relative_path, "cargo"))
+    return components
+
+
+def parse_cargo_lock(file_path: Path, relative_path: str) -> list[ParsedComponent]:
+    data = tomllib.loads(file_path.read_text(encoding="utf-8-sig"))
+    packages = data.get("package", [])
+    if not isinstance(packages, list):
+        return []
+    return [
+        ParsedComponent("cargo", str(item["name"]), normalize_version(str(item.get("version") or "")), "transitive", relative_path, "cargo")
+        for item in packages
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    ]
+
+
+def parse_nuget_lock(file_path: Path, relative_path: str) -> list[ParsedComponent]:
+    data = json.loads(file_path.read_text(encoding="utf-8-sig"))
+    components: list[ParsedComponent] = []
+    dependencies = data.get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        return components
+    for framework in dependencies.values():
+        if not isinstance(framework, dict):
+            continue
+        for name, item in framework.items():
+            if not isinstance(item, dict):
+                continue
+            dependency_type = "runtime" if str(item.get("type") or "").lower() == "direct" else "transitive"
+            components.append(ParsedComponent("nuget", str(name), normalize_version(str(item.get("resolved") or "")), dependency_type, relative_path, "nuget"))
+    return components
+
+
+def parse_csproj(file_path: Path, relative_path: str) -> list[ParsedComponent]:
+    root = ElementTree.parse(file_path).getroot()
+    components: list[ParsedComponent] = []
+    for node in root.iter():
+        if node.tag.split("}", 1)[-1] != "PackageReference":
+            continue
+        name = node.attrib.get("Include") or node.attrib.get("Update")
+        version = node.attrib.get("Version")
+        if not version:
+            version_node = next((child for child in list(node) if child.tag.split("}", 1)[-1] == "Version"), None)
+            version = version_node.text.strip() if version_node is not None and version_node.text else None
+        if name:
+            components.append(ParsedComponent("nuget", name, normalize_version(version), "runtime", relative_path, "nuget"))
     return components
 
 

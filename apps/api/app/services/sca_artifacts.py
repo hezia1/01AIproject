@@ -9,6 +9,7 @@ from app.services.sca_parser import ParsedComponent
 MANIFEST_NAMES = {
     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "requirements.txt",
     "poetry.lock", "Pipfile.lock", "pom.xml", "go.mod", "go.sum", "gradle.lockfile",
+    "Gemfile.lock", "composer.lock", "Cargo.toml", "Cargo.lock", "packages.lock.json",
 }
 
 
@@ -19,7 +20,7 @@ def collect_artifact_hashes(source_path: str, components: list[ParsedComponent])
     if not root.is_dir():
         return {"status": "unavailable", "files": files, "component_hash_count": 0}
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.name not in MANIFEST_NAMES:
+        if not path.is_file() or (path.name not in MANIFEST_NAMES and path.suffix.lower() != ".csproj"):
             continue
         files.append(file_hash(path, root, "dependency_manifest"))
     package_hashes = installed_package_hashes(root, components)
@@ -73,6 +74,20 @@ def artifact_candidates(root: Path, component: ParsedComponent) -> list[tuple[Pa
     if component.ecosystem == "go":
         vendor_root = root / "vendor" / Path(*component.name.split("/"))
         return [(vendor_root / "go.mod", "go_vendor_module_manifest")]
+    if component.ecosystem == "composer":
+        vendor_root = root / "vendor" / Path(*component.name.split("/"))
+        return [(vendor_root / "composer.json", "composer_installed_manifest")]
+    if component.ecosystem == "cargo":
+        vendor_root = root / "vendor" / component.name
+        return [(vendor_root / "Cargo.toml", "cargo_vendor_manifest")]
+    if component.ecosystem == "gem" and component.version:
+        return [(path, "gem_cached_specification") for path in root.glob(f"vendor/bundle/**/gems/{component.name}-{component.version}/*.gemspec")]
+    if component.ecosystem == "nuget" and component.version:
+        normalized = component.name.lower()
+        return [
+            (root / ".nuget" / "packages" / normalized / component.version / f"{normalized}.{component.version}.nupkg", "nuget_local_package"),
+            (root / "packages" / f"{component.name}.{component.version}.nupkg", "nuget_local_package"),
+        ]
     return []
 
 

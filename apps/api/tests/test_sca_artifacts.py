@@ -5,6 +5,8 @@ from app.db_models import ComponentRecord, ProjectRecord
 from app.services.sca_artifacts import collect_artifact_hashes
 from app.services.sca_dependency_graph import dependency_snapshot_edges
 from app.services.sca_parser import ParsedComponent
+from app.services.sca_parser import parse_dependency_tree
+from app.services.sca_sbom import package_url
 
 
 def test_collects_reproducible_manifest_and_installed_package_hashes(tmp_path: Path) -> None:
@@ -45,3 +47,20 @@ def test_collects_local_node_and_maven_package_evidence(tmp_path: Path) -> None:
     )
 
     assert {item["kind"] for item in hashes["packages"]} == {"npm_installed_manifest", "maven_local_jar"}
+
+
+def test_parses_common_additional_ecosystem_lockfiles_and_builds_purls(tmp_path: Path) -> None:
+    (tmp_path / "composer.lock").write_text('{"packages":[{"name":"acme/lib","version":"1.2.3","license":["MIT"]}]}', encoding="utf-8")
+    (tmp_path / "Cargo.lock").write_text('[[package]]\nname = "serde"\nversion = "1.0.0"\n', encoding="utf-8")
+    (tmp_path / "packages.lock.json").write_text('{"dependencies":{"net8.0":{"Newtonsoft.Json":{"type":"Direct","resolved":"13.0.3"}}}}', encoding="utf-8")
+    (tmp_path / "Gemfile.lock").write_text('GEM\n  specs:\n    rack (3.1.0)\n\nDEPENDENCIES\n  rack\n', encoding="utf-8")
+
+    result = parse_dependency_tree(str(tmp_path))
+    components = {(item.ecosystem, item.name): item for item in result.components}
+
+    assert {"composer", "cargo", "nuget", "gem"} <= {item.ecosystem for item in result.components}
+    records = [
+        ComponentRecord(id=str(uuid4()), project_id=str(uuid4()), ecosystem=item.ecosystem, name=item.name, version=item.version, dependency_type=item.dependency_type, source_file=item.source_file, risk_status="clean", vulnerability_ids=[])
+        for item in components.values()
+    ]
+    assert {package_url(item) for item in records} >= {"pkg:composer/acme/lib@1.2.3", "pkg:cargo/serde@1.0.0", "pkg:nuget/Newtonsoft.Json@13.0.3", "pkg:gem/rack@3.1.0"}
