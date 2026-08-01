@@ -1,5 +1,10 @@
 from pathlib import Path
+from datetime import datetime
+from uuid import uuid4
 
+from app.db_models import ComponentRecord, ScanTaskRecord
+from app.routers.sca import build_sca_gate_result
+from app.services.sca_gate_policy import effective_gate_policy
 from app.services.sca_license_policy import load_license_policies
 from app.services.sca_osv_mirror import import_osv_mirror, lookup_osv_mirror, osv_mirror_status
 from app.services.sca_policy_overrides import effective_license_policies, effective_vulnerability_rules
@@ -63,3 +68,20 @@ def test_offline_intelligence_enriches_cvss_epss_kev_and_fixed_version(tmp_path:
     assert assessment["risk_score"] >= 95
     assert assessment["kev"] is True
     assert assessment["fixed_versions"] == ["2.0.1"]
+
+
+def test_effective_gate_policy_and_kev_blocking_are_machine_readable() -> None:
+    project_id = uuid4()
+    component = ComponentRecord(
+        id=str(uuid4()), project_id=str(project_id), ecosystem="pypi", name="demo", version="1.0.0",
+        dependency_type="runtime", source_file="requirements.txt", risk_status="vulnerable", vulnerability_ids=["CVE-2026-1000"],
+        severity="medium", risk_metadata={"risk_score": 98, "kev": True},
+    )
+    scan = ScanTaskRecord(id=str(uuid4()), project_id=str(project_id), scan_type="sca", status="completed", finished_at=datetime.utcnow())
+    policy = effective_gate_policy([{"policy_kind": "gate", "policy_id": "default", "enabled": True, "config": {"min_risk_score": 90, "block_severities": []}}])
+
+    result = build_sca_gate_result(project_id, uuid4(), [component], scan, policy)
+
+    assert result["decision"] == "block"
+    assert result["exit_code"] == 2
+    assert set(result["blocked_components"][0]["reasons"]) >= {"risk_score:98", "kev"}

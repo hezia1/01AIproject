@@ -18,10 +18,12 @@ from app.db_models import (
     ScaPolicyAuditRecord,
     ScaPolicyExceptionRecord,
     ScaPolicyOverrideRecord,
+    ScaVexStatementRecord,
 )
 from app.services.sca_license_policy import load_license_policies
 from app.services.sca_osv_mirror import import_osv_mirror, osv_mirror_status
 from app.services.sca_intelligence import import_intelligence_entries, intelligence_status
+from app.services.sca_gate_policy import effective_gate_policy, validate_gate_config
 from app.services.sca_policy_overrides import effective_license_policies, effective_vulnerability_rules
 from app.services.sca_vulnerability_rules import load_vulnerability_rules
 from app.models import (
@@ -60,6 +62,7 @@ def list_sca_policies(project_id: UUID | None = None, db: Session = Depends(get_
     overrides = scoped_policy_overrides(db, project_id)
     vulnerability_rules = effective_vulnerability_rules(load_vulnerability_rules(), overrides)
     license_policies = effective_license_policies(load_license_policies(), overrides)
+    gate_policy = effective_gate_policy(overrides)
     return {
         "scope": "project" if project_id else "platform",
         "vulnerability_rules": [
@@ -86,6 +89,7 @@ def list_sca_policies(project_id: UUID | None = None, db: Session = Depends(get_
             }
             for item in license_policies
         ],
+        "gate_policy": {**gate_policy, "source": policy_source("default", "gate", overrides)},
         "override_count": len(overrides),
     }
 
@@ -95,8 +99,8 @@ def create_policy_override(payload: dict[str, object], db: Session = Depends(get
     project_id = parse_optional_project_id(payload.get("project_id"), db)
     policy_kind = str(payload.get("policy_kind") or "").strip().lower()
     policy_id = str(payload.get("policy_id") or "").strip()
-    if policy_kind not in {"vulnerability", "license"} or not policy_id:
-        raise HTTPException(status_code=400, detail="policy_kind (vulnerability|license) and policy_id are required")
+    if policy_kind not in {"vulnerability", "license", "gate"} or not policy_id:
+        raise HTTPException(status_code=400, detail="policy_kind (vulnerability|license|gate) and policy_id are required")
     config = payload.get("config")
     if config is not None and not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
@@ -216,7 +220,13 @@ def create_policy_exception(project_id: UUID, payload: dict[str, object], db: Se
     required = ("ecosystem", "package_name", "exception_type", "reason")
     if any(not str(payload.get(key) or "").strip() for key in required):
         raise HTTPException(status_code=400, detail="ecosystem, package_name, exception_type and reason are required")
-    item = ScaPolicyExceptionRecord(project_id=str(project_id), ecosystem=str(payload["ecosystem"]), package_name=str(payload["package_name"]), package_version=str(payload.get("package_version") or "") or None, exception_type=str(payload["exception_type"]), reason=str(payload["reason"]), requester=str(payload.get("requester") or "") or None, expires_at=parse_exception_date(payload.get("expires_at")))
+    item = ScaPolicyExceptionRecord(
+        project_id=str(project_id), ecosystem=str(payload["ecosystem"]), package_name=str(payload["package_name"]),
+        package_version=str(payload.get("package_version") or "") or None, exception_type=str(payload["exception_type"]),
+        reason=str(payload["reason"]), requester=string_or_none(payload.get("requester")),
+        requester_role=exception_role(payload.get("requester_role")), expires_at=parse_exception_date(payload.get("expires_at")),
+        approval_history=[{"status": "pending", "actor": string_or_none(payload.get("requester")), "role": exception_role(payload.get("requester_role")), "at": datetime.utcnow().isoformat()}],
+    )
     db.add(item); db.commit(); db.refresh(item)
     return exception_payload(item)
 
@@ -226,12 +236,69 @@ def update_policy_exception(exception_id: UUID, payload: dict[str, object], db: 
     item = db.get(ScaPolicyExceptionRecord, str(exception_id))
     if item is None:
         raise HTTPException(status_code=404, detail="SCA policy exception not found")
-    if payload.get("status") in {"pending", "approved", "rejected", "revoked"}: item.status = str(payload["status"])
+    new_status = str(payload.get("status") or item.status)
+    if new_status not in {"pending", "approved", "rejected", "revoked"}:
+        raise HTTPException(status_code=400, detail="Unsupported exception status")
+    actor_role = exception_role(payload.get("approver_role"))
+    if new_status != item.status:
+        validate_exception_transition(item.status, new_status, actor_role)
+        history = list(item.approval_history or [])
+        history.append({"status": new_status, "actor": string_or_none(payload.get("approver")), "role": actor_role, "note": string_or_none(payload.get("approval_note")), "at": datetime.utcnow().isoformat()})
+        item.approval_history = history
+        item.status = new_status
     for field in ("approver", "approval_note"):
         if field in payload: setattr(item, field, str(payload[field]) if payload[field] is not None else None)
+    if "approver_role" in payload:
+        item.approver_role = actor_role
     if "expires_at" in payload: item.expires_at = parse_exception_date(payload.get("expires_at"))
     item.updated_at = datetime.utcnow(); db.commit(); db.refresh(item)
     return exception_payload(item)
+
+
+@router.get("/projects/{project_id}/vex")
+def list_sca_vex(project_id: UUID, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return [vex_payload(item) for item in db.scalars(select(ScaVexStatementRecord).where(ScaVexStatementRecord.project_id == str(project_id)).order_by(ScaVexStatementRecord.updated_at.desc())).all()]
+
+
+@router.post("/projects/{project_id}/vex", status_code=201)
+def create_sca_vex(project_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    required = ("ecosystem", "package_name", "vulnerability_id", "status")
+    if any(not string_or_none(payload.get(key)) for key in required):
+        raise HTTPException(status_code=400, detail="ecosystem, package_name, vulnerability_id and status are required")
+    status = str(payload["status"])
+    if status not in {"not_affected", "affected", "fixed", "under_investigation"}:
+        raise HTTPException(status_code=400, detail="Unsupported VEX status")
+    item = ScaVexStatementRecord(
+        project_id=str(project_id), ecosystem=str(payload["ecosystem"]), package_name=str(payload["package_name"]),
+        package_version=string_or_none(payload.get("package_version")), vulnerability_id=str(payload["vulnerability_id"]), status=status,
+        justification=string_or_none(payload.get("justification")), action_statement=string_or_none(payload.get("action_statement")),
+        evidence=string_or_none(payload.get("evidence")), actor=string_or_none(payload.get("actor")), expires_at=parse_exception_date(payload.get("expires_at")),
+    )
+    db.add(item); db.commit(); db.refresh(item)
+    return vex_payload(item)
+
+
+@router.patch("/vex/{vex_id}")
+def update_sca_vex(vex_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    item = db.get(ScaVexStatementRecord, str(vex_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="SCA VEX statement not found")
+    if "status" in payload:
+        status = str(payload["status"])
+        if status not in {"not_affected", "affected", "fixed", "under_investigation"}:
+            raise HTTPException(status_code=400, detail="Unsupported VEX status")
+        item.status = status
+    for field in ("justification", "action_statement", "evidence", "actor"):
+        if field in payload:
+            setattr(item, field, string_or_none(payload[field]))
+    if "expires_at" in payload:
+        item.expires_at = parse_exception_date(payload.get("expires_at"))
+    item.updated_at = datetime.utcnow(); db.commit(); db.refresh(item)
+    return vex_payload(item)
 
 
 @router.get("/tool-health", response_model=ScaToolHealth)
@@ -286,6 +353,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         policy_overrides = scoped_policy_overrides(db, payload.project_id)
         vulnerability_rules = effective_vulnerability_rules(load_vulnerability_rules(), policy_overrides)
         license_policies = effective_license_policies(load_license_policies(), policy_overrides)
+        gate_policy = effective_gate_policy(policy_overrides)
         analyzed_components = apply_tool_vulnerabilities(
             analyze_components(parsed_components, vulnerability_rules, license_policies),
             tool_scan,
@@ -317,6 +385,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             records.append(record)
         db.flush()
         apply_approved_exceptions(db, str(payload.project_id), records)
+        apply_active_vex_statements(db, str(payload.project_id), records)
         create_sca_findings(db, str(payload.project_id), scan.id, records)
         dependency_graph = build_dependency_graph(project, records)
         scan.scan_metadata = {
@@ -327,7 +396,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             "intelligence": intelligence_status(),
             "artifact_hashes": collect_artifact_hashes(payload.source_path, parsed_components),
             "native_dependency_sources": native_dependency_source_summary(payload.source_path, dependency_graph["edges"]),
-            "policy_snapshot": policy_snapshot(vulnerability_rules, license_policies, policy_overrides),
+            "policy_snapshot": policy_snapshot(vulnerability_rules, license_policies, policy_overrides, gate_policy),
             "dependency_snapshot": {
                 "captured_at": datetime.utcnow().isoformat(),
                 "edges": dependency_graph["edges"],
@@ -549,7 +618,9 @@ def sca_gate(project_id: UUID, scan_task_id: UUID | None = None, db: Session = D
     if db.get(ProjectRecord, str(project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     components = load_project_components(db, project_id, scan_task_id)
-    return build_sca_gate_result(project_id, scan_task_id, components)
+    resolved_scan_id = scan_task_id or latest_sca_scan_id(db, project_id)
+    scan = db.get(ScanTaskRecord, str(resolved_scan_id)) if resolved_scan_id else None
+    return build_sca_gate_result(project_id, resolved_scan_id, components, scan, effective_gate_policy(scoped_policy_overrides(db, project_id)))
 
 
 @router.get("/projects/{project_id}/evidence")
@@ -568,7 +639,7 @@ def get_sca_evidence(project_id: UUID, scan_task_id: UUID | None = None, db: Ses
         "intelligence": scan_metadata_value(scan, "intelligence") or {},
         "native_dependency_sources": scan_metadata_value(scan, "native_dependency_sources") or {},
         "policy_snapshot": scan_metadata_value(scan, "policy_snapshot") or {},
-        "gate": build_sca_gate_result(project_id, resolved_scan_id, components),
+        "gate": build_sca_gate_result(project_id, resolved_scan_id, components, scan, effective_gate_policy(scoped_policy_overrides(db, project_id))),
     }
 
 
@@ -642,6 +713,10 @@ def validate_policy_override(item: ScaPolicyOverrideRecord, overrides: list[ScaP
         effective_vulnerability_rules(load_vulnerability_rules(), overrides)
     elif item.policy_kind == "license":
         effective_license_policies(load_license_policies(), overrides)
+    elif item.policy_kind == "gate":
+        if item.policy_id != "default":
+            raise ValueError("The only supported gate policy id is default")
+        validate_gate_config(item.config or {})
     else:
         raise ValueError("Unsupported SCA policy kind")
 
@@ -689,7 +764,7 @@ def record_policy_audit(db: Session, item: ScaPolicyOverrideRecord, event_type: 
     )
 
 
-def policy_snapshot(vulnerability_rules, license_policies, overrides: list[ScaPolicyOverrideRecord]) -> dict[str, object]:
+def policy_snapshot(vulnerability_rules, license_policies, overrides: list[ScaPolicyOverrideRecord], gate_policy: dict[str, object]) -> dict[str, object]:
     return {
         "vulnerability_rule_count": len(vulnerability_rules),
         "enabled_vulnerability_rule_count": sum(1 for rule in vulnerability_rules if rule.enabled),
@@ -697,17 +772,51 @@ def policy_snapshot(vulnerability_rules, license_policies, overrides: list[ScaPo
         "enabled_license_policy_count": sum(1 for policy in license_policies if policy.keywords),
         "override_count": len(overrides),
         "override_ids": [str(item.id) for item in overrides],
+        "gate_policy": gate_policy,
     }
 
 
-def build_sca_gate_result(project_id: UUID, scan_task_id: UUID | None, components: list[ComponentRecord]) -> dict[str, object]:
-    blocked = [
-        item
-        for item in components
-        if item.risk_status != "accepted-risk" and item.severity in {"critical", "high"}
-    ]
+def build_sca_gate_result(
+    project_id: UUID,
+    scan_task_id: UUID | None,
+    components: list[ComponentRecord],
+    scan: ScanTaskRecord | None,
+    policy: dict[str, object],
+) -> dict[str, object]:
+    block_reasons: list[dict[str, object]] = []
+    exempt_statuses = {"accepted-risk", "not_affected", "fixed"}
+    active = [item for item in components if item.risk_status not in exempt_statuses]
+    severities = set(policy.get("block_severities", []))
+    license_policies = set(policy.get("block_license_policies", []))
+    min_score = int(policy.get("min_risk_score", 0))
+    for item in active:
+        metadata = item.risk_metadata or {}
+        reasons: list[str] = []
+        if item.severity in severities:
+            reasons.append(f"severity:{item.severity}")
+        if item.license_risk in license_policies:
+            reasons.append(f"license:{item.license_risk}")
+        if int(metadata.get("risk_score") or 0) >= min_score and min_score > 0:
+            reasons.append(f"risk_score:{metadata.get('risk_score')}")
+        if policy.get("block_kev") and metadata.get("kev"):
+            reasons.append("kev")
+        if policy.get("require_intelligence_for_critical") and item.severity == "critical" and not metadata.get("advisories"):
+            reasons.append("critical_without_intelligence")
+        if reasons:
+            block_reasons.append({"component": item, "reasons": reasons})
+    stale = False
+    max_age = int(policy.get("max_scan_age_hours", 0))
+    if max_age and scan and scan.finished_at:
+        stale = (datetime.utcnow() - scan.finished_at).total_seconds() > max_age * 3600
+    if scan is None:
+        stale = True
+    if stale:
+        block_reasons.append({"component": None, "reasons": ["scan_stale_or_missing"]})
+    if not bool(policy.get("enabled", True)):
+        block_reasons = []
+    blocked = [item for item in block_reasons if item["component"] is not None]
     accepted = [item for item in components if item.risk_status == "accepted-risk"]
-    decision = "block" if blocked else "pass"
+    decision = "block" if block_reasons else "pass"
     return {
         "project_id": str(project_id),
         "scan_task_id": str(scan_task_id) if scan_task_id else None,
@@ -715,16 +824,19 @@ def build_sca_gate_result(project_id: UUID, scan_task_id: UUID | None, component
         "exit_code": 2 if decision == "block" else 0,
         "blocked_component_count": len(blocked),
         "accepted_risk_count": len(accepted),
-        "reason": "存在未豁免的严重或高危供应链风险" if blocked else "未发现未豁免的严重或高危供应链风险",
+        "reason": "SCA 门禁策略命中阻断条件" if block_reasons else "未命中已启用的 SCA 门禁阻断条件",
+        "policy": policy,
+        "scan_stale_or_missing": stale,
         "blocked_components": [
             {
-                "name": item.name,
-                "version": item.version,
-                "ecosystem": item.ecosystem,
-                "severity": item.severity,
-                "vulnerability_ids": item.vulnerability_ids or [],
+                "name": record["component"].name,
+                "version": record["component"].version,
+                "ecosystem": record["component"].ecosystem,
+                "severity": record["component"].severity,
+                "vulnerability_ids": record["component"].vulnerability_ids or [],
+                "reasons": record["reasons"],
             }
-            for item in blocked[:50]
+            for record in blocked[:50]
         ],
         "ci_usage": "GET /api/sca/projects/{project_id}/gate?scan_task_id={scan_task_id}; exit_code 为 0 代表 pass，2 代表 block。",
     }
@@ -808,7 +920,35 @@ def parse_exception_date(value: object) -> datetime | None:
 
 
 def exception_payload(item: ScaPolicyExceptionRecord) -> dict[str, object]:
-    return {"id": item.id, "project_id": item.project_id, "ecosystem": item.ecosystem, "package_name": item.package_name, "package_version": item.package_version, "exception_type": item.exception_type, "reason": item.reason, "status": item.status, "requester": item.requester, "approver": item.approver, "expires_at": item.expires_at, "approval_note": item.approval_note, "created_at": item.created_at, "updated_at": item.updated_at}
+    return {"id": item.id, "project_id": item.project_id, "ecosystem": item.ecosystem, "package_name": item.package_name, "package_version": item.package_version, "exception_type": item.exception_type, "reason": item.reason, "status": item.status, "requester": item.requester, "requester_role": item.requester_role, "approver": item.approver, "approver_role": item.approver_role, "expires_at": item.expires_at, "approval_note": item.approval_note, "approval_history": item.approval_history or [], "created_at": item.created_at, "updated_at": item.updated_at}
+
+
+def exception_role(value: object) -> str | None:
+    role = string_or_none(value)
+    if role is None:
+        return None
+    normalized = role.lower().replace("-", "_")
+    if normalized not in {"developer", "security", "legal", "release_manager", "admin"}:
+        raise HTTPException(status_code=400, detail="Unsupported SCA governance role")
+    return normalized
+
+
+def validate_exception_transition(current: str, target: str, actor_role: str | None) -> None:
+    allowed = {"pending": {"approved", "rejected", "revoked"}, "approved": {"revoked"}, "rejected": {"pending", "revoked"}, "revoked": {"pending"}}
+    if target not in allowed.get(current, set()):
+        raise HTTPException(status_code=400, detail=f"Invalid exception transition: {current} -> {target}")
+    if target in {"approved", "rejected", "revoked"} and actor_role not in {"security", "legal", "admin"}:
+        raise HTTPException(status_code=403, detail="SCA exception approval requires security, legal, or admin role")
+
+
+def vex_payload(item: ScaVexStatementRecord) -> dict[str, object]:
+    return {
+        "id": str(item.id), "project_id": str(item.project_id), "ecosystem": item.ecosystem,
+        "package_name": item.package_name, "package_version": item.package_version,
+        "vulnerability_id": item.vulnerability_id, "status": item.status, "justification": item.justification,
+        "action_statement": item.action_statement, "evidence": item.evidence, "actor": item.actor,
+        "expires_at": item.expires_at, "created_at": item.created_at, "updated_at": item.updated_at,
+    }
 
 
 def apply_approved_exceptions(db: Session, project_id: str, components: list[ComponentRecord]) -> None:
@@ -819,6 +959,33 @@ def apply_approved_exceptions(db: Session, project_id: str, components: list[Com
         if matched:
             component.risk_status = "accepted-risk"
             component.risk_summary = f"{component.risk_summary or ''} 已批准例外：{matched.reason}".strip()
+
+
+def apply_active_vex_statements(db: Session, project_id: str, components: list[ComponentRecord]) -> None:
+    now = datetime.utcnow()
+    statements = db.scalars(
+        select(ScaVexStatementRecord).where(
+            ScaVexStatementRecord.project_id == project_id,
+            ScaVexStatementRecord.status.in_(("not_affected", "fixed")),
+        )
+    ).all()
+    for component in components:
+        matched = [
+            item for item in statements
+            if item.ecosystem.lower() == component.ecosystem.lower()
+            and item.package_name.lower() == component.name.lower()
+            and (not item.package_version or item.package_version == component.version)
+            and item.vulnerability_id in (component.vulnerability_ids or [])
+            and (item.expires_at is None or item.expires_at > now)
+        ]
+        if not matched:
+            continue
+        metadata = dict(component.risk_metadata or {})
+        metadata["vex"] = [vex_payload(item) for item in matched]
+        component.risk_metadata = metadata
+        final_status = "not_affected" if any(item.status == "not_affected" for item in matched) else "fixed"
+        component.risk_status = final_status
+        component.risk_summary = f"{component.risk_summary or ''} VEX 结论：{final_status}（保留原始漏洞证据）。".strip()
 
 
 def create_sca_findings(
@@ -837,6 +1004,8 @@ def create_sca_findings(
         ).all()
     )
     for component in components:
+        if component.risk_status in {"accepted-risk", "not_affected", "fixed"}:
+            continue
         for finding in sca_findings_for_component(project_id, scan_task_id, component):
             if finding.rule_id in existing_rule_ids:
                 continue

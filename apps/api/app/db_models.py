@@ -122,9 +122,12 @@ class ScaPolicyExceptionRecord(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
     requester: Mapped[str | None] = mapped_column(String(120))
+    requester_role: Mapped[str | None] = mapped_column(String(40))
     approver: Mapped[str | None] = mapped_column(String(120))
+    approver_role: Mapped[str | None] = mapped_column(String(40))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime)
     approval_note: Mapped[str | None] = mapped_column(Text)
+    approval_history: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -158,6 +161,27 @@ class ScaPolicyAuditRecord(Base):
     actor: Mapped[str | None] = mapped_column(String(120))
     details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ScaVexStatementRecord(Base):
+    """A component-level VEX conclusion retained alongside vulnerability evidence."""
+
+    __tablename__ = "sca_vex_statements"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    ecosystem: Mapped[str] = mapped_column(String(40), nullable=False)
+    package_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    package_version: Mapped[str | None] = mapped_column(String(160))
+    vulnerability_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="under_investigation")
+    justification: Mapped[str | None] = mapped_column(Text)
+    action_statement: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 class DastValidationRecord(Base):
     __tablename__ = "dast_validations"
