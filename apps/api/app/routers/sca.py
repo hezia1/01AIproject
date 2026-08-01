@@ -21,6 +21,7 @@ from app.db_models import (
 )
 from app.services.sca_license_policy import load_license_policies
 from app.services.sca_osv_mirror import import_osv_mirror, osv_mirror_status
+from app.services.sca_intelligence import import_intelligence_entries, intelligence_status
 from app.services.sca_policy_overrides import effective_license_policies, effective_vulnerability_rules
 from app.services.sca_vulnerability_rules import load_vulnerability_rules
 from app.models import (
@@ -185,6 +186,22 @@ def import_local_osv_mirror(payload: dict[str, object]) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/intelligence/status")
+def get_sca_intelligence_status() -> dict[str, object]:
+    return intelligence_status()
+
+
+@router.post("/intelligence/import", status_code=201)
+def import_sca_intelligence(payload: dict[str, object]) -> dict[str, object]:
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="entries must be a JSON array")
+    try:
+        return import_intelligence_entries(entries, string_or_none(payload.get("source")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/projects/{project_id}/exceptions")
 def list_policy_exceptions(project_id: UUID, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     if db.get(ProjectRecord, str(project_id)) is None:
@@ -294,6 +311,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
                 risk_source=component.risk_source,
                 osv_checked=component.osv_checked,
                 osv_error=component.osv_error,
+                risk_metadata=component.risk_metadata or {},
             )
             db.add(record)
             records.append(record)
@@ -306,6 +324,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             "python_environment": environment_metadata(python_environment),
             "osv_lookup": osv_lookup_metadata(analyzed_components),
             "osv_mirror": osv_mirror_status(),
+            "intelligence": intelligence_status(),
             "artifact_hashes": collect_artifact_hashes(payload.source_path, parsed_components),
             "native_dependency_sources": native_dependency_source_summary(payload.source_path, dependency_graph["edges"]),
             "policy_snapshot": policy_snapshot(vulnerability_rules, license_policies, policy_overrides),
@@ -546,6 +565,7 @@ def get_sca_evidence(project_id: UUID, scan_task_id: UUID | None = None, db: Ses
         "scan_task_id": str(resolved_scan_id),
         "artifact_hashes": scan_metadata_value(scan, "artifact_hashes") or {},
         "osv_mirror": scan_metadata_value(scan, "osv_mirror") or {},
+        "intelligence": scan_metadata_value(scan, "intelligence") or {},
         "native_dependency_sources": scan_metadata_value(scan, "native_dependency_sources") or {},
         "policy_snapshot": scan_metadata_value(scan, "policy_snapshot") or {},
         "gate": build_sca_gate_result(project_id, resolved_scan_id, components),

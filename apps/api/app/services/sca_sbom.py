@@ -246,6 +246,9 @@ def component_to_cyclonedx(component: ComponentRecord) -> dict[str, object]:
             property_item("sca:vulnerability_ids", ",".join(str(item) for item in component.vulnerability_ids or [])),
             property_item("sca:osv_checked", component.osv_checked),
             property_item("sca:osv_error", component.osv_error),
+            property_item("sca:risk_score", (component.risk_metadata or {}).get("risk_score")),
+            property_item("sca:kev", (component.risk_metadata or {}).get("kev")),
+            property_item("sca:max_epss", (component.risk_metadata or {}).get("max_epss")),
             property_item("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
         ],
     }
@@ -309,6 +312,9 @@ def component_to_spdx_package(component: ComponentRecord) -> dict[str, object]:
             spdx_annotation("sca:vulnerability_ids", ",".join(str(item) for item in component.vulnerability_ids or [])),
             spdx_annotation("sca:osv_checked", component.osv_checked),
             spdx_annotation("sca:osv_error", component.osv_error),
+            spdx_annotation("sca:risk_score", (component.risk_metadata or {}).get("risk_score")),
+            spdx_annotation("sca:kev", (component.risk_metadata or {}).get("kev")),
+            spdx_annotation("sca:max_epss", (component.risk_metadata or {}).get("max_epss")),
             spdx_annotation("sca:hash_status", HASH_STATUS_NOT_COLLECTED),
         ],
     }

@@ -92,6 +92,7 @@ def component_to_schema(record: ComponentRecord) -> Component:
         risk_source=record.risk_source,
         osv_checked=record.osv_checked,
         osv_error=record.osv_error,
+        risk_metadata=record.risk_metadata or {},
         created_at=record.created_at,
     )
 

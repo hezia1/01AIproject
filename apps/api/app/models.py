@@ -240,6 +240,7 @@ class Component(BaseModel):
     risk_source: str | None = None
     osv_checked: bool = False
     osv_error: str | None = None
+    risk_metadata: dict[str, object] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -260,6 +261,7 @@ class ComponentCreate(BaseModel):
     risk_source: str | None = None
     osv_checked: bool = False
     osv_error: str | None = None
+    risk_metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class ScaScanRequest(BaseModel):

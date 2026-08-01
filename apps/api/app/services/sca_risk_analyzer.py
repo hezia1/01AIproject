@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from app.models import Severity
 from app.services.sca_license_policy import LicensePolicy, assess_license, format_license_summary
+from app.services.sca_intelligence import assess_vulnerability_intelligence
 from app.services.sca_osv_mirror import lookup_osv_mirror
 from app.services.osv_client import OsvLookupError, supports_osv, query_osv
 from app.services.sca_parser import ParsedComponent
@@ -40,7 +41,10 @@ def analyze_component(
     vulnerability_ids = [item.vulnerability_id for item in osv_vulnerabilities] + [
         rule.vulnerability_id for rule in matched_rules
     ]
-    severity = highest_severity([item.severity for item in osv_vulnerabilities] + [rule.severity for rule in matched_rules])
+    vulnerability_ids = list(dict.fromkeys(vulnerability_ids))
+    intelligence = assess_vulnerability_intelligence(vulnerability_ids)
+    intelligence_severity = severity_from_cvss(intelligence["advisories"])
+    severity = highest_severity([item.severity for item in osv_vulnerabilities] + [rule.severity for rule in matched_rules] + ([intelligence_severity] if intelligence_severity else []))
     license_assessment = assess_license(component.license, license_policies)
     license_policy = license_assessment.policy
 
@@ -53,6 +57,12 @@ def analyze_component(
         summaries.extend(rule.summary for rule in matched_rules)
         summaries.extend(rule_references_summary(rule.references) for rule in matched_rules if rule.references)
         remediation.extend(f"升级 {rule.package} 到 {rule.fixed_version} 或更高版本。" for rule in matched_rules)
+    if intelligence["advisories"]:
+        if intelligence["kev"]:
+            summaries.append("命中 CISA KEV / 已知在野利用情报，应优先处置。")
+        if intelligence["max_epss"] is not None:
+            summaries.append(f"离线情报 EPSS 最高概率：{float(intelligence['max_epss']):.3f}；综合风险分：{int(intelligence['risk_score'])}/100。")
+        remediation.extend(f"升级到 {version} 或更高安全版本。" for version in intelligence["fixed_versions"])
     if license_policy in {"restricted", "review_required", "unknown"}:
         summaries.append(format_license_summary(license_assessment))
         remediation.append(license_assessment.remediation)
@@ -80,7 +90,7 @@ def analyze_component(
     return replace(
         component,
         risk_status=risk_status,
-        vulnerability_ids=list(dict.fromkeys(vulnerability_ids)),
+        vulnerability_ids=vulnerability_ids,
         severity=severity.value if severity else None,
         risk_summary=" ".join(dict.fromkeys(summaries)) or None,
         remediation=" ".join(dict.fromkeys(remediation)) or None,
@@ -88,6 +98,7 @@ def analyze_component(
         risk_source=risk_source,
         osv_checked=osv_checked,
         osv_error=osv_error,
+        risk_metadata=intelligence,
     )
 
 
@@ -131,6 +142,22 @@ def determine_risk_source(
 
 def rule_references_summary(references: tuple[str, ...]) -> str:
     return "本地规则参考：" + "，".join(references[:2])
+
+
+def severity_from_cvss(advisories: object) -> Severity | None:
+    if not isinstance(advisories, list):
+        return None
+    scores = [float(item.get("cvss_score")) for item in advisories if isinstance(item, dict) and item.get("cvss_score") is not None]
+    if not scores:
+        return None
+    score = max(scores)
+    if score >= 9:
+        return Severity.critical
+    if score >= 7:
+        return Severity.high
+    if score >= 4:
+        return Severity.medium
+    return Severity.low
 
 
 def highest_severity(severities: list[Severity]) -> Severity | None:

@@ -26,6 +26,7 @@ class ParsedComponent:
     risk_source: str | None = None
     osv_checked: bool = False
     osv_error: str | None = None
+    risk_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

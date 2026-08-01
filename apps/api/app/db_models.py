@@ -106,6 +106,7 @@ class ComponentRecord(Base):
     risk_source: Mapped[str | None] = mapped_column(String(80))
     osv_checked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     osv_error: Mapped[str | None] = mapped_column(Text)
+    risk_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
