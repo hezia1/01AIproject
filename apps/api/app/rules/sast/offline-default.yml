@@ -1,0 +1,32 @@
+rules:
+  - id: ai-security.python.sql-string-format
+    languages: [python]
+    severity: ERROR
+    message: SQL query is dynamically formatted; verify parameter binding.
+    pattern-either:
+      - pattern: $CURSOR.execute(f"..." )
+      - pattern: $CURSOR.execute("..." % ...)
+      - pattern: $CURSOR.execute("...".format(...))
+  - id: ai-security.python.command-execution
+    languages: [python]
+    severity: ERROR
+    message: Command execution requires a fixed allow-listed argument array.
+    pattern-either:
+      - pattern: os.system(...)
+      - pattern: subprocess.run(...)
+      - pattern: subprocess.Popen(...)
+  - id: ai-security.javascript.command-execution
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Command execution requires a fixed allow-listed argument array.
+    pattern-either:
+      - pattern: child_process.exec(...)
+      - pattern: child_process.execSync(...)
+  - id: ai-security.python.unsafe-deserialization
+    languages: [python]
+    severity: WARNING
+    message: Unsafe deserialization can execute attacker-controlled objects.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: yaml.load(...)

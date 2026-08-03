@@ -33,6 +33,18 @@ def create_db_schema() -> None:
 
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
+        # Keep direct-start developer installations compatible with the Alembic
+        # migration. Production deployments should still run `alembic upgrade head`.
+        connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS tenant_id UUID"))
+        connection.execute(text("INSERT INTO tenants (id, name, created_at) VALUES ('00000000-0000-0000-0000-000000000001', 'Legacy Workspace', CURRENT_TIMESTAMP) ON CONFLICT (id) DO NOTHING"))
+        connection.execute(text("UPDATE projects SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL"))
+        connection.execute(text("ALTER TABLE projects ALTER COLUMN tenant_id SET NOT NULL"))
+        connection.execute(text("""DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_projects_tenant') THEN
+                ALTER TABLE projects ADD CONSTRAINT fk_projects_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id);
+            END IF;
+        END $$"""))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_projects_tenant_id ON projects (tenant_id)"))
         connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_path VARCHAR(1000)"))
         connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS runtime_url VARCHAR(1000)"))
         connection.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS api_base_url VARCHAR(1000)"))

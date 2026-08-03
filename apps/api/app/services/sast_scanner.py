@@ -158,7 +158,11 @@ SOURCE_EXTENSIONS = {
 MAX_FILE_BYTES = 512 * 1024
 
 
-def scan_source_tree(source_path: str, custom_rules: list[dict[str, object]] | None = None) -> SastScanOutput:
+def scan_source_tree(
+    source_path: str,
+    custom_rules: list[dict[str, object]] | None = None,
+    include_paths: list[str] | None = None,
+) -> SastScanOutput:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
@@ -167,10 +171,17 @@ def scan_source_tree(source_path: str, custom_rules: list[dict[str, object]] | N
     extra_extensions = {extension for rule in rules for extension in (rule.file_extensions or set())}
     findings: list[ParsedFinding] = []
     scanned_files: list[str] = []
+    allowed_paths = {path.replace("\\", "/").lstrip("./") for path in include_paths or []}
     for file_path in iter_source_files(root, extra_extensions):
         relative_path = file_path.relative_to(root).as_posix()
+        if allowed_paths and relative_path not in allowed_paths:
+            continue
         scanned_files.append(relative_path)
         findings.extend(scan_file(file_path, relative_path, rules))
+        # Imported lazily to avoid the semantic service depending on a partially
+        # initialized scanner module.
+        from app.services.sast_semantic import scan_semantic_file
+        findings.extend(scan_semantic_file(file_path, relative_path))
 
     return SastScanOutput(findings=dedupe_findings(findings), scanned_files=scanned_files)
 

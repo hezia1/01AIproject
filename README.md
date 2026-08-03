@@ -4,6 +4,17 @@
 
 本文档反映 **2026-08-03** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
+## 2026-08-03 SAST 与交付更新（本节覆盖下方较早的状态描述）
+
+- 新增本地账户初始化/登录、PBKDF2 密码哈希、签名 JWT、`admin` / `security_engineer` / `developer` / `viewer` 角色、租户项目隔离、项目成员关系与审计事件。首次运行在前端创建管理员；生产环境必须设置唯一的 `AI_SECURITY_AUTH_SECRET`，并执行 `alembic upgrade head`（包含 `20260803_0007`）。
+- SAST 默认使用仓库内置的离线 Semgrep YAML 规则包。项目可在当前 SAST 治理页面校验、发布、启停、版本化自定义 YAML 规则包；运行时仅会将已启用包 materialize 到 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\runtime-rules`，不会自动下载规则或镜像。
+- 本地扫描新增 Python 标准库 AST 的同函数 Source → Sink → Sanitizer 检查，以及 JS/TS 保守本地数据流检查，覆盖 SQL、命令执行、SSRF、路径穿越和不安全反序列化。它们是有边界的静态线索，不是全程序数据流或可利用性证明。
+- SAST 扫描可记录 Git 基线差异和历史密钥标识：历史扫描只保存路径和摘要，绝不保存历史密钥值。API/前端提供 JSON、HTML、SARIF、扫描趋势、确定性 high 阈值质量门禁、人工确认后的 DAST/SANDBOX 建议和“仅草案”修复补丁。
+- `scripts/sast_ci.py` 支持 Git 基线/差异文件与历史密钥参数；`.github/workflows/sast-local.yml` 会保存证据、上传 SARIF、在 PR 更新结果评论并在最后执行质量门禁。
+- 扫描任务 API 提供持久化排队、并发上限、开始、进度、取消和重试事件；这些控制接口不假装包含常驻 Worker 或定时调度，部署方仍需按自己的运行环境连接实际 Worker。
+
+仍未实现、也不应被宣称为已实现的是：真实外部模型或 Sub-agent 复核、自动提交修复补丁/PR、跨函数/跨服务的全程序污点分析、联网规则/镜像自动拉取，以及 DAST/SANDBOX 的自动攻击性执行。
+
 ## 当前架构
 
 - `apps/api/`：FastAPI 后端，提供项目、模块、扫描、Finding、证据和治理 API。

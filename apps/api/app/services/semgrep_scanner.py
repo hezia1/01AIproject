@@ -5,11 +5,12 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from app.models import Severity
 from app.services.sast_noise import is_noise_path
 from app.services.sast_scanner import ParsedFinding, SastScanOutput, detect_language, redact_evidence
+from app.services.sast_semgrep_rules import BUILTIN_CONFIG, builtin_rule_pack_path
 
 
 DEFAULT_SEMGREP_IMAGE = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.95.0")
@@ -19,14 +20,16 @@ class SemgrepUnavailable(RuntimeError):
     pass
 
 
-def scan_with_semgrep(source_path: str, config: str = "p/default", timeout_seconds: int = 240) -> SastScanOutput:
+def scan_with_semgrep(source_path: str, config: str = BUILTIN_CONFIG, timeout_seconds: int = 240, extra_configs: Iterable[Path] | None = None, include_paths: Iterable[str] | None = None) -> SastScanOutput:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
     if os.getenv("SAST_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"} and config.startswith("p/"):
         raise SemgrepUnavailable("Offline mode cannot resolve a Semgrep registry pack; use local rules or a project-relative config file")
 
-    command = build_semgrep_command(root, config)
+    configs: list[str | Path] = [builtin_rule_pack_path() if config == BUILTIN_CONFIG else config]
+    configs.extend(extra_configs or [])
+    command = build_semgrep_command(root, configs, include_paths=include_paths)
     if command is None:
         raise SemgrepUnavailable("Semgrep CLI or Docker is not available")
 
@@ -59,14 +62,17 @@ def scan_with_semgrep(source_path: str, config: str = "p/default", timeout_secon
     return SastScanOutput(findings=findings, scanned_files=scanned_files)
 
 
-def build_semgrep_command(root: Path, config: str) -> list[str] | None:
+def build_semgrep_command(root: Path, configs: Iterable[str | Path], include_paths: Iterable[str] | None = None) -> list[str] | None:
+    values = list(configs)
+    config_args = [item for config in values for item in ("--config", str(config))]
+    include_args = [item for path in (include_paths or []) for item in ("--include", path)]
     semgrep_path = shutil.which("semgrep")
     if semgrep_path:
-        return [semgrep_path, "scan", "--json", "--config", config, "--no-git-ignore", *semgrep_excludes(), "."]
+        return [semgrep_path, "scan", "--json", *config_args, *include_args, "--no-git-ignore", *semgrep_excludes(), "."]
 
     docker_path = shutil.which("docker")
     if docker_path:
-        return [
+        command = [
             docker_path,
             "run",
             "--rm",
@@ -78,12 +84,19 @@ def build_semgrep_command(root: Path, config: str) -> list[str] | None:
             "semgrep",
             "scan",
             "--json",
-            "--config",
-            config,
-            "--no-git-ignore",
-            *semgrep_excludes(),
-            ".",
         ]
+        docker_config_args: list[str] = []
+        for index, config in enumerate(values):
+            if isinstance(config, Path) or Path(str(config)).is_absolute():
+                path = Path(config).resolve()
+                if not path.is_file():
+                    raise SemgrepUnavailable(f"Semgrep config file does not exist: {path}")
+                mount = f"/sast-config/{index}"
+                command[5:5] = ["-v", f"{path.parent}:{mount}:ro"]
+                docker_config_args.extend(["--config", f"{mount}/{path.name}"])
+            else:
+                docker_config_args.extend(["--config", str(config)])
+        return [*command, *docker_config_args, *include_args, "--no-git-ignore", *semgrep_excludes(), "."]
     return None
 
 

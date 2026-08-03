@@ -18,6 +18,7 @@ class ScanStatus(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class FindingStatus(str, Enum):
@@ -78,6 +79,7 @@ class ProjectAssetProbe(BaseModel):
 class ScanCreate(BaseModel):
     project_id: UUID
     scan_type: str = "full"
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class ScanTask(ScanCreate):
@@ -87,6 +89,40 @@ class ScanTask(ScanCreate):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    progress: int = Field(default=0, ge=0, le=100)
+    stage: str | None = None
+    attempt: int = 1
+    queue_position: int | None = None
+    error: str | None = None
+
+
+class ScanProgressUpdate(BaseModel):
+    progress: int = Field(ge=0, le=100)
+    stage: str = Field(min_length=1, max_length=160)
+    detail: str | None = Field(default=None, max_length=1000)
+
+
+class AuthBootstrap(BaseModel):
+    tenant_name: str = Field(default="Default Workspace", min_length=1, max_length=120)
+    username: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class AuthLogin(BaseModel):
+    username: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=8, max_length=200)
+    tenant_name: str | None = Field(default=None, max_length=120)
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=8, max_length=200)
+    role: str = Field(default="viewer", max_length=40)
+
+
+class ProjectMembershipCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=120)
+    role: str = Field(default="viewer", max_length=40)
 
 
 class FindingCreate(BaseModel):

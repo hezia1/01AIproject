@@ -20,11 +20,15 @@ type ScaToolHealthCheck = { name: string; status: string; detail: string | null;
 type ScaToolHealth = { status: string; recommended_grype_input: string; checks: ScaToolHealthCheck[] };
 type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[]; tool_status?: ScaToolStatus | null };
 type SastCustomRule = { id: string; rule_id: string; title: string; severity: Severity; category: string; pattern: string; file_extensions: string[]; description: string; remediation: string; enabled: boolean; version: number; created_at: string };
-type SastProfile = { profile_version: number; rule_pack_version: string; semgrep_enabled: boolean; semgrep_config: string; include_local_rules: boolean; clear_previous: boolean; suppressions: SastSuppression[]; custom_rules: SastCustomRule[] };
+type SastSemgrepRule = { id: string; name: string; content: string; rule_ids: string[]; sha256: string; enabled: boolean; version: number; created_at: string };
+type SastProfile = { profile_version: number; rule_pack_version: string; semgrep_enabled: boolean; semgrep_config: string; include_local_rules: boolean; clear_previous: boolean; git_baseline_ref: string; scan_git_history_secrets: boolean; changed_files_only: boolean; suppressions: SastSuppression[]; custom_rules: SastCustomRule[]; semgrep_rules: SastSemgrepRule[] };
 type SastSuppression = { id: string; rule_id: string; path_pattern: string; reason: string; expires_at: string | null; enabled: boolean; created_at: string };
 type SastToolHealth = { semgrep_cli: { available: boolean; version: string | null; path: string | null }; docker: { available: boolean; version: string | null; path: string | null }; docker_image: { available: boolean; image: string }; can_run_semgrep: boolean };
 type SastScanHistoryItem = { scan_task_id: string; status: string; created_at: string; started_at: string | null; finished_at: string | null; finding_count: number; suppressed_count: number; engine_status: Record<string, { status?: string; detail?: string; config?: string }>; profile: Partial<SastProfile> };
 type SastScanDiff = { target_scan_id: string; base_scan_id: string | null; summary: { added: number; removed: number; severity_changed: number; unchanged: number }; added: Record<string, unknown>[]; removed: Record<string, unknown>[]; severity_changed: Record<string, unknown>[] };
+type SastReport = { project_id: string; scan: SastScanHistoryItem; summary: { finding_count: number; severity: Record<string, number>; categories: Record<string, number> }; trend: SastScanDiff; git: { available?: boolean; baseline_ref?: string | null; changed_files?: string[]; history_secret_files?: string[]; history_secret_count?: number }; quality_gate: { status: string; threshold: string; blocking_finding_count: number }; validation_suggestions: { finding_id: string; recommended_module: string; next_step: string; automatic_execution: boolean }[] };
+type SastFixDraft = { finding_id: string; status: string; category: string; patch: string; recommended_change: string; limitations: string[]; regression_scan: { endpoint: string; required_fields: string[] } };
+type AuthSession = { access_token: string; expires_at: number; user: { id: string; username: string; role: string }; tenant: { id: string; name: string } };
 type ScaScanHistoryItem = { scan_task_id: string; status: string; started_at: string | null; finished_at: string | null; created_at: string; component_count: number; direct_dependency_count: number; transitive_dependency_count: number; critical_count: number; high_count: number; vulnerable_count: number; license_risk_count: number; tool_status?: ScaToolStatus | null; osv_status: string; osv_error_count: number };
 type ScaScanDiffItem = { ecosystem: string; name: string; change_type: string; base_version: string | null; target_version: string | null; base_risk_status: string | null; target_risk_status: string | null; base_severity: Severity | null; target_severity: Severity | null; base_license_risk: string | null; target_license_risk: string | null; base_vulnerability_ids: string[]; target_vulnerability_ids: string[]; summary: string };
 type ScaScanDiffSummary = { added_components: number; removed_components: number; version_changes: number; risk_added: number; risk_removed: number; license_risk_changes: number; total_changes: number };
@@ -65,6 +69,7 @@ type SecurityReport = { generated_at: string; project: Project; summary: AspmSum
 type ReportRow = { id: string; title: string; subtitle: string; summary: string; details: [string, string][] };
 
 const API_BASE = "http://127.0.0.1:8000/api";
+const AUTH_STORAGE_KEY = "ai-security-local-session";
 const DEFAULT_ENABLED_MODULES: ModuleKey[] = ["sast", "sca", "aspm"];
 const OPTIONAL_MODULES: ModuleKey[] = ["sast", "sca", "agent", "dast", "sandbox"];
 const DEFAULT_SOURCE_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\sca-sample";
@@ -82,6 +87,36 @@ const fallbackModules: SecurityModule[] = [
 ];
 
 const moduleIcons: Record<ModuleKey, React.ReactNode> = { sast: <Bug size={20} />, sca: <Boxes size={20} />, agent: <Network size={20} />, dast: <Activity size={20} />, sandbox: <FlaskConical size={20} />, aspm: <ShieldCheck size={20} /> };
+
+function Root() {
+  const [session, setSession] = useState<AuthSession | null>(() => {
+    try { const saved = localStorage.getItem(AUTH_STORAGE_KEY); return saved ? JSON.parse(saved) as AuthSession : null; } catch { return null; }
+  });
+  if (session && session.expires_at * 1000 > Date.now()) return <App />;
+  return <AuthenticationScreen onAuthenticated={(next) => { localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(next)); setSession(next); }} />;
+}
+
+function AuthenticationScreen({ onAuthenticated }: { onAuthenticated: (session: AuthSession) => void }) {
+  const [needsBootstrap, setNeedsBootstrap] = useState<boolean | null>(null);
+  const [tenantName, setTenantName] = useState("Default Workspace");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("正在检查本地身份服务...");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void fetch(`${API_BASE}/auth/bootstrap-status`).then(async (response) => { if (!response.ok) throw new Error("身份服务不可用"); return response.json() as Promise<{ needs_bootstrap: boolean }>; }).then((value) => { setNeedsBootstrap(value.needs_bootstrap); setMessage(value.needs_bootstrap ? "首次使用：创建本地管理员账户。" : "使用本地账户登录。"); }).catch((error: unknown) => setMessage(errorMessage(error))); }, []);
+  async function submit() {
+    setBusy(true); setMessage("");
+    try {
+      const path = needsBootstrap ? "/auth/bootstrap" : "/auth/login";
+      const payload = needsBootstrap ? { tenant_name: tenantName, username, password } : { tenant_name: tenantName || undefined, username, password };
+      const response = await fetch(`${API_BASE}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await response.json() as AuthSession & { detail?: string };
+      if (!response.ok || !data.access_token) throw new Error(data.detail || "认证失败");
+      onAuthenticated(data);
+    } catch (error) { setMessage(errorMessage(error)); } finally { setBusy(false); }
+  }
+  return <main className="auth-shell"><section className="auth-card"><ShieldCheck size={32} /><span className="section-kicker">本地身份与租户隔离</span><h1>{needsBootstrap ? "初始化管理员" : "登录安全平台"}</h1><p>账户仅保存在本地 PostgreSQL；访问令牌由平台签名，不依赖第三方登录服务。</p><label>租户 / 工作区<input value={tenantName} onChange={(event) => setTenantName(event.target.value)} placeholder="Default Workspace" /></label><label>用户名<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" /></label><label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={needsBootstrap ? "new-password" : "current-password"} /></label><button className="primary-action" disabled={busy || needsBootstrap === null || !username || password.length < 8} onClick={() => void submit()}>{busy ? "处理中..." : needsBootstrap ? "创建管理员并进入" : "登录"}</button><small>{message}</small></section></main>;
+}
 
 function App() {
   const [activeView, setActiveView] = useState<ViewKey>("detection");
@@ -1027,11 +1062,79 @@ function GovernanceCenter({
     </nav>
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={loading} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
-    {scope === "sast" ? <><SastRuleManagement project={project} /><FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={loading} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /></> : null}
+    {scope === "sast" ? <><SastSemanticDelivery project={project} /><SastFixDrafts project={project} /><SastRuleManagement project={project} /><FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={loading} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /></> : null}
     {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={loading} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={loading} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
     {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={loading} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
+}
+
+function SastFixDrafts({ project }: { project: Project }) {
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [draft, setDraft] = useState<SastFixDraft | null>(null);
+  const [message, setMessage] = useState("");
+  useEffect(() => { void request<Finding[]>(`/sast/projects/${project.id}/findings`).then(setFindings).catch(() => setFindings([])); setDraft(null); }, [project.id]);
+  async function loadDraft(findingId: string) {
+    try { setDraft(await request<SastFixDraft>(`/sast/findings/${findingId}/fix-draft`)); setMessage(""); }
+    catch (error) { setMessage(`无法生成草案：${errorMessage(error)}`); }
+  }
+  const candidates = findings.filter((item) => item.severity === "critical" || item.severity === "high").slice(0, 8);
+  return <details className="advanced-details governance-advanced-details"><summary>修复草案与回归扫描（仅供人工评审）</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>高风险 Finding 修复草案</h2><span>不会写入源码、不会创建 PR，也不会自动执行回归</span></div>{candidates.length ? <table><thead><tr><th>等级</th><th>Finding</th><th>位置</th><th>操作</th></tr></thead><tbody>{candidates.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{item.severity}</span></td><td>{item.title}<span className="cell-subtext">{item.rule_id}</span></td><td>{item.file_path ?? "项目级"}:{item.line_start ?? "-"}</td><td><button className="secondary-action" onClick={() => void loadDraft(item.id)}>生成评审草案</button></td></tr>)}</tbody></table> : <div className="empty-project">先执行 SAST；出现 critical/high Finding 后可生成不落盘的修复草案。</div>}{message ? <div className="empty-project">{message}</div> : null}</div>{draft ? <div className="panel full"><div className="panel-header"><h2>草案：{draft.category}</h2><span>{draft.status}</span></div><p>{draft.recommended_change}</p><pre className="code-preview">{draft.patch}</pre><p>{draft.limitations.join(" ")}</p><small>回归：{draft.regression_scan.endpoint}（必填：{draft.regression_scan.required_fields.join("、")}）。</small></div> : null}</section></div></details>;
+}
+
+function SastSemanticDelivery({ project }: { project: Project }) {
+  const [profile, setProfile] = useState<SastProfile | null>(null);
+  const [packs, setPacks] = useState<SastSemgrepRule[]>([]);
+  const [report, setReport] = useState<SastReport | null>(null);
+  const [message, setMessage] = useState("");
+  const [draft, setDraft] = useState({ name: "Project semantic rule pack", content: "rules:\n  - id: project.example.dangerous-eval\n    languages: [python]\n    severity: WARNING\n    message: Review dynamic evaluation.\n    pattern: eval(...)\n" });
+
+  useEffect(() => { void load(); }, [project.id]);
+
+  async function load() {
+    const [nextProfile, packResult, nextReport] = await Promise.all([
+      request<SastProfile>(`/sast/projects/${project.id}/profile`).catch(() => null),
+      request<{ semgrep_rules: SastSemgrepRule[] }>(`/sast/projects/${project.id}/semgrep-rules`).catch(() => ({ semgrep_rules: [] })),
+      request<SastReport>(`/sast/projects/${project.id}/report`).catch(() => null),
+    ]);
+    setProfile(nextProfile); setPacks(packResult.semgrep_rules ?? []); setReport(nextReport);
+  }
+
+  async function saveGitProfile() {
+    if (!profile) return;
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/profile`, { method: "PATCH", body: JSON.stringify({ git_baseline_ref: profile.git_baseline_ref, scan_git_history_secrets: profile.scan_git_history_secrets, changed_files_only: profile.changed_files_only }) });
+      setProfile(saved); setMessage("Git 基线与历史密钥扫描配置已保存。");
+    } catch (error) { setMessage(`保存失败：${errorMessage(error)}`); }
+  }
+
+  async function validatePack() {
+    try {
+      const result = await request<{ yaml: { rule_count: number; sha256: string } }>("/sast/semgrep-rules/validate", { method: "POST", body: JSON.stringify(draft) });
+      setMessage(`YAML 结构有效：${result.yaml.rule_count} 条规则，校验值 ${result.yaml.sha256.slice(0, 12)}。`);
+    } catch (error) { setMessage(`YAML 校验失败：${errorMessage(error)}`); }
+  }
+
+  async function savePack() {
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/semgrep-rules`, { method: "POST", body: JSON.stringify(draft) });
+      setProfile(saved); setPacks(saved.semgrep_rules ?? []); setMessage("YAML 规则包已版本化保存；下次 Semgrep 运行会从 D 盘离线目录 materialize 后执行。");
+    } catch (error) { setMessage(`保存失败：${errorMessage(error)}`); }
+  }
+
+  async function togglePack(pack: SastSemgrepRule) {
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/semgrep-rules/${pack.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !pack.enabled }) });
+      setProfile(saved); setPacks(saved.semgrep_rules ?? []);
+    } catch (error) { setMessage(`更新失败：${errorMessage(error)}`); }
+  }
+
+  async function refreshReport() {
+    try { setReport(await request<SastReport>(`/sast/projects/${project.id}/report`)); setMessage("已刷新 SAST 趋势、Git 基线和质量门禁。 "); }
+    catch (error) { setMessage(`尚无已完成扫描报告：${errorMessage(error)}`); }
+  }
+
+  return <details className="advanced-details governance-advanced-details" open><summary>SAST 语义分析、Git 基线与交付门禁</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>受限语义分析</h2><span>Python AST + 同函数数据流/污点路径；JS/TS 为保守本地数据流</span></div><p>覆盖 SQL、命令执行、SSRF、路径穿越和不安全反序列化的 Source → Sink → Sanitizer 检查。结果是可复核的静态线索，不等同于全程序可达性或可利用性证明。</p><div className="filter-grid"><label>Git 基线 revision<input value={profile?.git_baseline_ref ?? ""} placeholder="例如 origin/main 或 HEAD~1" onChange={(event) => setProfile((value) => value ? { ...value, git_baseline_ref: event.target.value } : value)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.scan_git_history_secrets ?? true} onChange={(event) => setProfile((value) => value ? { ...value, scan_git_history_secrets: event.target.checked } : value)} />扫描 Git 历史中的密钥标识（仅保存路径）</label><label className="inline-check"><input type="checkbox" checked={profile?.changed_files_only ?? false} disabled={!profile?.git_baseline_ref} onChange={(event) => setProfile((value) => value ? { ...value, changed_files_only: event.target.checked } : value)} />仅扫描基线差异文件</label><button className="secondary-action" disabled={!profile} onClick={() => void saveGitProfile()}>保存基线配置</button><button className="secondary-action" onClick={() => void refreshReport()}>刷新报告</button></div>{message ? <div className="empty-project">{message}</div> : null}</div><div className="panel"><div className="panel-header"><h2>质量门禁</h2><span>{report?.quality_gate.status ?? "等待扫描"}</span></div><div className="kv-list"><div><span>阈值</span><strong>{report?.quality_gate.threshold ?? "high"}</strong></div><div><span>阻断 Finding</span><strong>{report?.quality_gate.blocking_finding_count ?? 0}</strong></div><div><span>本次扫描</span><strong>{report?.summary.finding_count ?? 0}</strong></div></div></div><div className="panel"><div className="panel-header"><h2>Git 证据</h2><span>{report?.git.available ? "已关联" : "等待 Git 项目扫描"}</span></div><div className="kv-list"><div><span>基线</span><strong>{report?.git.baseline_ref ?? "未设置"}</strong></div><div><span>差异文件</span><strong>{report?.git.changed_files?.length ?? 0}</strong></div><div><span>历史密钥路径</span><strong>{report?.git.history_secret_count ?? report?.git.history_secret_files?.length ?? 0}</strong></div></div></div><div className="panel full"><div className="panel-header"><h2>项目 Semgrep YAML 规则包</h2><span>校验、版本、启停和实际离线 materialization 均已接入</span></div><div className="filter-grid"><label>规则包名称<input value={draft.name} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} /></label><label className="wide-field">YAML<textarea value={draft.content} onChange={(event) => setDraft((value) => ({ ...value, content: event.target.value }))} rows={9} /></label><button className="secondary-action" onClick={() => void validatePack()}>校验 YAML</button><button className="primary-action" onClick={() => void savePack()}>发布规则包</button></div>{packs.length ? <table><thead><tr><th>规则包</th><th>规则 ID</th><th>校验值</th><th>状态</th></tr></thead><tbody>{packs.map((pack) => <tr key={pack.id}><td>{pack.name}<span className="cell-subtext">v{pack.version}</span></td><td>{pack.rule_ids.join(", ")}</td><td>{pack.sha256.slice(0, 16)}</td><td><button className="secondary-action" onClick={() => void togglePack(pack)}>{pack.enabled ? "停用" : "启用"}</button></td></tr>)}</tbody></table> : <div className="empty-project">尚未添加项目 YAML 规则包；默认离线规则包仍会参与 Semgrep 扫描。</div>}</div><div className="panel full"><div className="panel-header"><h2>跨模块验证建议</h2><span>只生成建议，不会自动发送请求或执行沙箱命令</span></div>{report?.validation_suggestions.length ? <ul>{report.validation_suggestions.map((item) => <li key={item.finding_id}><strong>{item.recommended_module}</strong> · {item.next_step}</li>)}</ul> : <div className="empty-project">执行一次 SAST 后，高风险 Source/Sink 发现会在这里给出人工确认后的 DAST 或 SANDBOX 下一步。</div>}</div></section></div></details>;
 }
 
 function SastRuleManagement({ project }: { project: Project }) {
@@ -2339,9 +2442,9 @@ function emptyToNull(value: string) { const trimmed = value.trim(); return trimm
 async function enableProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}`, { method: "POST", body: JSON.stringify({ module_key: moduleKey, enabled, config: {} }) }); }
 async function updateProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}/${moduleKey}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : "未知错误"; }
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : detail; } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> { let token = ""; try { token = (JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) ?? "{}") as Partial<AuthSession>).access_token ?? ""; } catch { /* anonymous bootstrap paths do not use request() */ } const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : detail; } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><Root /></React.StrictMode>);
 
 
 
