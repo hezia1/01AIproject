@@ -19,6 +19,11 @@ type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: n
 type ScaToolHealthCheck = { name: string; status: string; detail: string | null; remediation: string | null };
 type ScaToolHealth = { status: string; recommended_grype_input: string; checks: ScaToolHealthCheck[] };
 type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[]; tool_status?: ScaToolStatus | null };
+type SastProfile = { profile_version: number; semgrep_enabled: boolean; semgrep_config: string; include_local_rules: boolean; clear_previous: boolean; suppressions: SastSuppression[] };
+type SastSuppression = { id: string; rule_id: string; path_pattern: string; reason: string; expires_at: string | null; enabled: boolean; created_at: string };
+type SastToolHealth = { semgrep_cli: { available: boolean; version: string | null; path: string | null }; docker: { available: boolean; version: string | null; path: string | null }; docker_image: { available: boolean; image: string }; can_run_semgrep: boolean };
+type SastScanHistoryItem = { scan_task_id: string; status: string; created_at: string; started_at: string | null; finished_at: string | null; finding_count: number; suppressed_count: number; engine_status: Record<string, { status?: string; detail?: string; config?: string }>; profile: Partial<SastProfile> };
+type SastScanDiff = { target_scan_id: string; base_scan_id: string | null; summary: { added: number; removed: number; severity_changed: number; unchanged: number }; added: Record<string, unknown>[]; removed: Record<string, unknown>[]; severity_changed: Record<string, unknown>[] };
 type ScaScanHistoryItem = { scan_task_id: string; status: string; started_at: string | null; finished_at: string | null; created_at: string; component_count: number; direct_dependency_count: number; transitive_dependency_count: number; critical_count: number; high_count: number; vulnerable_count: number; license_risk_count: number; tool_status?: ScaToolStatus | null; osv_status: string; osv_error_count: number };
 type ScaScanDiffItem = { ecosystem: string; name: string; change_type: string; base_version: string | null; target_version: string | null; base_risk_status: string | null; target_risk_status: string | null; base_severity: Severity | null; target_severity: Severity | null; base_license_risk: string | null; target_license_risk: string | null; base_vulnerability_ids: string[]; target_vulnerability_ids: string[]; summary: string };
 type ScaScanDiffSummary = { added_components: number; removed_components: number; version_changes: number; risk_added: number; risk_removed: number; license_risk_changes: number; total_changes: number };
@@ -429,8 +434,7 @@ function App() {
         body: JSON.stringify({
           project_id: project.id,
           source_path: configuredSource,
-          clear_previous: false,
-          enable_tool_scan: moduleKey === "sca" ? scaToolScanEnabled : false,
+          ...(moduleKey === "sast" ? {} : { clear_previous: false, enable_tool_scan: moduleKey === "sca" ? scaToolScanEnabled : false }),
         }),
       });
       return {
@@ -548,7 +552,7 @@ function App() {
     const source = kind === "sca" ? sourcePath : kind === "sast" ? sastPath : agentPath;
     setLoading(true);
     try {
-      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) });
+      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, ...(kind === "sast" ? {} : { clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) }) });
       const nextScaScanId = kind === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId;
       if (kind === "sca") setSelectedScaScanId(nextScaScanId);
       await refreshProjectContext(project.id, nextScaScanId);
@@ -564,7 +568,7 @@ function App() {
     try {
       let nextScaScanId = selectedScaScanId;
       for (const kind of runnable) {
-        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) });
+        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, ...(kind === "sast" ? {} : { clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) }) });
         if (kind === "sca") nextScaScanId = (result as ScaScanResult).scan_task_id;
       }
       setSelectedScaScanId(nextScaScanId);
@@ -1841,15 +1845,87 @@ function SandboxView({ project, evidence, templates, runCommand, sandboxImage, l
 
 function SastView({ project, findings, categorySummary, sourcePath, loading, onSourcePathChange, onRunScan, onAgentReview }: { project: Project | null; findings: Finding[]; categorySummary: Record<string, number>; sourcePath: string; loading: boolean; onSourcePathChange: (value: string) => void; onRunScan: () => Promise<void>; onAgentReview: () => Promise<void> }) {
   const [page, setPage] = useState(1);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [profile, setProfile] = useState<SastProfile | null>(null);
+  const [toolHealth, setToolHealth] = useState<SastToolHealth | null>(null);
+  const [history, setHistory] = useState<SastScanHistoryItem[]>([]);
+  const [scanDiff, setScanDiff] = useState<SastScanDiff | null>(null);
+  const [suppression, setSuppression] = useState({ rule_id: "*", path_pattern: "**", reason: "", expires_at: "" });
+  const [advancedMessage, setAdvancedMessage] = useState("");
   const pageSize = 10;
   const severitySummary = countBy(findings, "severity");
   const pageCount = Math.max(1, Math.ceil(findings.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const pageFindings = findings.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const reviewedCount = findings.filter((finding) => finding.ai_review?.agent_pipeline?.length).length;
-  useEffect(() => { setPage(1); }, [findings]);
 
-  return <section className="sca-layout"><div className="sca-toolbar panel full"><div><h2>SAST 智能静态审计</h2><p>优先调用 Semgrep 规则引擎扫描源码，并通过规则化 Sub-agent 编排完成复核、证据归档和修复建议归一化。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SAST 审计"}</button><button className="secondary-action" onClick={() => void onAgentReview()} disabled={loading || !project || findings.length === 0}>执行 Agent 复核</button></div></div><section className="module-summary"><Metric label="Findings" value={findings.length} /><Metric label="Agent 已复核" value={reviewedCount} /><Metric label="Critical / High" value={(severitySummary.critical ?? 0) + (severitySummary.high ?? 0)} /><Metric label="风险分类" value={Object.keys(categorySummary).length} /></section><div className="content-grid"><div className="panel"><div className="panel-header"><h2>规则分类</h2><span>Category</span></div><KeyValue data={categorySummary} /></div><div className="panel"><div className="panel-header"><h2>严重等级</h2><span>Severity</span></div><KeyValue data={severitySummary} /></div><div className="panel full"><div className="panel-header"><h2>SAST 风险发现</h2><span>共 {findings.length} 条</span></div><table><thead><tr><th>等级</th><th>分类</th><th>标题</th><th>位置</th><th>Agent 复核</th><th>修复建议</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={6} className="empty-cell">暂无 SAST findings，执行 SAST 审计后显示结果。</td></tr> : pageFindings.map((finding) => <tr key={finding.id}><td><span className={`severity ${finding.severity}`}>{finding.severity}</span><span className="cell-subtext">{finding.ai_review?.priority ?? "-"}</span></td><td><span className="risk-badge review-required">{finding.ai_review?.category ?? "unknown"}</span><span className="cell-subtext">{finding.ai_review?.language ?? "Unknown"}</span></td><td><strong>{finding.title}</strong><span className="cell-subtext">{finding.evidence ?? "-"}</span></td><td>{finding.file_path ?? "-"}<span className="cell-subtext">Line {finding.line_start ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.cwe ?? "-"} · {finding.ai_review?.owasp ?? "-"}</span></td><td>{finding.ai_review?.review_verdict ?? "未复核"}<span className="cell-subtext">误报概率：{finding.ai_review?.false_positive_likelihood ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.evidence_summary ?? "-"}</span></td><td>{finding.ai_review?.fix_strategy ?? finding.ai_review?.remediation ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div></section>;
+  useEffect(() => { setPage(1); }, [findings]);
+  useEffect(() => { void refreshAdvanced(); }, [project?.id, findings.length]);
+
+  async function refreshAdvanced() {
+    if (!project) {
+      setProfile(null); setHistory([]); setScanDiff(null); return;
+    }
+    const [profileResult, healthResult, historyResult, diffResult] = await Promise.all([
+      request<SastProfile>(`/sast/projects/${project.id}/profile`).catch(() => null),
+      request<SastToolHealth>("/sast/tool-health").catch(() => null),
+      request<SastScanHistoryItem[]>(`/sast/projects/${project.id}/scan-history`).catch(() => []),
+      request<SastScanDiff>(`/sast/projects/${project.id}/scan-diff`).catch(() => null),
+    ]);
+    setProfile(profileResult);
+    setToolHealth(healthResult);
+    setHistory(historyResult);
+    setScanDiff(diffResult);
+  }
+
+  async function saveProfile() {
+    if (!project || !profile) return;
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/profile`, { method: "PATCH", body: JSON.stringify(profile) });
+      setProfile(saved);
+      setAdvancedMessage("扫描配置已保存；下一次扫描会保留该配置快照。");
+    } catch (error) { setAdvancedMessage(`保存失败：${errorMessage(error)}`); }
+  }
+
+  async function addSuppression() {
+    if (!project || !suppression.reason.trim()) return setAdvancedMessage("请填写豁免理由。");
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/suppressions`, { method: "POST", body: JSON.stringify({ ...suppression, expires_at: emptyToNull(suppression.expires_at) }) });
+      setProfile(saved);
+      setSuppression({ rule_id: "*", path_pattern: "**", reason: "", expires_at: "" });
+      setAdvancedMessage("豁免已保存；下一次扫描会在结果中记录被抑制的 Finding。");
+    } catch (error) { setAdvancedMessage(`豁免保存失败：${errorMessage(error)}`); }
+  }
+
+  async function toggleSuppression(item: SastSuppression) {
+    if (!project) return;
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/suppressions/${item.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !item.enabled }) });
+      setProfile(saved);
+    } catch (error) { setAdvancedMessage(`更新失败：${errorMessage(error)}`); }
+  }
+
+  async function exportSarif() {
+    if (!project) return;
+    try {
+      const response = await fetch(`${API_BASE}/sast/projects/${project.id}/sarif`);
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${project.name || "project"}-sast-results.sarif`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setAdvancedMessage("SARIF 已导出。");
+    } catch (error) { setAdvancedMessage(`SARIF 导出失败：${errorMessage(error)}`); }
+  }
+
+  return <section className="sca-layout">
+    <div className="sca-toolbar panel full"><div><h2>SAST 智能静态审计</h2><p>Semgrep 与本地规则的实际执行或降级状态会随扫描快照保留；规则化 Sub-agent 用于复核、证据归档和修复建议归一化。</p></div><div className="path-control"><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} /><button className="primary-action" onClick={() => void onRunScan()} disabled={loading || !project}>{loading ? "执行中" : "执行 SAST 审计"}</button><button className="secondary-action" onClick={() => void onAgentReview()} disabled={loading || !project || findings.length === 0}>执行 Agent 复核</button><button className="secondary-action" onClick={() => setAdvancedOpen((value) => !value)} disabled={!project}>{advancedOpen ? "收起扫描治理" : "扫描治理与导出"}</button></div></div>
+    <section className="module-summary"><Metric label="Findings" value={findings.length} /><Metric label="Agent 已复核" value={reviewedCount} /><Metric label="Critical / High" value={(severitySummary.critical ?? 0) + (severitySummary.high ?? 0)} /><Metric label="风险分类" value={Object.keys(categorySummary).length} /></section>
+    {advancedOpen ? <section className="content-grid"><div className="panel full"><div className="panel-header"><h2>SAST 扫描治理</h2><span>{advancedMessage || `项目级配置版本 v${profile?.profile_version ?? "-"}；快照随扫描保存`}</span></div><div className="filter-grid"><label>Semgrep 规则包 / 本地规则文件<input value={profile?.semgrep_config ?? "p/default"} disabled={!profile} onChange={(event) => setProfile((current) => current ? { ...current, semgrep_config: event.target.value } : current)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.semgrep_enabled ?? false} disabled={!profile} onChange={(event) => setProfile((current) => current ? { ...current, semgrep_enabled: event.target.checked } : current)} />启用 Semgrep</label><label className="inline-check"><input type="checkbox" checked={profile?.include_local_rules ?? false} disabled={!profile} onChange={(event) => setProfile((current) => current ? { ...current, include_local_rules: event.target.checked } : current)} />启用本地规则</label><label className="inline-check"><input type="checkbox" checked={profile?.clear_previous ?? true} disabled={!profile} onChange={(event) => setProfile((current) => current ? { ...current, clear_previous: event.target.checked } : current)} />新扫描关闭旧的活动 Finding</label><button className="secondary-action" onClick={() => void saveProfile()} disabled={!profile}>保存扫描配置</button><button className="secondary-action" onClick={() => void exportSarif()} disabled={history.length === 0}>导出最新 SARIF</button></div></div><div className="panel"><div className="panel-header"><h2>Semgrep 工具健康</h2><span>{toolHealth?.can_run_semgrep ? "可运行" : "将降级"}</span></div><div className="kv-list"><div><span>CLI</span><strong>{toolHealth?.semgrep_cli.available ? toolHealth.semgrep_cli.version ?? "可用" : "不可用"}</strong></div><div><span>Docker</span><strong>{toolHealth?.docker.available ? toolHealth.docker.version ?? "可用" : "不可用"}</strong></div><div><span>镜像</span><strong>{toolHealth?.docker_image.available ? "已就绪" : "未找到"}</strong></div></div></div><div className="panel"><div className="panel-header"><h2>最新扫描差异</h2><span>{scanDiff?.base_scan_id ? `${scanDiff.base_scan_id.slice(0, 8)} → ${scanDiff.target_scan_id.slice(0, 8)}` : "需要两次扫描"}</span></div><div className="kv-list"><div><span>新增</span><strong>{scanDiff?.summary.added ?? 0}</strong></div><div><span>消失</span><strong>{scanDiff?.summary.removed ?? 0}</strong></div><div><span>等级变化</span><strong>{scanDiff?.summary.severity_changed ?? 0}</strong></div><div><span>未变化</span><strong>{scanDiff?.summary.unchanged ?? 0}</strong></div></div></div><div className="panel full"><div className="panel-header"><h2>规则 / 路径豁免</h2><span>仅抑制下一次扫描结果，历史原始快照保持不变</span></div><div className="filter-grid"><label>规则 ID 或 *<input value={suppression.rule_id} onChange={(event) => setSuppression((current) => ({ ...current, rule_id: event.target.value }))} /></label><label>相对路径 glob<input value={suppression.path_pattern} onChange={(event) => setSuppression((current) => ({ ...current, path_pattern: event.target.value }))} /></label><label>失效日期（可选）<input type="date" value={suppression.expires_at} onChange={(event) => setSuppression((current) => ({ ...current, expires_at: event.target.value }))} /></label><label>豁免理由<input value={suppression.reason} onChange={(event) => setSuppression((current) => ({ ...current, reason: event.target.value }))} placeholder="例如：测试专用文件" /></label><button className="secondary-action" onClick={() => void addSuppression()} disabled={!project}>新增豁免</button></div>{profile?.suppressions.length ? <table><thead><tr><th>规则</th><th>路径</th><th>理由</th><th>失效</th><th>状态</th></tr></thead><tbody>{profile.suppressions.map((item) => <tr key={item.id}><td>{item.rule_id}</td><td>{item.path_pattern}</td><td>{item.reason}</td><td>{item.expires_at ? formatDateTime(item.expires_at) : "永久"}</td><td><button className="secondary-action" onClick={() => void toggleSuppression(item)}>{item.enabled ? "停用" : "启用"}</button></td></tr>)}</tbody></table> : <div className="empty-project">暂无项目级豁免。</div>}</div><div className="panel full"><div className="panel-header"><h2>扫描历史与引擎状态</h2><span>{history.length} 次扫描</span></div>{history.length ? <table><thead><tr><th>时间</th><th>Finding</th><th>抑制</th><th>Semgrep</th><th>本地规则</th></tr></thead><tbody>{history.slice(0, 10).map((item) => <tr key={item.scan_task_id}><td>{formatDateTime(item.finished_at ?? item.created_at)}<span className="cell-subtext">{item.scan_task_id.slice(0, 8)}</span></td><td>{item.finding_count}</td><td>{item.suppressed_count}</td><td>{item.engine_status.semgrep?.status ?? "旧扫描未记录"}<span className="cell-subtext">{item.engine_status.semgrep?.detail ?? item.engine_status.semgrep?.config ?? "-"}</span></td><td>{item.engine_status.local_rules?.status ?? "旧扫描未记录"}</td></tr>)}</tbody></table> : <div className="empty-project">尚无扫描历史；执行 SAST 后会保留规则配置、引擎状态、抑制数量和 Finding 快照。</div>}</div></section> : null}
+    <div className="content-grid"><div className="panel"><div className="panel-header"><h2>规则分类</h2><span>Category</span></div><KeyValue data={categorySummary} /></div><div className="panel"><div className="panel-header"><h2>严重等级</h2><span>Severity</span></div><KeyValue data={severitySummary} /></div><div className="panel full"><div className="panel-header"><h2>SAST 风险发现</h2><span>共 {findings.length} 条</span></div><table><thead><tr><th>等级</th><th>分类</th><th>标题</th><th>位置</th><th>Agent 复核</th><th>修复建议</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={6} className="empty-cell">暂无 SAST findings，执行 SAST 审计后显示结果。</td></tr> : pageFindings.map((finding) => <tr key={finding.id}><td><span className={`severity ${finding.severity}`}>{finding.severity}</span><span className="cell-subtext">{finding.ai_review?.priority ?? "-"}</span></td><td><span className="risk-badge review-required">{finding.ai_review?.category ?? "unknown"}</span><span className="cell-subtext">{finding.ai_review?.language ?? "Unknown"}</span></td><td><strong>{finding.title}</strong><span className="cell-subtext">{finding.evidence ?? "-"}</span></td><td>{finding.file_path ?? "-"}<span className="cell-subtext">Line {finding.line_start ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.cwe ?? "-"} · {finding.ai_review?.owasp ?? "-"}</span></td><td>{finding.ai_review?.review_verdict ?? "未复核"}<span className="cell-subtext">误报概率：{finding.ai_review?.false_positive_likelihood ?? "-"}</span><span className="cell-subtext">{finding.ai_review?.evidence_summary ?? "-"}</span></td><td>{finding.ai_review?.fix_strategy ?? finding.ai_review?.remediation ?? "-"}</td></tr>)}</tbody></table><div className="pagination"><button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页，每页 {pageSize} 条</span><button disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div></div></div>
+  </section>;
 }
 function ScaView({ project, components, scanHistory, selectedScanId, scanDiff, dependencyGraph, sourcePath, toolScanEnabled, ecosystemSummary, riskSummary, loading, onSourcePathChange, onToolScanChange, onRunScan, onExportSbom, onExportReport, onSelectScan }: { project: Project | null; components: Component[]; scanHistory: ScaScanHistoryItem[]; selectedScanId: string | null; scanDiff: ScaScanDiff | null; dependencyGraph: DependencyGraph | null; sourcePath: string; toolScanEnabled: boolean; ecosystemSummary: Record<string, number>; riskSummary: Record<string, number>; loading: boolean; onSourcePathChange: (value: string) => void; onToolScanChange: (enabled: boolean) => void; onRunScan: () => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportReport: () => Promise<void>; onSelectScan: (scanTaskId: string) => Promise<void> }) {
   const [page, setPage] = useState(1);

@@ -399,6 +399,8 @@ class SastScanResult(BaseModel):
     scanned_files: list[str]
     finding_count: int
     findings: list[Finding]
+    engine_status: dict[str, dict[str, object]] = Field(default_factory=dict)
+    suppressed_count: int = 0
 
 class AgentScanRequest(BaseModel):
     project_id: UUID

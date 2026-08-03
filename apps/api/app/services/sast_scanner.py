@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +45,7 @@ class ParsedFinding:
 class SastScanOutput:
     findings: list[ParsedFinding]
     scanned_files: list[str]
+    engine_status: dict[str, dict[str, object]] | None = None
 
 
 SAST_RULES = [
@@ -260,3 +263,39 @@ def dedupe_findings(findings: list[ParsedFinding]) -> list[ParsedFinding]:
         seen.add(key)
         deduped.append(finding)
     return deduped
+
+
+def sast_tool_health() -> dict[str, object]:
+    semgrep_path = shutil.which("semgrep")
+    docker_path = shutil.which("docker")
+    semgrep_version = command_version([semgrep_path, "--version"]) if semgrep_path else None
+    docker_version = command_version([docker_path, "version", "--format", "{{.Server.Version}}"] ) if docker_path else None
+    docker_image = False
+    if docker_path and docker_version:
+        try:
+            docker_image = subprocess.run(
+                [docker_path, "image", "inspect", "semgrep/semgrep:latest"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            docker_image = False
+    return {
+        "semgrep_cli": {"available": bool(semgrep_version), "version": semgrep_version, "path": semgrep_path},
+        "docker": {"available": bool(docker_version), "version": docker_version, "path": docker_path},
+        "docker_image": {"available": docker_image, "image": "semgrep/semgrep:latest"},
+        "can_run_semgrep": bool(semgrep_version or (docker_version and docker_image)),
+    }
+
+
+def command_version(command: list[str | None]) -> str | None:
+    if not command or not command[0]:
+        return None
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return (completed.stdout or completed.stderr).strip()[:200] or "available"
