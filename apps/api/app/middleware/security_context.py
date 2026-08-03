@@ -72,7 +72,7 @@ async def project_id_from_request(request: Request, db) -> str | None:  # type: 
 
 
 def project_id_from_resource_path(path: str, db) -> str | None:  # type: ignore[no-untyped-def]
-    matches = re.search(r"/(findings|validations|evidence|scans)/([0-9a-fA-F-]{36})(?:/|$)", path)
+    matches = re.search(r"/(findings|validations|evidence|scans|jobs)/([0-9a-fA-F-]{36})(?:/|$)", path)
     if not matches:
         return None
     resource, resource_id = matches.groups()
@@ -81,6 +81,7 @@ def project_id_from_resource_path(path: str, db) -> str | None:  # type: ignore[
         "validations": DastValidationRecord,
         "evidence": SandboxEvidenceRecord,
         "scans": ScanTaskRecord,
+        "jobs": ScanTaskRecord,
     }.get(resource)
     record = db.get(record_type, str(UUID(resource_id))) if record_type else None
     return str(record.project_id) if record is not None else None
@@ -90,4 +91,4 @@ def requires_security_role(request: Request) -> bool:
     if request.method in {"GET", "HEAD"}:
         return False
     path = request.url.path
-    return any(marker in path for marker in ("/api/sast/projects/", "/api/sast/rules/", "/api/sca/policies", "/api/sca/intelligence", "/api/sca/osv-mirror", "/api/sandbox/run"))
+    return any(marker in path for marker in ("/api/sast/projects/", "/api/sast/rules/", "/api/sast/semgrep-rules", "/api/sca/policies", "/api/sca/intelligence", "/api/sca/osv-mirror", "/api/sandbox/run"))

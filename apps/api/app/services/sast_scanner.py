@@ -171,17 +171,22 @@ def scan_source_tree(
     extra_extensions = {extension for rule in rules for extension in (rule.file_extensions or set())}
     findings: list[ParsedFinding] = []
     scanned_files: list[str] = []
+    semantic_files: list[Path] = []
     allowed_paths = {path.replace("\\", "/").lstrip("./") for path in include_paths or []}
     for file_path in iter_source_files(root, extra_extensions):
         relative_path = file_path.relative_to(root).as_posix()
         if allowed_paths and relative_path not in allowed_paths:
             continue
         scanned_files.append(relative_path)
+        semantic_files.append(file_path)
         findings.extend(scan_file(file_path, relative_path, rules))
         # Imported lazily to avoid the semantic service depending on a partially
         # initialized scanner module.
         from app.services.sast_semantic import scan_semantic_file
         findings.extend(scan_semantic_file(file_path, relative_path))
+
+    from app.services.sast_semantic import scan_interprocedural_python
+    findings.extend(scan_interprocedural_python(root, semantic_files))
 
     return SastScanOutput(findings=dedupe_findings(findings), scanned_files=scanned_files)
 

@@ -1,4 +1,5 @@
 from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 from uuid import UUID
 
@@ -9,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import FindingRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord
-from app.models import Finding, ModuleKey, SastScanRequest, SastScanResult, ScanStatus
-from app.repositories.mappers import finding_to_schema
+from app.models import Finding, ModuleKey, SastScanRequest, SastScanResult, ScanStatus, ScanTask
+from app.repositories.mappers import finding_to_schema, scan_to_schema
 from app.services.sast_agent_orchestrator import run_sast_agent_pipeline
 from app.services.sast_governance import (
     add_custom_rule,
@@ -28,7 +29,7 @@ from app.services.sast_governance import (
 from app.services.sast_git import collect_git_context, git_history_secret_findings
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import SastScanOutput, dedupe_findings, sast_tool_health, scan_source_tree
-from app.services.sast_semgrep_rules import materialize_semgrep_rule_packs
+from app.services.sast_semgrep_rules import materialize_semgrep_rule_packs, semgrep_rule_preflight
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 from app.services.audit import record_audit
 
@@ -103,6 +104,7 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
             "suppressed_findings": suppressed,
             "finding_snapshot": finding_snapshot(findings),
             "git_context": git_context,
+            "branch": payload.branch,
         }
         identity = getattr(request.state, "identity", None)
         if identity is not None:
@@ -132,6 +134,85 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
         engine_status=parsed.engine_status or {},
         suppressed_count=len(suppressed),
     )
+
+
+@router.post("/jobs", response_model=ScanTask, status_code=201)
+def queue_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depends(get_db)) -> ScanTask:
+    project = ensure_project(db, payload.project_id)
+    enabled_sast_module(db, payload.project_id)
+    source_path = validate_sast_source_path(project, payload.source_path)
+    active = db.scalar(select(ScanTaskRecord.id).where(ScanTaskRecord.project_id == str(payload.project_id), ScanTaskRecord.scan_type == "sast_job", ScanTaskRecord.status.in_([ScanStatus.queued.value, ScanStatus.running.value])))
+    if active:
+        raise HTTPException(status_code=409, detail="A SAST job is already queued or running for this project")
+    metadata = {
+        "task_kind": "sast_job", "payload": {**payload.model_dump(mode="json"), "source_path": source_path},
+        "progress": 0, "stage": "queued", "attempt": 1,
+        "events": [{"at": datetime.utcnow().isoformat() + "Z", "stage": "queued", "detail": "SAST job queued"}],
+    }
+    job = ScanTaskRecord(project_id=str(payload.project_id), scan_type="sast_job", status=ScanStatus.queued.value, scan_metadata=metadata)
+    db.add(job)
+    identity = getattr(request.state, "identity", None)
+    if identity is not None:
+        record_audit(db, tenant_id=identity.tenant_id, user_id=identity.user_id, project_id=str(payload.project_id), action="sast.job.queue", outcome="completed", detail={"job_id": str(job.id), "source_path": source_path})
+    db.commit()
+    db.refresh(job)
+    return scan_to_schema(job)
+
+
+@router.post("/jobs/{job_id}/run", response_model=SastScanResult)
+def run_queued_sast_job(job_id: UUID, request: Request, db: Session = Depends(get_db)) -> SastScanResult:
+    job = db.get(ScanTaskRecord, str(job_id))
+    if job is None or job.scan_type != "sast_job":
+        raise HTTPException(status_code=404, detail="SAST job not found")
+    return execute_queued_sast_job(db, job, request)
+
+
+def execute_queued_sast_job(db: Session, job: ScanTaskRecord, request: Request) -> SastScanResult:
+    if job.status == ScanStatus.cancelled.value:
+        raise HTTPException(status_code=409, detail="Cancelled SAST job cannot run")
+    if job.status not in {ScanStatus.queued.value, ScanStatus.running.value}:
+        raise HTTPException(status_code=409, detail="Only queued or running SAST jobs can run")
+    metadata = dict(job.scan_metadata or {})
+    raw_payload = metadata.get("payload")
+    if not isinstance(raw_payload, dict):
+        raise HTTPException(status_code=400, detail="SAST job has no valid payload")
+    try:
+        payload = SastScanRequest.model_validate(raw_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="SAST job payload is invalid") from exc
+    job.status = ScanStatus.running.value
+    job.started_at = job.started_at or datetime.utcnow()
+    update_sast_job_metadata(job, progress=10, stage="running", detail="Worker started SAST execution")
+    db.commit()
+    try:
+        result = run_sast_scan(payload, request, db)
+        db.refresh(job)
+        job.status = ScanStatus.completed.value
+        job.finished_at = datetime.utcnow()
+        metadata = dict(job.scan_metadata or {})
+        metadata["result_scan_task_id"] = str(result.scan_task_id)
+        job.scan_metadata = metadata
+        update_sast_job_metadata(job, progress=100, stage="completed", detail="Worker completed SAST execution")
+        db.commit()
+        return result
+    except Exception as exc:
+        db.refresh(job)
+        job.status = ScanStatus.failed.value
+        job.finished_at = datetime.utcnow()
+        update_sast_job_metadata(job, progress=int((job.scan_metadata or {}).get("progress") or 10), stage="failed", detail=str(exc))
+        metadata = dict(job.scan_metadata or {})
+        metadata["error"] = str(exc)[:1000]
+        job.scan_metadata = metadata
+        db.commit()
+        raise
+
+
+def update_sast_job_metadata(job: ScanTaskRecord, *, progress: int, stage: str, detail: str) -> None:
+    metadata = dict(job.scan_metadata or {})
+    events = list(metadata.get("events") or [])[-49:]
+    events.append({"at": datetime.utcnow().isoformat() + "Z", "stage": stage, "detail": detail[:1000], "progress": progress})
+    metadata.update({"progress": progress, "stage": stage, "queue_position": None, "events": events})
+    job.scan_metadata = metadata
 
 
 @router.get("/projects/{project_id}/findings", response_model=list[Finding])
@@ -180,6 +261,14 @@ def validate_sast_rule(payload: dict[str, object]) -> dict[str, object]:
 def validate_sast_semgrep_rule(payload: dict[str, object]) -> dict[str, object]:
     try:
         return validate_semgrep_rule_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/semgrep-rules/preflight")
+def preflight_sast_semgrep_rule(payload: dict[str, object]) -> dict[str, object]:
+    try:
+        return semgrep_rule_preflight(payload.get("content"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -274,6 +363,20 @@ def patch_sast_semgrep_rule(project_id: UUID, rule_id: str, payload: dict[str, o
     return profile
 
 
+@router.post("/projects/{project_id}/semgrep-rules/{rule_id}/publish")
+def publish_sast_semgrep_rule(project_id: UUID, rule_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    module = sast_module(db, project_id)
+    identity = getattr(request.state, "identity", None)
+    try:
+        profile = update_semgrep_rule(module.config, rule_id, {"status": "published", "approved_by": identity.username if identity is not None else "local-worker"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    persist_sast_profile(module, profile)
+    audit_sast_mutation(db, request, str(project_id), "sast.semgrep_rule.publish", {"rule_id": rule_id})
+    db.commit()
+    return profile
+
+
 @router.post("/projects/{project_id}/suppressions", status_code=201)
 def create_sast_suppression(project_id: UUID, payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
     module = sast_module(db, project_id)
@@ -359,7 +462,9 @@ def sast_report(project_id: UUID, scan_task_id: UUID | None = None, db: Session 
         categories[category] = categories.get(category, 0) + 1
     scans = db.scalars(select(ScanTaskRecord).where(ScanTaskRecord.project_id == str(project_id), ScanTaskRecord.scan_type == "sast", ScanTaskRecord.status == ScanStatus.completed.value).order_by(ScanTaskRecord.created_at.desc())).all()
     previous = next((item for item in scans if item.created_at < scan.created_at), None)
-    return {"project_id": str(project_id), "scan": sast_scan_history_item(scan), "summary": {"finding_count": len(findings), "severity": severity, "categories": categories}, "trend": build_sast_scan_diff(scan, previous, db), "git": (scan.scan_metadata or {}).get("git_context") or {}, "quality_gate": sast_quality_gate(findings), "validation_suggestions": validation_suggestions(findings)}
+    metadata = scan.scan_metadata or {}
+    profile = metadata.get("sast_profile") if isinstance(metadata.get("sast_profile"), dict) else effective_sast_profile(sast_module(db, project_id).config)
+    return {"project_id": str(project_id), "scan": sast_scan_history_item(scan), "summary": {"finding_count": len(findings), "severity": severity, "categories": categories}, "trend": build_sast_scan_diff(scan, previous, db), "git": metadata.get("git_context") or {}, "quality_gate": sast_quality_gate(findings, profile, str(metadata.get("branch") or ""), scan, previous, db), "validation_suggestions": validation_suggestions(findings)}
 
 
 @router.get("/projects/{project_id}/report.html", response_class=HTMLResponse)
@@ -390,13 +495,15 @@ def sast_fix_draft(finding_id: UUID, db: Session = Depends(get_db)) -> dict[str,
 @router.get("/projects/{project_id}/ci-config")
 def get_sast_ci_config(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
     profile = effective_sast_profile(sast_module(db, project_id).config)
+    gate = profile["quality_gate"] if isinstance(profile.get("quality_gate"), dict) else {}
     return {
         "profile": profile,
         "environment": {
             "SAST_OFFLINE_ONLY": "true",
             "SAST_SEMGREP_IMAGE": DEFAULT_SEMGREP_IMAGE,
         },
-        "command": "python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif",
+        "command": f"python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on {gate.get('threshold', 'high')}",
+        "quality_gate": gate,
         "workflow": ".github/workflows/sast-local.yml",
         "offline_assets": "D:\\project\\PYproject\\AI网安项目\\artifacts\\sast-offline",
     }
@@ -424,7 +531,7 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
             "scanned_files": len(local_output.scanned_files),
             "rule_pack_version": profile.get("rule_pack_version"),
             "custom_rule_count": len([item for item in custom_rules if isinstance(item, dict) and item.get("enabled", True)]),
-            "semantic_analysis": "Python AST plus bounded intraprocedural source/sink/sanitizer tracking; JS/TS conservative local data-flow",
+            "semantic_analysis": "Python AST with bounded intraprocedural and direct local interprocedural source/sink/sanitizer tracking; JS/TS conservative local data-flow",
             "scan_scope": "git-diff" if include_paths else "source-tree",
         }
     else:
@@ -574,15 +681,44 @@ def build_sast_scan_diff(target: ScanTaskRecord, previous: ScanTaskRecord | None
     }
 
 
-def sast_quality_gate(findings: list[FindingRecord]) -> dict[str, object]:
-    blocking = [item for item in findings if item.severity in {"critical", "high"}]
+def sast_quality_gate(
+    findings: list[FindingRecord], profile: dict[str, object] | None = None, branch: str = "",
+    target_scan: ScanTaskRecord | None = None, previous_scan: ScanTaskRecord | None = None, db: Session | None = None,
+) -> dict[str, object]:
+    gate = (profile or {}).get("quality_gate") if isinstance((profile or {}).get("quality_gate"), dict) else {}
+    threshold = str(gate.get("threshold") or "high")
+    enabled = bool(gate.get("enabled", True))
+    patterns = gate.get("branch_patterns") if isinstance(gate.get("branch_patterns"), list) else ["*"]
+    applies_to_branch = any(fnmatchcase(branch or "default", str(pattern)) for pattern in patterns)
+    ranks = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "none": 99}
+    excluded = {str(item) for item in gate.get("excluded_rule_ids", [])} if isinstance(gate.get("excluded_rule_ids"), list) else set()
+    blocking = [item for item in findings if item.rule_id not in excluded and ranks.get(item.severity, 99) <= ranks.get(threshold, 1)]
+    new_only = bool(gate.get("block_new_only", False))
+    if new_only and target_scan is not None and db is not None:
+        previous_keys = {snapshot_key(item) for item in snapshot_for_scan(previous_scan, db)} if previous_scan else set()
+        blocking = [item for item in blocking if finding_record_key(item) not in previous_keys]
+    maximum = int(gate.get("max_blocking_findings") or 0)
+    over_maximum = maximum > 0 and len(blocking) > maximum
+    threshold_breached = over_maximum if maximum > 0 else bool(blocking)
+    blocked = enabled and applies_to_branch and threshold != "none" and threshold_breached
     return {
-        "status": "block" if blocking else "pass",
-        "threshold": "high",
+        "status": "block" if blocked else "pass",
+        "enabled": enabled,
+        "threshold": threshold,
+        "branch": branch or "default",
+        "branch_patterns": patterns,
+        "block_new_only": new_only,
+        "excluded_rule_ids": sorted(excluded),
+        "max_blocking_findings": maximum,
         "blocking_finding_count": len(blocking),
         "blocking_rule_ids": sorted({item.rule_id for item in blocking}),
-        "note": "The API reports a deterministic SAST quality gate. Repository CI must enforce the returned SARIF/exit code independently.",
+        "note": "The API reports a deterministic, branch-aware SAST quality gate. Repository CI must enforce the returned SARIF/exit code independently.",
     }
+
+
+def finding_record_key(record: FindingRecord) -> tuple[str, str, int, str]:
+    """Return the same stable value used by persisted finding snapshots."""
+    return (record.rule_id, str(record.file_path or ""), int(record.line_start or 0), record.evidence or "")
 
 
 def validation_suggestions(findings: list[FindingRecord]) -> list[dict[str, object]]:

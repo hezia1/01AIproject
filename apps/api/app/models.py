@@ -426,6 +426,7 @@ class SastScanRequest(BaseModel):
     clear_previous: bool = True
     semgrep_config: str = "p/default"
     include_local_rules: bool = True
+    branch: str | None = Field(default=None, max_length=200)
 
 
 class SastScanResult(BaseModel):

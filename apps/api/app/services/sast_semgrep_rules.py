@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Iterable
 
@@ -54,7 +56,7 @@ def materialize_semgrep_rule_packs(rules: Iterable[dict[str, object]]) -> list[P
     target.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     for rule in rules:
-        if not rule.get("enabled", True):
+        if not rule.get("enabled", True) or rule.get("status", "published") != "published":
             continue
         content = str(rule.get("content") or "")
         result = validate_semgrep_yaml(content)
@@ -65,3 +67,38 @@ def materialize_semgrep_rule_packs(rules: Iterable[dict[str, object]]) -> list[P
             path.write_text(content, encoding="utf-8")
         paths.append(path)
     return paths
+
+
+def semgrep_rule_preflight(content: object) -> dict[str, object]:
+    """Run the installed local/preloaded Semgrep validator when available."""
+    structural = validate_semgrep_yaml(content)
+    target = _OFFLINE_ROOT / "runtime-rules"
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"preflight-{str(structural['sha256'])[:16]}.yml"
+    path.write_text(str(content).replace("\r\n", "\n").strip(), encoding="utf-8")
+    semgrep = shutil.which("semgrep")
+    docker = shutil.which("docker")
+    if semgrep:
+        command = [semgrep, "validate", "--config", str(path)]
+    elif docker:
+        # `docker run` pulls by default when the image is absent. Preflight must
+        # remain offline and must never fetch an image behind the user's back.
+        try:
+            image_check = subprocess.run([docker, "image", "inspect", DEFAULT_IMAGE_FOR_PREFLIGHT], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=12)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": str(exc)[:500]}
+        if image_check.returncode != 0:
+            return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": f"Preloaded Docker image {DEFAULT_IMAGE_FOR_PREFLIGHT} is unavailable; structural YAML validation completed only."}
+        command = [docker, "run", "--rm", "-v", f"{path.parent}:/rules:ro", DEFAULT_IMAGE_FOR_PREFLIGHT, "semgrep", "validate", "--config", f"/rules/{path.name}"]
+    else:
+        return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": "Semgrep CLI or Docker is unavailable; structural YAML validation completed only."}
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": str(exc)[:500]}
+    if completed.returncode != 0:
+        raise ValueError((completed.stderr or completed.stdout or "Semgrep validation failed").strip()[:1000])
+    return {**structural, "engine_checked": True, "engine_status": "passed", "detail": (completed.stderr or completed.stdout or "Semgrep validation passed").strip()[:500]}
+
+
+DEFAULT_IMAGE_FOR_PREFLIGHT = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.95.0")

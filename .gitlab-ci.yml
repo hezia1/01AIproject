@@ -1,0 +1,22 @@
+stages:
+  - security
+
+sast_local:
+  stage: security
+  image: python:3.12-slim
+  variables:
+    SAST_FAIL_ON: "high"
+  before_script:
+    - pip install -r apps/api/requirements.txt
+    - git fetch --unshallow || true
+  script:
+    - >-
+      python scripts/sast_ci.py --source . --offline
+      --json sast-result.json --sarif sast-result.sarif
+      --fail-on "$SAST_FAIL_ON"
+  artifacts:
+    when: always
+    paths:
+      - sast-result.json
+      - sast-result.sarif
+    expire_in: 30 days

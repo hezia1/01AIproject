@@ -24,6 +24,14 @@ DEFAULT_SAST_PROFILE: dict[str, object] = {
     "git_baseline_ref": "",
     "scan_git_history_secrets": True,
     "changed_files_only": False,
+    "quality_gate": {
+        "enabled": True,
+        "threshold": "high",
+        "block_new_only": False,
+        "max_blocking_findings": 0,
+        "branch_patterns": ["*"],
+        "excluded_rule_ids": [],
+    },
 }
 
 
@@ -46,6 +54,7 @@ def effective_sast_profile(config: dict[str, object] | None) -> dict[str, object
     profile["git_baseline_ref"] = validate_git_baseline_ref(profile.get("git_baseline_ref"))
     profile["scan_git_history_secrets"] = bool(profile.get("scan_git_history_secrets"))
     profile["changed_files_only"] = bool(profile.get("changed_files_only"))
+    profile["quality_gate"] = normalize_quality_gate(profile.get("quality_gate"))
     return profile
 
 
@@ -60,6 +69,8 @@ def update_sast_profile(config: dict[str, object] | None, payload: dict[str, obj
         profile["semgrep_config"] = validate_semgrep_config(payload["semgrep_config"])
     if "git_baseline_ref" in payload:
         profile["git_baseline_ref"] = validate_git_baseline_ref(payload["git_baseline_ref"])
+    if "quality_gate" in payload:
+        profile["quality_gate"] = normalize_quality_gate(payload["quality_gate"])
     if not profile["semgrep_enabled"] and not profile["include_local_rules"]:
         raise ValueError("At least one SAST engine must be enabled")
     return profile
@@ -247,6 +258,9 @@ def normalize_semgrep_rule(value: dict[str, object], require_name: bool) -> dict
         version = max(1, int(value.get("version") or 1))
     except (TypeError, ValueError):
         version = 1
+    status = str(value.get("status") or "published").lower()
+    if status not in {"draft", "published", "archived"}:
+        raise ValueError("Semgrep YAML rule pack status must be draft, published, or archived")
     return {
         "id": string_or_none(value.get("id")) or str(uuid4()),
         "name": name,
@@ -254,6 +268,8 @@ def normalize_semgrep_rule(value: dict[str, object], require_name: bool) -> dict
         "rule_ids": validation["rule_ids"],
         "sha256": validation["sha256"],
         "enabled": bool(value.get("enabled", True)),
+        "status": status,
+        "approved_by": string_or_none(value.get("approved_by")),
         "version": version,
         "created_at": string_or_none(value.get("created_at")) or utc_now(),
     }
@@ -352,6 +368,30 @@ def validate_git_baseline_ref(value: object) -> str:
     if len(ref) > 200 or not re.fullmatch(r"[A-Za-z0-9_./:@~^{}-]+", ref) or ".." in ref:
         raise ValueError("git_baseline_ref contains unsupported Git revision characters")
     return ref
+
+
+def normalize_quality_gate(value: object) -> dict[str, object]:
+    defaults = dict(DEFAULT_SAST_PROFILE["quality_gate"])
+    if not isinstance(value, dict):
+        return defaults
+    enabled = value.get("enabled", defaults["enabled"])
+    threshold = str(value.get("threshold", defaults["threshold"])).lower()
+    block_new_only = value.get("block_new_only", defaults["block_new_only"])
+    try:
+        maximum = max(0, min(10_000, int(value.get("max_blocking_findings", defaults["max_blocking_findings"]))))
+    except (TypeError, ValueError):
+        maximum = 0
+    patterns = value.get("branch_patterns", defaults["branch_patterns"])
+    excluded = value.get("excluded_rule_ids", defaults["excluded_rule_ids"])
+    if not isinstance(enabled, bool) or not isinstance(block_new_only, bool):
+        raise ValueError("quality_gate enabled and block_new_only must be booleans")
+    if threshold not in {"critical", "high", "medium", "low", "info", "none"}:
+        raise ValueError("quality_gate threshold must be critical, high, medium, low, info, or none")
+    if not isinstance(patterns, list) or not patterns or any(not isinstance(item, str) or not item or len(item) > 200 for item in patterns):
+        raise ValueError("quality_gate branch_patterns must be a non-empty array of globs")
+    if not isinstance(excluded, list) or any(not isinstance(item, str) or len(item) > 300 for item in excluded):
+        raise ValueError("quality_gate excluded_rule_ids must be an array of rule IDs")
+    return {"enabled": enabled, "threshold": threshold, "block_new_only": block_new_only, "max_blocking_findings": maximum, "branch_patterns": sorted(set(patterns)), "excluded_rule_ids": sorted(set(excluded))}
 
 
 def suppression_matches(item: dict[str, object], finding: ParsedFinding) -> bool:

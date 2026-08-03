@@ -1,0 +1,28 @@
+trigger: none
+pr:
+  branches:
+    include: [ main ]
+
+pool:
+  vmImage: windows-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+  - powershell: |
+      python -m pip install -r apps/api/requirements.txt
+      python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on high
+    displayName: Run local SAST quality gate
+  - task: PublishBuildArtifacts@1
+    condition: always()
+    inputs:
+      PathtoPublish: 'sast-result.json'
+      ArtifactName: 'sast-evidence-json'
+  - task: PublishBuildArtifacts@1
+    condition: always()
+    inputs:
+      PathtoPublish: 'sast-result.sarif'
+      ArtifactName: 'sast-evidence-sarif'

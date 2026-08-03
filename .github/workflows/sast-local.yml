@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -38,7 +40,11 @@ jobs:
         shell: bash
         run: |
           set +e
-          python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on "${{ inputs.fail_on }}"
+          args=(--source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on "${{ inputs.fail_on || 'high' }}")
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            args+=(--baseline "${{ github.event.pull_request.base.sha }}" --changed-files-only)
+          fi
+          python scripts/sast_ci.py "${args[@]}"
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0

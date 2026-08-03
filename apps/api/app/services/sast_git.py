@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import math
 from pathlib import Path
 
 from app.models import Severity
@@ -10,6 +11,7 @@ from app.services.sast_scanner import ParsedFinding
 
 
 SECRET_DIFF_PATTERN = r"(api[_-]?key|secret|token|password|passwd|aws_access_key_id)"
+HIGH_ENTROPY_VALUE = re.compile(r"(?i)(?:api[_-]?key|secret|token|password|passwd|private[_-]?key)\s*[:=]\s*['\"]?([A-Za-z0-9_+/=.-]{20,})")
 
 
 def collect_git_context(source_path: str, baseline_ref: str = "", include_history_secrets: bool = True) -> dict[str, object]:
@@ -26,10 +28,13 @@ def collect_git_context(source_path: str, baseline_ref: str = "", include_histor
         output = _git(repo, "diff", "--name-only", "--diff-filter=ACMR", f"{baseline}...HEAD") or ""
         changed_files = _safe_relative_paths(output.splitlines(), repo)
     history_secret_files: list[str] = []
+    history_secret_evidence: list[dict[str, str]] = []
     if include_history_secrets:
         # -G searches changed diff lines. We return paths only, never historical secret values.
         output = _git(repo, "log", "-i", "--all", "-G", SECRET_DIFF_PATTERN, "--format=", "--name-only", "--max-count=200") or ""
         history_secret_files = _safe_relative_paths(output.splitlines(), repo)
+        history_secret_evidence = _history_entropy_evidence(repo)
+        history_secret_files = sorted({*history_secret_files, *(item["file_path"] for item in history_secret_evidence)})
     return {
         "available": True,
         "repository": str(repo),
@@ -39,6 +44,7 @@ def collect_git_context(source_path: str, baseline_ref: str = "", include_histor
         "changed_files": changed_files,
         "history_secret_files": history_secret_files,
         "history_secret_count": len(history_secret_files),
+        "history_secret_evidence": history_secret_evidence,
         "history_secret_note": "Only file paths are retained; historical credential values are never stored in scan metadata.",
     }
 
@@ -82,3 +88,31 @@ def _safe_relative_paths(values: list[str], root: Path) -> list[str]:
             continue
         paths.add(candidate)
     return sorted(paths)
+
+
+def _history_entropy_evidence(root: Path) -> list[dict[str, str]]:
+    """Detect likely high-entropy credential assignments without retaining values."""
+    output = _git(root, "log", "--all", "-p", "--max-count=200") or ""
+    current_path = ""
+    evidence: list[dict[str, str]] = []
+    for line in output.splitlines():
+        if line.startswith("+++ b/"):
+            current_path = line[6:].strip()
+            continue
+        if not current_path or not line.startswith("+") or line.startswith("+++"):
+            continue
+        match = HIGH_ENTROPY_VALUE.search(line[1:])
+        if match and _shannon_entropy(match.group(1)) >= 3.5:
+            item = {"file_path": current_path, "signal": "high_entropy_credential_assignment"}
+            if item not in evidence:
+                evidence.append(item)
+        if len(evidence) >= 200:
+            break
+    return evidence
+
+
+def _shannon_entropy(value: str) -> float:
+    length = len(value)
+    if not length:
+        return 0.0
+    return -sum((count / length) * math.log2(count / length) for count in {char: value.count(char) for char in set(value)}.values())

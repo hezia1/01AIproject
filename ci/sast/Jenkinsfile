@@ -1,0 +1,13 @@
+pipeline {
+  agent any
+  environment { SAST_FAIL_ON = "high" }
+  stages {
+    stage('SAST') {
+      steps {
+        bat 'python -m pip install -r apps\\api\\requirements.txt'
+        bat 'python scripts\\sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on %SAST_FAIL_ON%'
+      }
+    }
+  }
+  post { always { archiveArtifacts artifacts: 'sast-result.json,sast-result.sarif', fingerprint: true } }
+}

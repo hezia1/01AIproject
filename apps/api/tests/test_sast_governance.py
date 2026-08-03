@@ -7,6 +7,7 @@ from app.services.sast_governance import add_custom_rule, add_suppression, apply
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import scan_source_tree
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE
+from app.routers.sast import sast_quality_gate
 
 
 def test_sast_profile_keeps_a_valid_engine_enabled():
@@ -60,6 +61,27 @@ def test_default_profile_is_safe_and_normalized():
 
     assert profile["include_local_rules"] is True
     assert profile["suppressions"] == []
+
+
+def test_quality_gate_profile_supports_branch_and_new_finding_policies():
+    profile = update_sast_profile({}, {"quality_gate": {"enabled": True, "threshold": "medium", "block_new_only": True, "max_blocking_findings": 2, "branch_patterns": ["main", "release/*"], "excluded_rule_ids": ["SAST.TEST.EXCLUDED"]}})
+
+    assert profile["quality_gate"]["threshold"] == "medium"
+    assert profile["quality_gate"]["branch_patterns"] == ["main", "release/*"]
+    assert profile["quality_gate"]["block_new_only"] is True
+
+
+def test_quality_gate_honors_branch_and_maximum_blocking_findings():
+    finding = FindingRecord(rule_id="SAST.TEST.RULE", severity="high", file_path="app.py", line_start=1)
+    profile = update_sast_profile({}, {"quality_gate": {"enabled": True, "threshold": "high", "max_blocking_findings": 2, "branch_patterns": ["main"]}})
+
+    outside = sast_quality_gate([finding], profile, "feature/demo")
+    within_allowance = sast_quality_gate([finding, finding], profile, "main")
+    over_allowance = sast_quality_gate([finding, finding, finding], profile, "main")
+
+    assert outside["status"] == "pass"
+    assert within_allowance["status"] == "pass"
+    assert over_allowance["status"] == "block"
 
 
 def test_custom_rule_is_validated_and_runs_in_local_scanner(tmp_path):
