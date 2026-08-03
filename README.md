@@ -1,49 +1,46 @@
-# AI 网络安全检测、验证与治理平台
+# AI 网安项目
 
-本项目用于逐步实现 `01.pptx` 中描述的平台：围绕一个已经存在的项目，读取本地源代码、运行地址和运行入口，完成 SCA、SAST、AGENT、DAST、SANDBOX、ASPM 六个模块的可选接入、检测、验证和治理汇总。
+本项目实现 `01.pptx` 所描述的本地安全治理平台：围绕一个已存在的项目，接入本地源码、运行地址与运行入口，提供 SCA、SAST、AGENT、DAST、SANDBOX 和 ASPM 六个模块的扫描、验证、证据关联与治理汇总。
 
-当前阶段目标是先形成一个本地可跑通的完整平台，再逐步补齐每个模块的深度能力。
+本文档反映 **2026-08-03** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
 ## 当前架构
 
-- `apps/api/`：FastAPI 后端，提供项目、模块、扫描、证据、治理汇总 API。
-- `apps/web/`：React + Vite 前端控制台。
+- `apps/api/`：FastAPI 后端，提供项目、模块、扫描、Finding、证据和治理 API。
+- `apps/web/`：React + Vite 前端控制台；功能目前集中在 `src/main.tsx`。
 - `infra/`：本地 PostgreSQL / Redis Docker Compose 配置。
-- `docs/`：需求、架构和模块设计文档。
-- `.agents/`：后续 Agent 编排相关说明或配置。
+- `.github/workflows/`：SCA 本地 CI 与部署 API 门禁示例。
+- `scripts/sca_ci.py`：无需启动平台 API 的本地 SCA CLI，支持 JSON、SARIF 与门禁退出码。
+
+运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。路由层处理接口和参数，服务层处理扫描、证据关联、图谱、复测、门禁和导出。
 
 ## 本地启动
 
 ### 1. 启动基础设施
 
-先打开 Docker Desktop，确认 Docker Engine 处于 Running 状态。
+先启动 Docker Desktop，再执行：
 
 ```powershell
 cd D:\project\PYproject\AI网安项目
-docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra\docker-compose.yml up -d
 ```
 
-### 2. 执行数据库迁移
+### 2. 安装后端依赖并迁移数据库
 
 ```powershell
 cd D:\project\PYproject\AI网安项目
+.\.venv\Scripts\python.exe -m pip install -r apps\api\requirements.txt
 .\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
 ```
 
 ### 3. 启动后端
 
 ```powershell
-cd D:\project\PYproject\AI网安项目
-.\.venv\Scripts\python.exe -m pip install -r apps\api\requirements.txt
-cd apps\api
+cd D:\project\PYproject\AI网安项目\apps\api
 ..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-后端健康检查：
-
-```text
-http://localhost:8000/api/health
-```
+健康检查：`GET http://127.0.0.1:8000/api/health`。
 
 ### 4. 启动前端
 
@@ -53,417 +50,136 @@ npm install
 npm run dev
 ```
 
-前端访问：
-
-```text
-http://localhost:5173
-```
-
 ## 平台级能力
 
-### 已实现
+### 已实现并在前端可见
 
-- 项目创建、删除、查询、切换。
-- 项目资产配置：本地源码路径、运行地址、API 地址、沙箱命令、沙箱镜像。
-- 六个安全模块可单独启用或停用。
-- 项目资产探测：根据源码目录识别 SCA、SAST、AGENT 可执行任务。
-- “安全检测”合并模块接入和任务执行：用户自主选择 SCA、SAST、AGENT、DAST、SANDBOX，页面提示模块关系与缺失配置。
-- 一键检测按 `SCA -> SAST -> AGENT -> DAST -> SANDBOX` 顺序执行已接入模块，并逐模块展示等待、执行、完成、失败或跳过状态。
-- PostgreSQL 持久化：项目、模块配置、扫描任务、组件、Finding、DAST 记录、SANDBOX 证据。
-- Alembic 迁移基线与跨模块证据关联迁移第一版。
-- 前端主导航为项目管理、项目资产、安全检测、治理总览和安全知识中枢。
-- 治理总览支持在综合总览和已接入模块之间切换；未接入模块不会显示，证据图谱默认收起为高级信息。
-- 前端采用“默认简洁、详情按需展开”的展示方式：默认页只显示当前风险、下一步动作和每页 10 条结果；所有多条结果（含高级分析、攻击链、证据关系、扫描历史、图谱节点和单条风险的验证/取证记录）统一每页 10 条并提供翻页；单条风险可展开完整 DAST 请求/响应、SANDBOX 隔离策略与行为账本；综合总览可展开完整整改闭环、全部攻击链和项目级证据图谱。
-- SCA 模块的扫描历史、批次差异、依赖图谱、升级杠杆、工具链预检以及 CycloneDX / SPDX / SCA 报告导出均保留在“高级供应链分析”折叠区，避免占用日常治理视图。
-- SAST 模块的规则化 Agent 复核入口、SAST / AGENT 的风险分类与严重等级统计，均保留在各自的“高级分析与复核信息”折叠区；SANDBOX 的安全命令模板保留在运行时取证工作台。
-- DAST 现提供随上游风险变化的验证策略：策略会明确“本次会检查什么、只会做什么、不能证明什么”，并将策略、范围和能力边界随验证记录持久化；SANDBOX 会将取证目的、隔离策略和能力边界随运行证据持久化。
+- 项目创建、编辑、删除、切换，以及项目资产配置（本地源码路径、运行地址、API 地址、沙箱命令和镜像）。
+- 六个安全模块可逐项目启用、停用；资产探测会提示可执行的 SCA、SAST 与 AGENT 任务。
+- “安全检测”按 `SCA → SAST → AGENT → DAST → SANDBOX` 执行已接入模块，并显示等待、运行、完成、失败或跳过状态。
+- PostgreSQL 持久化项目、模块配置、扫描任务、组件、Finding、DAST 验证和 SANDBOX 证据；迁移由 Alembic 管理。
+- 治理总览、项目资产视图和安全知识中枢均在主导航中可访问；高级分析折叠收纳，避免淹没日常治理信息。
+- 项目安全报告 API 和前端预览支持 JSON、HTML 导出；SCA 另有独立 HTML、CycloneDX 和 SPDX 导出。
 
-### 还缺少
+### 平台仍缺少的共性能力
 
-- 用户登录、权限、租户隔离。
-- 扫描任务队列和后台 Worker。
-- 报告导出。
-- CI/CD 接入。
-- 完整审计日志。
+- 用户登录、真实权限校验、组织/租户隔离与防篡改审计。
+- 扫描任务队列、后台 Worker、定时计划与失败重试。
+- 跨模块的正式合规报告、签名与报表模板体系。
+- 覆盖全部模块的 CI/CD API、SDK 和外部系统集成；目前只有 SCA 已提供本地 CLI 和远程 API 门禁示例。
 
-### 前端展示与能力边界
+## 模块完成度与边界
 
-- “代码中存在”不等同于“前端已开放”。本仓库已将现有的 SCA 高级分析、SAST Agent 复核、SANDBOX 模板、ASPM 完整整改闭环和证据图谱接回当前治理页；不再依赖不可访问的旧导航页面。
-- DAST 当前是**关联风险后的轻量 Web 基础验证**：会请求目标 URL，并检查 HTTP/HTTPS、响应状态、响应耗时、Server Header 和基础安全响应头。新的基础检查风险会标为“需要进一步确认”，不会再被标记为“确认可利用”；它不能替代 SQL 注入、鉴权绕过等业务漏洞的真实利用证明。
-- SANDBOX 当前是 Docker 受控执行：禁网、只读挂载、CPU/内存/PID 限制、危险命令拦截、输出脱敏及执行摘要均已实现；“文件、网络、进程、工具调用”当前主要是隔离策略与执行摘要，尚不是 eBPF/Sysmon 级真实行为探针。
-- 证据链只由用户明确选择的风险/DAST 记录，或高置信度推荐经执行确认后写入。独立 URL 检查和独立命令运行会明确标为不计入漏洞证据链。
+| 模块 | 已实现（后端 + 前端） | 当前未完成的主要能力 |
+| --- | --- | --- |
+| SCA | 多生态依赖解析、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、可配置门禁、本地 CI CLI；所有治理和高级分析入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树；语义图推理与全平台 CI 集成。 |
+| SAST | 本地规则扫描、Semgrep 可选增强、规则化 Agent 复核、Finding 统一治理；扫描、分类统计和复核入口已在 SAST 页面开放。 | 自定义规则管理 UI、稳定的 Semgrep 配置分发、AST/数据流/污点分析、真实外部 AI 复核和补丁生成。 |
+| AGENT | Agent/MCP/插件配置与说明文件静态扫描，识别危险命令、敏感路径、网络能力、密钥风险；结果和统计已在 AGENT 页面开放。 | 不运行真实 Agent、不连接 MCP Server、不执行工具调用；缺少权限矩阵、行为回放与信任评分。 |
+| DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
+| SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
+| ASPM / 治理 | 汇总模块状态、组件、Finding、DAST、SANDBOX、扫描任务；证据图谱、攻击链、整改字段、复测对比、项目报告和知识中枢均已可见。 | 项目级 CVSS/EPSS/资产暴露面/业务权重风险模型、趋势与 SLA、工单与审批、图数据库/语义推理、全局审计与后台任务。 |
 
-## 模块完成度
+## SCA 供应链风险分析
 
-### 1. SCA 供应链风险分析
+### 已实现且已在前端开放
 
-已实现：
+- 解析 npm、PyPI、Maven、Go、Ruby/Bundler、Composer、Cargo、NuGet 的常见清单和锁文件；Python 项目存在 `.venv`/`venv` 时，使用 `pip inspect` 读取实际安装包及其依赖关系，不执行项目业务代码。
+- 组件清单支持生态、依赖类型、风险状态、严重等级和许可证策略筛选，以及直接/传递依赖和影响链统计。
+- 依赖图优先使用 npm `npm ls`、Python `pip inspect`、Maven `mvn dependency:tree`、Go `go mod graph`；无法使用工具或缓存时明确标注回退到锁文件/清单推断。
+- 组件证据 SHA-256、扫描输入指纹、依赖来源、策略和情报结论都随扫描批次快照保存。哈希只覆盖本地实际可读取的证据文件，不伪造第三方二进制哈希。
+- 本地漏洞规则、许可证策略、项目/平台覆盖和变更审计；高危/严重、版本风险和许可证风险会转为统一 Finding，进入 ASPM 整改闭环。
+- 本地 OSV 镜像、离线 CVSS/EPSS/KEV 情报导入。组件快照保存综合风险分、KEV 标识、修复版本、情报来源和降级状态。
+- VEX 支持“未受影响、已修复、受影响、调查中”，保留原始漏洞证据；例外支持申请、批准、拒绝、撤销、失效日期、角色字段及审批历史。当前角色仅用于流程和审计，尚不等同真实 IAM。
+- 可配置门禁可按严重等级、许可证策略、综合风险分、KEV、扫描新鲜度和关键漏洞情报完整性阻断；返回机器可读的 `pass`/`block` 和 CI 退出码。
+- SCA 高级区已提供扫描历史、批次差异、依赖图、升级杠杆、工具链预检、策略、例外、VEX、情报、门禁、证据、SBOM 和 HTML 报告入口。
+- `scripts/sca_ci.py` 支持独立本地扫描和 JSON/SARIF 输出；`.github/workflows/sca-local.yml` 可直接消费它，`.github/workflows/sca-gate.yml` 用于调用部署后的 API 门禁。
 
-- 解析依赖文件并生成组件清单。
-- 支持 npm、PyPI、Maven、Go、Ruby/Bundler、Composer、Cargo、NuGet 的常见清单与锁文件。
-- 支持 `package-lock.json`、`yarn.lock`、`pnpm-lock.yaml`、`poetry.lock`、`Pipfile.lock`、`Gemfile.lock`、`composer.lock`、`Cargo.lock`、`packages.lock.json` 等锁文件。
-- 组件去重、依赖类型、直接/传递依赖标记、来源文件、包管理器字段。
-- 接入 OSV 漏洞库查询。
-- 本地漏洞规则库第一版：独立 JSON 规则文件，覆盖 npm、PyPI、Maven、Go 示例规则。
-- 本地规则支持简单版本范围：`<1.2.3`、`<=1.2.3`、`>=1.0.0,<2.0.0`。
-- 许可证策略第一版：独立 JSON 策略文件，归一化为 `allowed`、`review_required`、`restricted`、`unknown`。
-- 许可证义务说明与例外审批建议第一版：输出保留声明、NOTICE、源码披露、授权证明、法务/安全/业务审批等建议。
-- CycloneDX JSON SBOM 导出第一版。
-- CycloneDX `dependencies` 关系导出第一版：项目到直接依赖、直接依赖到同生态传递依赖。
-- SPDX 2.3 JSON SBOM 导出第一版，包含项目包、组件包、PURL 外部引用和 `DEPENDS_ON` 关系。
-- SBOM 元数据增强第一版：项目负责人、仓库、源码路径、运行地址、组件统计、依赖类型、风险状态、OSV 状态和哈希采集状态。
-- 依赖边质量标注第一版：区分 `manifest_direct` 与 `lockfile_inferred`，并在 SBOM 和前端概览展示依赖边数量。
-- 依赖图谱与升级杠杆第一版：新增图谱 API、SVG 可视化、风险节点标注和直接依赖升级杠杆分析。
-- npm 原生依赖树第一版：尝试运行 `npm ls --json --all` 采集真实父子依赖边，图谱优先使用 `native_tree` 边；失败时自动回退到现有 manifest / lockfile 推断。
-- Maven、Go 原生依赖树来源状态第一版：扫描记录会明确保存已采集、工具不可用或回退推断的状态，避免将推断边表述为原生工具结果。
-- 组件证据哈希第一版：对源码目录中可访问的 Python `.dist-info/RECORD`、npm `package.json`、Maven 本地 JAR/POM、Go `vendor` 模块描述文件计算 SHA-256，并在扫描证据中保留来源与缺失原因。
-- 本地 OSV 镜像：可在前端导入 JSON 漏洞快照；扫描优先命中该镜像，再尝试在线 OSV 与本地规则降级，镜像状态会写入扫描证据。
-- 策略治理第一版：支持平台级和项目级漏洞/许可证策略覆盖、启停、自定义策略，以及持久化变更审计。
-- SCA 门禁与证据快照：提供扫描级门禁结果（`pass` / `block`、CI 退出码）、策略快照、哈希证据与依赖来源；附带 GitHub Actions 消费模板。
-- 离线 CVSS / EPSS / KEV 情报：前端可导入结构化情报，组件快照保留综合风险分、在野利用标识、修复版本和情报来源。
-- VEX：支持对特定组件漏洞保留“未受影响、已修复、受影响、调查中”结论；不删除原始漏洞证据。
-- 例外审批状态机：持久化申请角色、审批角色、状态流转和审批历史；当前未接入独立身份认证时，角色仅用于流程校验与审计。
-- 可配置门禁：按严重等级、许可证策略、综合风险分、KEV、扫描新鲜度和关键漏洞情报完整性阻断。
-- 本地 CI CLI：`python scripts/sca_ci.py --source . --offline --json sca-result.json --sarif sca-result.sarif --fail-on-block`，输出扫描输入指纹、JSON 和 SARIF。
-- 输出风险状态、漏洞编号、严重等级、风险摘要、修复建议、风险来源、OSV 查询状态。
-- 前端组件风险清单分页，每页 10 条，并展示依赖类型分布、许可证策略分布、CycloneDX 和 SPDX 导出按钮。
-- 前端组件清单支持按生态、依赖类型、风险状态、严重等级和许可证策略筛选。
-- 前端展示直接 / 传递依赖、风险传递依赖和影响链数量概览。
-- Docker 镜像方式接入 Syft / Grype 第一版：Syft 生成 CycloneDX SBOM，Grype 优先使用 Syft SBOM 输入执行漏洞扫描，Syft 失败时才回退目录扫描。
-- 增强扫描状态持久化：记录 Syft 组件数、Grype 漏洞数、Grype 输入来源和错误摘要。
-- SCA 风险自动转为统一 Finding，并进入 ASPM 治理闭环。
-
-主要 API：
+### 常用 SCA API
 
 ```text
 POST /api/sca/scan
 GET  /api/sca/projects/{project_id}/components
-GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
-GET  /api/sca/projects/{project_id}/dependency-graph
 GET  /api/sca/projects/{project_id}/scan-history
 GET  /api/sca/projects/{project_id}/scan-diff
+GET  /api/sca/projects/{project_id}/dependency-graph
+GET  /api/sca/projects/{project_id}/sbom?format=cyclonedx|spdx
 GET  /api/sca/projects/{project_id}/report
+GET  /api/sca/projects/{project_id}/report.html
+GET  /api/sca/projects/{project_id}/gate
+GET  /api/sca/projects/{project_id}/evidence
+GET  /api/sca/projects/{project_id}/vex
+POST /api/sca/projects/{project_id}/vex
+GET  /api/sca/projects/{project_id}/exceptions
+POST /api/sca/projects/{project_id}/exceptions
+GET  /api/sca/intelligence/status
+POST /api/sca/intelligence/import
+GET  /api/sca/osv-mirror/status
+POST /api/sca/osv-mirror/import
 GET  /api/sca/tool-health
 ```
 
-可选增强：
+### 本地 SCA CI
 
-- SCA 扫描支持通过 Docker 镜像 `anchore/syft:latest` 和 `anchore/grype:latest` 做专业工具增强。
-- SCA 页面提供工具链预检，检查 Docker CLI、Docker Engine、Syft 镜像、Grype 镜像和 Grype 漏洞库状态。
-- 前端可勾选“Syft/Grype 增强”后执行扫描。
-- 需要本机 Docker 可用，并提前拉取镜像或允许首次扫描时自动拉取：
-  - `docker pull anchore/syft:latest`
-  - `docker pull anchore/grype:latest`
-- 如果 Docker 或镜像不可用，基础 SCA 扫描仍可运行。
-- 增强扫描状态会写入扫描历史和 SCA 报告，包含 Syft 组件数、Grype 漏洞数、Grype 输入来源和错误信息。
-- SCA 高危/严重漏洞、漏洞编号命中、许可证风险和版本缺失风险会自动转为统一 Finding，进入 ASPM 治理闭环。
-
-当前边界：
-
-- 哈希仅覆盖扫描源码目录中实际可访问的组件证据文件，不会伪造任意第三方包二进制的哈希。
-- Python 在项目 `.venv`/`venv` 存在时通过 `pip inspect` 采集实际安装依赖；npm/Maven/Go 的原生依赖树取决于本机工具与项目缓存，失败时会明确标记为回退推断。Ruby、Composer、Cargo、NuGet 当前以清单/锁文件为准。
-- 传递影响当前基于已解析依赖图与升级路径，不包含跨模块的语义图推理或自动攻击链推断。
-- 策略覆盖、例外审批、VEX 和审计已持久化；由于当前项目没有身份与组织租户体系，声明的角色不等同于防篡改的 IAM 权限隔离。
-- OSV、CVSS、EPSS、KEV 均支持本地导入与快照留痕；自动定时同步、签名校验和商业情报源需要由部署环境配置具体数据服务，平台不会声称这些数据实时或已验证。
-- `.github/workflows/sca-local.yml` 可在 CI 本地执行扫描并上传 SARIF/JSON；`.github/workflows/sca-gate.yml` 仍用于调用已部署 API 的扫描门禁。
-
-### 2. SAST 智能静态审计
-
-已实现：
-
-- 本地规则扫描：硬编码密钥、危险命令执行、动态代码执行、SQL 拼接、SSRF、路径穿越、弱加密、反序列化等。
-- Semgrep 接入：优先使用本机 `semgrep`，没有时尝试使用 Docker 镜像 `semgrep/semgrep:latest`。
-- 噪声过滤：跳过常见构建产物、依赖目录、压缩文件等。
-- SAST Finding 持久化。
-- 规则化 agent 编排第一版：`scanner_agent`、`review_agent`、`evidence_agent`、`fix_agent`。
-- 复核结果包含分类、语言、误报可能性、证据摘要、修复策略、优先级。
-- 前端 SAST 审计页展示风险列表、分类统计和严重等级统计。
-
-主要 API：
-
-```text
-POST /api/sast/scan
-GET  /api/sast/projects/{project_id}/findings
-POST /api/sast/projects/{project_id}/agent-review
+```powershell
+cd D:\project\PYproject\AI网安项目
+.\.venv\Scripts\python.exe scripts\sca_ci.py --source . --offline --json sca-result.json --sarif sca-result.sarif --fail-on-block
 ```
 
-还缺少：
+`--offline` 禁止在线情报访问；`--fail-on-block` 在门禁阻断时返回非零退出码。Git 忽略的 `artifacts/sca-offline/` 可放置 OSV、Grype、Trivy 的离线资源；数据导入、更新频率、签名校验与可信来源由部署环境负责。
 
-- SAST 的 `Failed to fetch` 网络问题尚未继续处理，已按用户要求暂时跳过。
-- 更稳定的 Semgrep 镜像拉取和配置管理。
-- 自定义规则库管理页面。
-- AST / 数据流 / 污点分析。
-- 外部 AI 复核接入。
-- 修复补丁生成。
-- 与 DAST、SANDBOX 的自动联动验证。
+Syft/Grype/Trivy 是可选增强：需要 Docker、镜像和相应离线/在线漏洞库。工具不可用时基础解析扫描仍会完成，并在结果中显式标出降级。
 
-### 3. AGENT 供应链安全
+## 其他模块的接口与实际边界
 
-已实现：
+- SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`。本地扫描是规则匹配；Agent 复核是规则化编排，不宣称调用外部大模型。
+- AGENT：`POST /api/agent/scan`、`GET /api/agent/projects/{project_id}/findings`。仅分析本地配置和文本，不执行 Agent/MCP/插件。
+- DAST：`POST /api/dast/probe`、`POST /api/dast/validations`、`GET /api/dast/projects/{project_id}/validations`。基础检查只验证 HTTP/HTTPS、状态、耗时、Server Header 和基础安全响应头；不能证明 SQL 注入、鉴权绕过等业务漏洞可利用。
+- SANDBOX：`POST /api/sandbox/run`、`POST /api/sandbox/evidence`、`GET /api/sandbox/projects/{project_id}/evidence`。默认使用受限 Docker 容器；执行摘要和隔离策略不等同系统级行为取证。
+- ASPM：`GET /api/aspm/projects/{project_id}/summary`、`GET /api/aspm/projects/{project_id}/evidence-graph`、`GET /api/aspm/projects/{project_id}/report`。证据图只基于显式关系和确认后的高置信度建议，不是图数据库或 AI 推理结论。
 
-- 扫描 Agent / MCP / 插件相关配置和说明文件。
-- 支持 `.md`、`.yaml`、`.yml`、`.json`、`.toml`、`AGENTS.md`、`CLAUDE.md`、`mcp.json`、`plugin.json`。
-- 识别环境变量/密钥读取、Shell 执行、文件写入/删除、外部网络请求、MCP 权限过宽、提示词覆盖安全策略等风险。
-- 增强 MCP 协议配置扫描。
-- 输出 Finding、风险分类、修复建议和信任影响。
-- 前端 AGENT 页面支持分页、分类统计和严重等级统计。
+## 前端可见性说明
 
-主要 API：
+- 当前控制台存在项目管理、项目资产、安全检测、治理总览和安全知识中枢导航。
+- SCA 高级治理、SAST Agent 复核、DAST 验证策略、SANDBOX 模板/证据和 ASPM 整改/图谱不再依赖旧的不可访问导航，均在当前项目工作区可打开。
+- 未配置必要资产时，前端会提示条件不足或显示降级状态，而不会把未执行的能力标为已完成。
 
-```text
-POST /api/agent/scan
-GET  /api/agent/projects/{project_id}/findings
+## 使用前的外部条件
+
+- 基础 SCA/SAST/AGENT 需要被测项目的本地源码路径。
+- Syft/Grype/Trivy 增强需要 Docker、镜像及相应漏洞库；Semgrep 增强需要本机 CLI 或 Docker 镜像。
+- DAST 需要可访问的目标 Web 地址；SANDBOX 需要 Docker Desktop 和可用镜像。
+- 当前没有登录、权限或租户隔离，不应直接暴露到公网。
+
+## 验证命令
+
+```powershell
+cd D:\project\PYproject\AI网安项目\apps\api
+..\..\.venv\Scripts\python.exe -m pytest tests -q
+
+cd D:\project\PYproject\AI网安项目\apps\web
+npm run build
 ```
 
-还缺少：
+## 下一步最推荐的模块
 
-- 不运行真实 Agent。
-- 不连接真实 MCP Server。
-- 不执行插件工具调用。
-- 不生成完整工具权限矩阵。
-- 不做 Agent 行为回放。
-- 不做外部 AI 驱动的信任评分。
+建议优先推进 **ASPM 项目级风险优先级与 SLA**：把 SCA 已有的 CVSS/EPSS/KEV 信号与资产暴露面、业务重要性和整改时限汇总为可解释的项目风险排序，再增加趋势与工单/审批接口。它能让现有六个模块的结果形成真正可执行的治理闭环；真实身份权限和后台任务应与该阶段一并规划。
 
-### 4. DAST 漏洞动态验证
-
-已实现：
-
-- 人工 DAST 验证记录。
-- 自动轻量探测第一版：对目标 URL 发起 GET 请求。
-- 检查 HTTP/HTTPS、状态码、响应时间、Server Header、基础安全响应头。
-- 根据轻量规则生成 `exploitable`、`uncertain`、`not_exploitable` 裁决。
-- 支持项目运行地址作为默认目标。
-- DAST 验证可显式关联 Finding 或 SCA 组件，并记录关联来源与可信度。
-- 自动关联建议第一版：根据 URL 路径、CVE/CWE、漏洞类型、风险来源和等级对 Finding 候选评分。
-- 推荐结果展示匹配理由和高/中/低置信度；80 分及以上可预选，但只有用户执行验证后才写入关系。
-- 治理总览的 DAST 视图调整为动态验证中心：先选择一条 SAST / SCA / AGENT 风险，再配置运行目标并执行验证。
-- DAST 历史记录显示关联风险名称、验证目标、三色裁决、请求响应、复现过程和修复提示；未关联记录明确标记为 Web 基础检查，不计入漏洞证据链。
-
-主要 API：
+## 当前代码结构
 
 ```text
-POST  /api/dast/validations
-POST  /api/dast/probe
-POST  /api/dast/link-suggestions
-GET   /api/dast/projects/{project_id}/strategies?finding_id={finding_id}
-GET   /api/dast/projects/{project_id}/validations
-PATCH /api/dast/validations/{validation_id}
+apps/
+  api/
+    app/
+      routers/       # 项目、模块、SCA、SAST、AGENT、DAST、SANDBOX、ASPM API
+      services/      # 扫描、情报、门禁、证据、图谱、报告和复测逻辑
+      migrations/    # Alembic 数据库迁移
+      rules/         # SCA 本地漏洞与许可证规则
+    tests/           # 后端测试
+  web/
+    src/main.tsx     # 当前页面、状态和 API 调用集中处
+infra/               # PostgreSQL / Redis Compose 配置
+scripts/sca_ci.py    # 本地 SCA CI CLI
+.github/workflows/   # SCA 本地 CI 与 API 门禁示例
+docs/                # 交接与专题文档
+outputs/             # 本地演示输入和验证材料
 ```
-
-还缺少：
-
-- 已按用户要求暂时跳过 DAST 深化，计划最后再做。
-- 不做爬虫。
-- 不生成攻击 payload。
-- 不做登录态管理。
-- 不接 OWASP ZAP / Nuclei。
-- 不做漏洞复现链自动生成。
-- 不做自动复测。
-
-### 5. SANDBOX 沙箱动态证据链
-
-已实现：
-
-- 人工证据记录。
-- Docker 隔离执行第一版。
-- 用户可填写沙箱命令。
-- 支持项目级默认沙箱命令和沙箱镜像。
-- 根据项目文件自动推荐命令模板和镜像。
-- Docker 执行策略包含：
-  - `--network none`
-  - `--read-only`
-  - 源码目录只读挂载到 `/workspace`
-  - `--cpus 1`
-  - `--memory 512m`
-  - `--pids-limit 128`
-  - `--security-opt no-new-privileges`
-  - `/tmp` 使用受限 tmpfs
-- 阻止明显危险命令，例如递归删除、格式化磁盘、关机等。
-- 采集退出码、标准输出、错误输出、耗时、超时状态和证据摘要。
-- 输出内容会对疑似密钥字段做简单脱敏。
-- 结构化记录执行事件：命令、镜像、工作目录、退出码、耗时、超时状态。
-- 结构化记录隔离策略：禁网、只读挂载、CPU / 内存 / PID 限制、tmpfs、`no-new-privileges`。
-- 结构化记录输出摘要：标准输出摘要、错误输出摘要、截断状态和脱敏状态。
-- 结构化记录运行时间线：准备、执行、完成或超时阶段。
-- 治理总览的 SANDBOX 视图调整为运行时取证中心：优先从已关联 DAST 验证进入，也可直接选择 Finding，再配置验证命令和隔离镜像。
-- SANDBOX 历史记录显示上游风险 / 验证、隔离执行、观察结论和文件、网络、进程、工具调用账本；独立命令运行不计入漏洞证据链。
-- SANDBOX 证据可显式关联 Finding、SCA 组件或 DAST 验证，并继承验证链上下文。
-- 自动关联建议第一版：结合运行命令、风险文件、已选 Finding/组件及 DAST 裁决推荐证据链上游。
-- 可利用或不确定的 DAST 验证优先进入候选；推荐仍需随执行动作确认，不会静默落库。
-
-主要 API：
-
-```text
-POST  /api/sandbox/evidence
-POST  /api/sandbox/run
-POST  /api/sandbox/link-suggestions
-GET   /api/sandbox/projects/{project_id}/templates
-GET   /api/sandbox/projects/{project_id}/evidence
-PATCH /api/sandbox/evidence/{evidence_id}
-```
-
-还缺少：
-
-- 不采集真实文件访问事件。
-- 不采集真实网络连接事件，因为当前默认禁网。
-- 不采集进程树详情。
-- 不接 eBPF、Sysmon 或审计探针。
-- 不支持交互式程序。
-- 不支持复杂多步骤场景编排。
-- 不做恶意样本级强隔离，只适合本地开发验证。
-
-### 6. ASPM 平台治理与交付
-
-已实现：
-
-- 聚合项目模块启用状态、组件数量、Finding 数量、DAST 验证数量、SANDBOX 证据数量、扫描任务数量。
-- 按来源、严重等级、状态、DAST 裁决做统计。
-- 风险分计算。
-- Finding 治理字段：状态、负责人、备注、到期时间。
-- 跨模块攻击链第二版：只基于显式 Finding / 组件 / DAST / SANDBOX 关联生成攻击链，不再按同项目首条记录机械拼接。
-- 证据图谱 API 第一版：输出项目、组件、Finding、DAST 验证和 SANDBOX 证据节点，以及 `reported_by`、`validated_by`、`observed_by` 关系。
-- 关系边记录关联依据、可信度和时间，攻击链支持证据溯源。
-- 前端治理总览顶部可选择“综合总览”或任一已接入模块，一次只展示一个范围。
-- 综合总览按照“多源发现 → 等待验证 → DAST 验证 → SANDBOX 取证 → 整改/复测 → 已闭环”展示风险生命周期。
-- 漏洞证据闭环优先展示已有动态证据的风险，以可读时间线呈现发现、验证、取证和治理状态，并可直接发起 DAST 或 SANDBOX。
-- 跨模块攻击链重新进入综合总览，只展示基于显式关系形成的可信链路。
-- SCA、SAST、AGENT、DAST、SANDBOX 各自使用统一的简洁结构：模块状态、四项核心指标、完整结果筛选、每页 10 条分页和建议动作。
-- 每个可独立运行的模块都提供执行入口；SCA、SAST、AGENT 支持保留扫描批次并按“仍然存在、已经消失、新增、发生变化”展示修复复测结果。
-- 自动关联建议由一键执行流程使用；只有高置信度候选进入关联。风险清单可按单个 Finding 展开其显式 DAST / SANDBOX 证据链，未验证风险会明确标记。
-- 安全知识中枢前端第一版：组织项目上下文、规则与 Skill、动态验证经验、运行时证据、修复和误报结论；尚未实现的规则自动生成、跨项目推荐和自主演进会明确标注能力边界。
-
-主要 API：
-
-```text
-GET   /api/aspm/projects/{project_id}/summary
-GET   /api/aspm/projects/{project_id}/evidence-graph
-GET   /api/findings/projects/{project_id}/retest-comparison?source=SAST
-PATCH /api/findings/{finding_id}/governance
-PATCH /api/findings/{finding_id}/status
-```
-
-还缺少：
-
-- 风险分规则还比较简单，尚未接 CVSS、EPSS、资产暴露面、业务重要性。
-- 自动关联目前是可解释的规则评分，不是语义模型或图谱推理；弱信号候选不会自动预选。
-- 证据图谱目前是显式关系图，不是真正的图数据库或 AI 图谱推理。
-- 没有 SLA 管理。
-- 没有工单系统接入。
-- 已有扫描复测对比，但还没有包含审批、工单和 SLA 的完整整改闭环流程。
-- 没有合规报告。
-- 没有管理层报表导出。
-- 旧数据没有显式关联字段，需要重新执行关联验证后才会生成可信攻击链。
-
-## 当前关键限制
-
-- 平台目前主要面向本地开发环境。
-- 需要被检测项目的本地源码路径。
-- DAST 只有目标项目有 Web 地址时才有意义。
-- SANDBOX 需要 Docker Desktop 正常运行，并且需要提前准备对应镜像。
-- Semgrep 依赖本机 CLI 或 Docker 镜像，网络和镜像状态会影响 SAST 结果。
-- 当前没有用户权限系统，请不要暴露到公网。
-
-## 下一步建议
-
-1. 增加 ASPM 风险趋势和 SLA 第一版，并把复测结果纳入项目级趋势。
-2. 回头处理 SAST 前端 `Failed to fetch` 问题。
-3. 为 SCA 增加 Python 原生完整依赖树。
-4. 增加扫描任务队列和后台 Worker。
-5. 补充审计日志。
-
-## 最近更新（2026-07-28）
-
-- 新增项目级安全报告接口：`GET /api/aspm/projects/{project_id}/report`。
-- 报告汇总项目、已接入模块、当前 Finding、SCA 组件、DAST 验证、SANDBOX 证据、证据图谱、可信攻击链和 SCA/SAST/AGENT 修复复测结果。
-- “安全知识中枢”新增报告预览。预览按模块分区，所有多条结果保持每页 10 条，可展开查看完整字段。
-- 支持从报告预览导出 JSON（便于系统集成）和 HTML（便于离线审阅与演示）；导出不会修改项目数据，也不需要下载额外工具。
-- 报告显式写入当前能力边界，避免把基础 Web 检查、受控沙箱执行或规则化复核误读为已经完成的真实漏洞利用、行为探针或 AI 自主分析。
-- SCA 新增 Python 原生依赖树：当待检测项目内存在 `.venv` 或 `venv` 时，平台以隔离模式读取 pip 的已安装包元数据，不执行项目业务代码；会识别直接请求组件与其实际依赖关系。
-- SCA 依赖图谱与项目安全报告会明确区分“Python 实际环境（pip inspect）”“NPM 原生依赖树”“锁文件推断”和“项目依赖清单”。未找到项目内 Python 环境时，扫描会自动回退到已有清单与锁文件解析，不需要安装任何额外工具。
-- SCA 现会把当次扫描得到的依赖边、边来源和汇总写入扫描快照；后续查看历史批次、依赖图谱和项目安全报告时优先使用该快照，避免项目环境后来变化而改写历史结论。
-- SCA 扫描历史新增 OSV 外部漏洞库状态：网络可用时标记“OSV 已连接”；网络不可用时标记“离线降级”，并明确说明此时仅保留本地漏洞规则、许可证规则和已获得的扫描结果，不能将其视为外部漏洞情报已完整覆盖。
-
-## 当前代码结构（2026-07-29）
-
-以下结构仅列出项目源码、配置、迁移、测试、文档与演示输入；`.venv`、`node_modules`、`__pycache__` 和前端构建产物 `dist` 均为本地生成目录，不属于业务源码。
-
-```text
-AI网安项目/
-├─ README.md                         # 项目说明、启动方式、能力边界
-├─ alembic.ini                       # Alembic 迁移配置
-├─ apps/
-│  ├─ api/                           # FastAPI 后端
-│  │  ├─ app/
-│  │  │  ├─ main.py                  # API 入口与路由注册
-│  │  │  ├─ db.py / db_models.py     # 数据库连接与持久化模型
-│  │  │  ├─ models.py                # Pydantic 请求/响应模型
-│  │  │  ├─ module_registry.py       # 六个安全模块定义
-│  │  │  ├─ routers/                 # 项目、模块、SCA、SAST、AGENT、DAST、SANDBOX、ASPM API
-│  │  │  ├─ services/                # 扫描、验证、图谱、报告、复测等核心逻辑
-│  │  │  ├─ repositories/mappers.py  # 数据库记录与 API 模型转换
-│  │  │  └─ rules/                   # SCA 本地漏洞与许可证规则
-│  │  ├─ migrations/                 # 数据库迁移脚本
-│  │  └─ tests/                      # 后端单元测试
-│  └─ web/                           # React + Vite 前端
-│     ├─ src/main.tsx                # 页面、状态、API 调用（当前集中在单文件）
-│     └─ src/styles.css              # 全局样式
-├─ infra/docker-compose.yml          # PostgreSQL / Redis 本地基础设施
-├─ docs/                             # PRD、架构、模块设计、交接与路线图
-├─ outputs/                          # SCA、SAST、AGENT 演示输入与 UI 验证材料
-└─ .agents/                          # 预留的 Agent 编排配置目录
-```
-
-运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。其中 `routers` 只处理接口和参数，`services` 承担扫描、证据关联、图谱、复测和导出等业务逻辑。
-
-## 当前模块欠缺功能（2026-08-01）
-
-下表是当前代码状态的简明清单。“欠缺”表示尚未实现，不会在前端中伪装为已完成能力。
-
-| 模块 | 当前仍欠缺的主要能力 |
-| --- | --- |
-| SCA | 哈希仅限可访问的本地组件证据；Python 尚无完整原生依赖树，Maven/Go 依赖本机工具与缓存；传递影响尚非语义图推理；没有按角色/租户隔离的审批流；本地 OSV 镜像仍需人工或外部作业同步；CI 模板需部署端配置 API 并触发扫描。 |
-| SAST | 更稳定的 Semgrep 镜像与配置管理；自定义规则库管理界面；AST、数据流和污点分析；真实外部 AI 复核；修复补丁生成；与 DAST/SANDBOX 的自动联动验证。已知的前端 `Failed to fetch` 问题仍按当前决策暂不处理。 |
-| AGENT | 不运行真实 Agent；不连接真实 MCP Server；不执行插件工具调用；没有完整工具权限矩阵、Agent 行为回放或外部 AI 驱动的信任评分。当前以配置/指令文件静态检查为主。 |
-| DAST | 当前仅为关联风险后的轻量 Web 基础验证，不做爬虫、登录态管理、业务漏洞利用证明、攻击 payload 生成、OWASP ZAP/Nuclei 接入、自动漏洞复现链和自动复测。DAST 深化仍按当前计划后置。 |
-| SANDBOX | 当前记录的是隔离策略、执行摘要和结构化账本，不采集真实文件访问、网络连接、完整进程树或工具调用事件；未接入 eBPF/Sysmon 等探针；不支持交互式程序、复杂多步骤编排或恶意样本级强隔离。 |
-| ASPM / 治理 | 风险评分尚未接入 CVSS、EPSS、资产暴露面和业务重要性；自动关联仍为可解释规则，不是语义模型或图推理；没有 SLA、工单、审批、组织/租户权限、完整审计日志、CI/CD 门禁、扫描任务队列和后台 Worker；现有导出为项目安全报告，不是完整合规报告体系。 |
-| 安全知识中枢 | 已能组织项目上下文、规则、验证、证据和治理结论，但还不能自动生成规则、进行跨项目知识推荐，或基于反馈自主演进。 |
-| 前端工程结构 | 功能当前集中在 `apps/web/src/main.tsx`，尚未按项目管理、检测中心、治理中心、知识中枢、通用组件和 API 客户端拆分。 |
-
-### 使用前的外部条件
-
-- SCA 基础扫描不需要额外下载；Syft/Grype 增强扫描需要 Docker 与对应镜像。
-- SAST 的 Semgrep 增强需要本机 Semgrep CLI 或 Docker 镜像。
-- DAST 需要可访问的目标 Web 地址。
-- SANDBOX 需要 Docker Desktop 和待使用的本地/已拉取镜像。
-- 平台目前没有登录、权限与租户隔离，不应直接暴露到公网。
-
-### SCA 离线增强扫描（沙箱准备）
-
-- SCA 会对依赖清单和本地已安装 Python 包的 `RECORD` 文件记录 SHA-256；哈希仅作为扫描批次证据保存，不上传包内容。
-- 依赖图优先使用可获得的真实关系：npm `npm ls`、Python `pip inspect`、Maven `mvn dependency:tree`、Go `go mod graph`；工具或依赖缓存不可用时自动回退到锁文件推断。
-- Trivy 支持完全离线运行：将 `artifacts/sca-offline/trivy-cache` 预下载到沙箱，并在扫描中强制跳过在线数据库更新；缺少缓存会在工具预检和扫描结果中明确提示。
-- Grype 支持从 `artifacts/sca-offline/grype-cache` 读取已导入的离线漏洞库，扫描时禁用自动更新。若 Docker 容器无法联网，可在 Windows 主机下载数据库压缩包后执行 `grype db import` 导入。
-- `artifacts/` 是本地运行资源，已由 Git 忽略。联网机器上准备好 Syft、Grype、Trivy 镜像和离线缓存后，将整个 `artifacts/sca-offline` 目录与镜像 tar 包带入沙箱。
-
-```text
-artifacts/sca-offline/
-  images/       # syft.tar、grype.tar、trivy.tar
-  grype-cache/  # Grype 导入后的离线漏洞库
-  trivy-cache/  # Trivy 漏洞库与 Java 索引库
-```
-
-### SCA 治理收尾能力
-
-- 项目可通过 API 查询本地漏洞规则与许可证策略，并在 SCA 高级分析中查看它们。例外申请必须从当前扫描的风险组件中选择，可记录理由、申请人和失效日期，并支持批准、拒绝和撤销；批准且未到期的例外在下一次扫描中会标记为“已接受风险”，但不会删除漏洞证据。
-- 依赖图谱会输出从风险组件回溯到项目的影响路径，并在页面中逐条展示；同时提供可供 CI/CD 调用的门禁结论：只要存在未豁免的高危或严重组件即返回 `block`。
-- “导出 SCA 报告”会下载当前选择扫描批次的独立 HTML 报告；PDF 可由浏览器的“打印为 PDF”生成，无需额外安装运行时。
-- 工具链预检展示 Grype、Trivy 和 Trivy Java 离线数据库状态；Trivy 缓存会显示文件大小及可用的更新时间元数据。
-
-### SCA 治理与离线情报更新（2026-08-01）
-
-- SCA 扫描快照会记录 npm、Maven、Go 原生依赖关系是否实际捕获，或为何回退到清单/锁文件推断；治理页可直接查看来源、工具可用性和关系数量。
-- 哈希证据扩展为依赖清单、Python 安装 `RECORD`、本地 `node_modules` 包描述、项目内 Maven 仓库 JAR/POM 和 Go vendor 模块描述。仅对本地可访问文件计算 SHA-256，无法取得的包文件不会被伪造。
-- 支持导入 Git 忽略目录中的本地 OSV 镜像。镜像命中优先于在线 OSV，镜像、在线情报与本地规则的来源和降级边界都会写入扫描证据。
-- 漏洞规则和许可证策略支持平台或项目级持久化覆盖、启停和审计；每次 SCA 扫描保存当时实际生效的策略快照。
-- SCA 门禁现在在治理页可见，并提供机器可读的 `pass`/`block` 和退出码；仓库提供 GitHub Actions 门禁工作流示例，详见 `docs/sca-ci-gate.md`。
