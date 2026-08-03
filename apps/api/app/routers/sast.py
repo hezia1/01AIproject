@@ -13,15 +13,18 @@ from app.models import Finding, ModuleKey, SastScanRequest, SastScanResult, Scan
 from app.repositories.mappers import finding_to_schema
 from app.services.sast_agent_orchestrator import run_sast_agent_pipeline
 from app.services.sast_governance import (
+    add_custom_rule,
     add_suppression,
     apply_suppressions,
     effective_sast_profile,
+    update_custom_rule,
     update_sast_profile,
     update_suppression,
+    validate_custom_rule_payload,
 )
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import SastScanOutput, dedupe_findings, sast_tool_health, scan_source_tree
-from app.services.semgrep_scanner import SemgrepUnavailable, scan_with_semgrep
+from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 
 router = APIRouter()
 
@@ -145,6 +148,14 @@ def get_sast_tool_health() -> dict[str, object]:
     return sast_tool_health()
 
 
+@router.post("/rules/validate")
+def validate_sast_rule(payload: dict[str, object]) -> dict[str, object]:
+    try:
+        return validate_custom_rule_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/projects/{project_id}/profile")
 def get_sast_profile(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
     return effective_sast_profile(sast_module(db, project_id).config)
@@ -155,6 +166,40 @@ def patch_sast_profile(project_id: UUID, payload: dict[str, object], db: Session
     module = sast_module(db, project_id)
     try:
         profile = update_sast_profile(module.config, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    persist_sast_profile(module, profile)
+    db.commit()
+    return profile
+
+
+@router.get("/projects/{project_id}/rules")
+def list_sast_rules(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    profile = effective_sast_profile(sast_module(db, project_id).config)
+    return {
+        "rule_pack_version": profile["rule_pack_version"],
+        "custom_rules": profile["custom_rules"],
+        "note": "Custom rules are project-scoped regular expressions. They do not replace AST, data-flow, or taint analysis.",
+    }
+
+
+@router.post("/projects/{project_id}/rules", status_code=201)
+def create_sast_rule(project_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    module = sast_module(db, project_id)
+    try:
+        profile = add_custom_rule(module.config, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    persist_sast_profile(module, profile)
+    db.commit()
+    return profile
+
+
+@router.patch("/projects/{project_id}/rules/{rule_id}")
+def patch_sast_rule(project_id: UUID, rule_id: str, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+    module = sast_module(db, project_id)
+    try:
+        profile = update_custom_rule(module.config, rule_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     persist_sast_profile(module, profile)
@@ -231,6 +276,21 @@ def export_sast_sarif(project_id: UUID, scan_task_id: UUID | None = None, db: Se
     )
 
 
+@router.get("/projects/{project_id}/ci-config")
+def get_sast_ci_config(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    profile = effective_sast_profile(sast_module(db, project_id).config)
+    return {
+        "profile": profile,
+        "environment": {
+            "SAST_OFFLINE_ONLY": "true",
+            "SAST_SEMGREP_IMAGE": DEFAULT_SEMGREP_IMAGE,
+        },
+        "command": "python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif",
+        "workflow": ".github/workflows/sast-local.yml",
+        "offline_assets": "D:\\project\\PYproject\\AI网安项目\\artifacts\\sast-offline",
+    }
+
+
 def run_sast_engines(source_path: str, profile: dict[str, object]) -> SastScanOutput:
     outputs: list[SastScanOutput] = []
     engine_status: dict[str, dict[str, object]] = {}
@@ -243,9 +303,15 @@ def run_sast_engines(source_path: str, profile: dict[str, object]) -> SastScanOu
     else:
         engine_status["semgrep"] = {"status": "disabled", "config": profile["semgrep_config"]}
     if profile["include_local_rules"]:
-        local_output = scan_source_tree(source_path)
+        custom_rules = profile.get("custom_rules") if isinstance(profile.get("custom_rules"), list) else []
+        local_output = scan_source_tree(source_path, custom_rules=custom_rules)
         outputs.append(local_output)
-        engine_status["local_rules"] = {"status": "completed", "scanned_files": len(local_output.scanned_files)}
+        engine_status["local_rules"] = {
+            "status": "completed",
+            "scanned_files": len(local_output.scanned_files),
+            "rule_pack_version": profile.get("rule_pack_version"),
+            "custom_rule_count": len([item for item in custom_rules if isinstance(item, dict) and item.get("enabled", True)]),
+        }
     else:
         engine_status["local_rules"] = {"status": "disabled"}
     if not outputs:

@@ -1,0 +1,40 @@
+name: Local SAST Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      fail_on:
+        description: Fail threshold for local rules
+        required: false
+        default: high
+        type: choice
+        options: [none, critical, high, medium, low]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install local SAST runtime
+        run: pip install -r apps/api/requirements.txt
+      - name: Scan repository and create SARIF
+        id: sast
+        shell: bash
+        run: |
+          set +e
+          python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on "${{ inputs.fail_on }}"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sast-evidence
+          path: |
+            sast-result.json
+            sast-result.sarif
+      - name: Enforce SAST threshold
+        if: steps.sast.outputs.exit_code != '0'
+        run: exit ${{ steps.sast.outputs.exit_code }}

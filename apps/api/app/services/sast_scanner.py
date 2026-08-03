@@ -158,22 +158,24 @@ SOURCE_EXTENSIONS = {
 MAX_FILE_BYTES = 512 * 1024
 
 
-def scan_source_tree(source_path: str) -> SastScanOutput:
+def scan_source_tree(source_path: str, custom_rules: list[dict[str, object]] | None = None) -> SastScanOutput:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
 
+    rules = [*SAST_RULES, *build_custom_rules(custom_rules or [])]
+    extra_extensions = {extension for rule in rules for extension in (rule.file_extensions or set())}
     findings: list[ParsedFinding] = []
     scanned_files: list[str] = []
-    for file_path in iter_source_files(root):
+    for file_path in iter_source_files(root, extra_extensions):
         relative_path = file_path.relative_to(root).as_posix()
         scanned_files.append(relative_path)
-        findings.extend(scan_file(file_path, relative_path))
+        findings.extend(scan_file(file_path, relative_path, rules))
 
     return SastScanOutput(findings=dedupe_findings(findings), scanned_files=scanned_files)
 
 
-def iter_source_files(root: Path):
+def iter_source_files(root: Path, extra_extensions: set[str] | None = None):
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -181,7 +183,7 @@ def iter_source_files(root: Path):
             continue
         if is_noise_path(path.relative_to(root).as_posix()):
             continue
-        if path.suffix not in SOURCE_EXTENSIONS and path.name != ".env":
+        if path.suffix not in SOURCE_EXTENSIONS and path.suffix not in (extra_extensions or set()) and path.name != ".env":
             continue
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
@@ -191,7 +193,7 @@ def iter_source_files(root: Path):
         yield path
 
 
-def scan_file(file_path: Path, relative_path: str) -> list[ParsedFinding]:
+def scan_file(file_path: Path, relative_path: str, rules: list[SastRule] | None = None) -> list[ParsedFinding]:
     try:
         lines = file_path.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
     except OSError:
@@ -203,7 +205,7 @@ def scan_file(file_path: Path, relative_path: str) -> list[ParsedFinding]:
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or stripped.startswith("//"):
             continue
-        for rule in SAST_RULES:
+        for rule in rules or SAST_RULES:
             if rule.file_extensions and file_path.suffix not in rule.file_extensions:
                 continue
             if rule.pattern.search(stripped):
@@ -225,6 +227,35 @@ def scan_file(file_path: Path, relative_path: str) -> list[ParsedFinding]:
                     )
                 )
     return findings
+
+
+def build_custom_rules(items: list[dict[str, object]]) -> list[SastRule]:
+    rules: list[SastRule] = []
+    for item in items:
+        if not item.get("enabled", True):
+            continue
+        try:
+            severity = Severity(str(item.get("severity") or "medium"))
+            pattern = re.compile(str(item.get("pattern") or ""))
+        except (ValueError, re.error):
+            continue
+        extensions = item.get("file_extensions")
+        file_extensions = {str(value).lower() for value in extensions} if isinstance(extensions, list) and extensions else None
+        rules.append(
+            SastRule(
+                rule_id=str(item.get("rule_id") or "CUSTOM.UNKNOWN"),
+                title=str(item.get("title") or "项目自定义规则"),
+                severity=severity,
+                category=str(item.get("category") or "custom"),
+                cwe="CWE-693",
+                owasp="Custom project rule",
+                description=str(item.get("description") or "项目自定义 SAST 规则命中。"),
+                remediation=str(item.get("remediation") or "确认风险上下文，修复后重新扫描。"),
+                pattern=pattern,
+                file_extensions=file_extensions,
+            )
+        )
+    return rules
 
 
 def detect_language(file_path: Path) -> str:
@@ -266,6 +297,8 @@ def dedupe_findings(findings: list[ParsedFinding]) -> list[ParsedFinding]:
 
 
 def sast_tool_health() -> dict[str, object]:
+    from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE
+
     semgrep_path = shutil.which("semgrep")
     docker_path = shutil.which("docker")
     semgrep_version = command_version([semgrep_path, "--version"]) if semgrep_path else None
@@ -274,7 +307,7 @@ def sast_tool_health() -> dict[str, object]:
     if docker_path and docker_version:
         try:
             docker_image = subprocess.run(
-                [docker_path, "image", "inspect", "semgrep/semgrep:latest"],
+                [docker_path, "image", "inspect", DEFAULT_SEMGREP_IMAGE],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -284,7 +317,7 @@ def sast_tool_health() -> dict[str, object]:
     return {
         "semgrep_cli": {"available": bool(semgrep_version), "version": semgrep_version, "path": semgrep_path},
         "docker": {"available": bool(docker_version), "version": docker_version, "path": docker_path},
-        "docker_image": {"available": docker_image, "image": "semgrep/semgrep:latest"},
+        "docker_image": {"available": docker_image, "image": DEFAULT_SEMGREP_IMAGE},
         "can_run_semgrep": bool(semgrep_version or (docker_version and docker_image)),
     }
 

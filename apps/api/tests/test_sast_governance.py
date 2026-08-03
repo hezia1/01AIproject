@@ -3,9 +3,10 @@ from datetime import datetime
 import pytest
 
 from app.db_models import FindingRecord
-from app.services.sast_governance import add_suppression, apply_suppressions, effective_sast_profile, update_sast_profile
+from app.services.sast_governance import add_custom_rule, add_suppression, apply_suppressions, effective_sast_profile, update_sast_profile, validate_custom_rule_payload
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import scan_source_tree
+from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE
 
 
 def test_sast_profile_keeps_a_valid_engine_enabled():
@@ -59,3 +60,29 @@ def test_default_profile_is_safe_and_normalized():
 
     assert profile["include_local_rules"] is True
     assert profile["suppressions"] == []
+
+
+def test_custom_rule_is_validated_and_runs_in_local_scanner(tmp_path):
+    payload = {
+        "rule_id": "CUSTOM.PROJECT.UNSAFE_LOG",
+        "title": "Unsafe debug log",
+        "severity": "medium",
+        "category": "logging",
+        "pattern": r"logger\.debug\(",
+        "file_extensions": [".py"],
+        "test_sample": "logger.debug('token=%s', token)",
+    }
+    validation = validate_custom_rule_payload(payload)
+    profile = add_custom_rule({}, payload)
+    source = tmp_path / "service.py"
+    source.write_text("logger.debug('token=%s', token)\n", encoding="utf-8")
+
+    result = scan_source_tree(str(tmp_path), custom_rules=profile["custom_rules"])
+
+    assert validation["test_sample_matched"] is True
+    assert [item.rule_id for item in result.findings] == ["CUSTOM.PROJECT.UNSAFE_LOG"]
+
+
+def test_semgrep_docker_image_is_pinned():
+    assert DEFAULT_SEMGREP_IMAGE.startswith("semgrep/semgrep:")
+    assert not DEFAULT_SEMGREP_IMAGE.endswith(":latest")

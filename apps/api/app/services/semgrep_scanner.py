@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,9 @@ from app.services.sast_noise import is_noise_path
 from app.services.sast_scanner import ParsedFinding, SastScanOutput, detect_language, redact_evidence
 
 
+DEFAULT_SEMGREP_IMAGE = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.95.0")
+
+
 class SemgrepUnavailable(RuntimeError):
     pass
 
@@ -19,6 +23,8 @@ def scan_with_semgrep(source_path: str, config: str = "p/default", timeout_secon
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
+    if os.getenv("SAST_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"} and config.startswith("p/"):
+        raise SemgrepUnavailable("Offline mode cannot resolve a Semgrep registry pack; use local rules or a project-relative config file")
 
     command = build_semgrep_command(root, config)
     if command is None:
@@ -68,7 +74,7 @@ def build_semgrep_command(root: Path, config: str) -> list[str] | None:
             f"{root}:/src",
             "-w",
             "/src",
-            "semgrep/semgrep:latest",
+            DEFAULT_SEMGREP_IMAGE,
             "semgrep",
             "scan",
             "--json",

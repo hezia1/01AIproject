@@ -10,7 +10,7 @@
 - `apps/web/`：React + Vite 前端控制台；功能目前集中在 `src/main.tsx`。
 - `infra/`：本地 PostgreSQL / Redis Docker Compose 配置。
 - `.github/workflows/`：SCA 本地 CI 与部署 API 门禁示例。
-- `scripts/sca_ci.py`：无需启动平台 API 的本地 SCA CLI，支持 JSON、SARIF 与门禁退出码。
+- `scripts/sca_ci.py`、`scripts/sast_ci.py`：无需启动平台 API 的本地 SCA/SAST CLI，支持 JSON、SARIF 与退出码。
 
 运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。路由层处理接口和参数，服务层处理扫描、证据关联、图谱、复测、门禁和导出。
 
@@ -73,7 +73,7 @@ npm run dev
 | 模块 | 已实现（后端 + 前端） | 当前未完成的主要能力 |
 | --- | --- | --- |
 | SCA | 多生态依赖解析、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、可配置门禁、本地 CI CLI；所有治理和高级分析入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树；语义图推理与全平台 CI 集成。 |
-| SAST | 本地规则扫描、Semgrep 可选增强、规则化 Agent 复核、项目级扫描配置/版本、工具健康与降级记录、规则/路径豁免、扫描历史/差异、SARIF 导出和 Finding 统一治理；入口均已在 SAST 页面开放。 | 自定义本地规则编辑/发布、固定的 Semgrep 镜像与离线规则分发、AST/数据流/污点分析、真实外部 AI 复核和补丁生成。 |
+| SAST | 本地规则扫描、项目自定义正则规则（校验/样例预览/启停/版本）、固定版 Semgrep 可选增强、规则化 Agent 复核、项目级扫描配置/版本、工具健康与降级记录、规则/路径豁免、扫描历史/差异、SARIF 导出、本地离线 CI CLI 和 Finding 统一治理；入口均已在 SAST 治理页开放。 | 自定义 Semgrep YAML 规则编辑/发布、离线 Semgrep 镜像和规则包自动分发、AST/数据流/污点分析、真实外部 AI 复核和补丁生成。 |
 | AGENT | Agent/MCP/插件配置与说明文件静态扫描，识别危险命令、敏感路径、网络能力、密钥风险；结果和统计已在 AGENT 页面开放。 | 不运行真实 Agent、不连接 MCP Server、不执行工具调用；缺少权限矩阵、行为回放与信任评分。 |
 | DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
 | SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
@@ -131,7 +131,7 @@ Syft/Grype/Trivy 是可选增强：需要 Docker、镜像和相应离线/在线�
 
 ## 其他模块的接口与实际边界
 
-- SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/tool-health`。本地扫描是规则匹配；Agent 复核是规则化编排，不宣称调用外部大模型。
+- SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`GET/POST/PATCH /api/sast/projects/{project_id}/rules`、`POST /api/sast/rules/validate`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/projects/{project_id}/ci-config`、`GET /api/sast/tool-health`。本地扫描是规则匹配；Agent 复核是规则化编排，不宣称调用外部大模型。
 - AGENT：`POST /api/agent/scan`、`GET /api/agent/projects/{project_id}/findings`。仅分析本地配置和文本，不执行 Agent/MCP/插件。
 - DAST：`POST /api/dast/probe`、`POST /api/dast/validations`、`GET /api/dast/projects/{project_id}/validations`。基础检查只验证 HTTP/HTTPS、状态、耗时、Server Header 和基础安全响应头；不能证明 SQL 注入、鉴权绕过等业务漏洞可利用。
 - SANDBOX：`POST /api/sandbox/run`、`POST /api/sandbox/evidence`、`GET /api/sandbox/projects/{project_id}/evidence`。默认使用受限 Docker 容器；执行摘要和隔离策略不等同系统级行为取证。
@@ -147,6 +147,7 @@ Syft/Grype/Trivy 是可选增强：需要 Docker、镜像和相应离线/在线�
 
 - 基础 SCA/SAST/AGENT 需要被测项目的本地源码路径。
 - Syft/Grype/Trivy 增强需要 Docker、镜像及相应漏洞库；Semgrep 增强需要本机 CLI 或 Docker 镜像。
+- SAST 默认固定 Docker 镜像为 `semgrep/semgrep:1.95.0`，也可通过 `SAST_SEMGREP_IMAGE` 显式替换。离线运行时请将镜像和规则资源置于 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\`；该目录已忽略，不会自动下载或提交运行资源。
 - DAST 需要可访问的目标 Web 地址；SANDBOX 需要 Docker Desktop 和可用镜像。
 - 当前没有登录、权限或租户隔离，不应直接暴露到公网。
 
@@ -159,6 +160,15 @@ cd D:\project\PYproject\AI网安项目\apps\api
 cd D:\project\PYproject\AI网安项目\apps\web
 npm run build
 ```
+
+### 本地 SAST CI
+
+```powershell
+cd D:\project\PYproject\AI网安项目
+.\.venv\Scripts\python.exe scripts\sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on high
+```
+
+`--offline` 使用本地规则且不依赖在线 Semgrep 规则包；`.github/workflows/sast-local.yml` 提供对应的 GitHub Actions 示例。
 
 ## 下一步最推荐的模块
 
@@ -179,7 +189,8 @@ apps/
     src/main.tsx     # 当前页面、状态和 API 调用集中处
 infra/               # PostgreSQL / Redis Compose 配置
 scripts/sca_ci.py    # 本地 SCA CI CLI
-.github/workflows/   # SCA 本地 CI 与 API 门禁示例
+scripts/sast_ci.py   # 本地 SAST CI CLI
+.github/workflows/   # SCA/SAST 本地 CI 与 API 门禁示例
 docs/                # 交接与专题文档
 outputs/             # 本地演示输入和验证材料
 ```

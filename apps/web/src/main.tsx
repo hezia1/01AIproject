@@ -19,7 +19,8 @@ type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: n
 type ScaToolHealthCheck = { name: string; status: string; detail: string | null; remediation: string | null };
 type ScaToolHealth = { status: string; recommended_grype_input: string; checks: ScaToolHealthCheck[] };
 type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[]; tool_status?: ScaToolStatus | null };
-type SastProfile = { profile_version: number; semgrep_enabled: boolean; semgrep_config: string; include_local_rules: boolean; clear_previous: boolean; suppressions: SastSuppression[] };
+type SastCustomRule = { id: string; rule_id: string; title: string; severity: Severity; category: string; pattern: string; file_extensions: string[]; description: string; remediation: string; enabled: boolean; version: number; created_at: string };
+type SastProfile = { profile_version: number; rule_pack_version: string; semgrep_enabled: boolean; semgrep_config: string; include_local_rules: boolean; clear_previous: boolean; suppressions: SastSuppression[]; custom_rules: SastCustomRule[] };
 type SastSuppression = { id: string; rule_id: string; path_pattern: string; reason: string; expires_at: string | null; enabled: boolean; created_at: string };
 type SastToolHealth = { semgrep_cli: { available: boolean; version: string | null; path: string | null }; docker: { available: boolean; version: string | null; path: string | null }; docker_image: { available: boolean; image: string }; can_run_semgrep: boolean };
 type SastScanHistoryItem = { scan_task_id: string; status: string; created_at: string; started_at: string | null; finished_at: string | null; finding_count: number; suppressed_count: number; engine_status: Record<string, { status?: string; detail?: string; config?: string }>; profile: Partial<SastProfile> };
@@ -1026,11 +1027,77 @@ function GovernanceCenter({
     </nav>
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={loading} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
-    {scope === "sast" ? <FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={loading} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "sast" ? <><SastRuleManagement project={project} /><FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={loading} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /></> : null}
     {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={loading} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={loading} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
     {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={loading} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
+}
+
+function SastRuleManagement({ project }: { project: Project }) {
+  const [profile, setProfile] = useState<SastProfile | null>(null);
+  const [health, setHealth] = useState<SastToolHealth | null>(null);
+  const [history, setHistory] = useState<SastScanHistoryItem[]>([]);
+  const [diff, setDiff] = useState<SastScanDiff | null>(null);
+  const [message, setMessage] = useState("");
+  const [validation, setValidation] = useState<{ valid: boolean; test_sample_matched: boolean | null; message: string } | null>(null);
+  const [draft, setDraft] = useState({ rule_id: "CUSTOM.PROJECT.PATTERN", title: "", severity: "medium" as Severity, category: "custom", pattern: "", file_extensions: ".py,.ts", description: "", remediation: "", test_sample: "" });
+
+  useEffect(() => { void load(); }, [project.id]);
+
+  async function load() {
+    const [nextProfile, nextHealth, nextHistory, nextDiff] = await Promise.all([
+      request<SastProfile>(`/sast/projects/${project.id}/profile`).catch(() => null),
+      request<SastToolHealth>("/sast/tool-health").catch(() => null),
+      request<SastScanHistoryItem[]>(`/sast/projects/${project.id}/scan-history`).catch(() => []),
+      request<SastScanDiff>(`/sast/projects/${project.id}/scan-diff`).catch(() => null),
+    ]);
+    setProfile(nextProfile); setHealth(nextHealth); setHistory(nextHistory); setDiff(nextDiff);
+  }
+
+  async function saveProfile() {
+    if (!profile) return;
+    try {
+      setProfile(await request<SastProfile>(`/sast/projects/${project.id}/profile`, { method: "PATCH", body: JSON.stringify(profile) }));
+      setMessage("扫描配置已保存；版本将在下一次快照中可追溯。");
+    } catch (error) { setMessage(`保存失败：${errorMessage(error)}`); }
+  }
+
+  function rulePayload() {
+    return { ...draft, file_extensions: draft.file_extensions.split(",").map((item) => item.trim()).filter(Boolean) };
+  }
+
+  async function validateRule() {
+    try {
+      const result = await request<{ valid: boolean; test_sample_matched: boolean | null; message: string }>("/sast/rules/validate", { method: "POST", body: JSON.stringify(rulePayload()) });
+      setValidation(result); setMessage(result.message);
+    } catch (error) { setValidation(null); setMessage(`规则无效：${errorMessage(error)}`); }
+  }
+
+  async function createRule() {
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/rules`, { method: "POST", body: JSON.stringify(rulePayload()) });
+      setProfile(saved); setValidation(null); setDraft({ rule_id: "CUSTOM.PROJECT.PATTERN", title: "", severity: "medium", category: "custom", pattern: "", file_extensions: ".py,.ts", description: "", remediation: "", test_sample: "" });
+      setMessage("项目自定义规则已保存；下一次本地规则扫描会实际执行它。");
+    } catch (error) { setMessage(`创建失败：${errorMessage(error)}`); }
+  }
+
+  async function toggleRule(rule: SastCustomRule) {
+    try {
+      setProfile(await request<SastProfile>(`/sast/projects/${project.id}/rules/${rule.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !rule.enabled }) }));
+    } catch (error) { setMessage(`更新失败：${errorMessage(error)}`); }
+  }
+
+  async function downloadCiConfig() {
+    try {
+      const config = await request<Record<string, unknown>>(`/sast/projects/${project.id}/ci-config`);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a"); link.href = url; link.download = `${safeFilename(project.name)}-sast-ci-config.json`; link.click(); URL.revokeObjectURL(url);
+      setMessage("CI 配置已导出；离线缓存目录仅使用 D 盘 artifacts/sast-offline。");
+    } catch (error) { setMessage(`导出失败：${errorMessage(error)}`); }
+  }
+
+  return <details className="advanced-details governance-advanced-details"><summary>SAST 规则、离线 CI 与引擎治理</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>扫描配置与规则版本</h2><span>{message || `配置 v${profile?.profile_version ?? "-"} · 本地规则包 ${profile?.rule_pack_version ?? "-"}`}</span></div><div className="filter-grid"><label>Semgrep 规则包 / 本地配置<input value={profile?.semgrep_config ?? "p/default"} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, semgrep_config: event.target.value } : value)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.semgrep_enabled ?? false} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, semgrep_enabled: event.target.checked } : value)} />启用 Semgrep</label><label className="inline-check"><input type="checkbox" checked={profile?.include_local_rules ?? false} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, include_local_rules: event.target.checked } : value)} />启用本地规则</label><label className="inline-check"><input type="checkbox" checked={profile?.clear_previous ?? true} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, clear_previous: event.target.checked } : value)} />新扫描关闭旧活动 Finding</label><button className="secondary-action" disabled={!profile} onClick={() => void saveProfile()}>保存</button><button className="secondary-action" onClick={() => void downloadCiConfig()}>导出 CI 配置</button></div></div><div className="panel"><div className="panel-header"><h2>固定版 Semgrep</h2><span>{health?.can_run_semgrep ? "可用" : "离线降级"}</span></div><div className="kv-list"><div><span>CLI</span><strong>{health?.semgrep_cli.version ?? "未检测到"}</strong></div><div><span>Docker 镜像</span><strong>{health?.docker_image.image ?? "-"}</strong></div><div><span>镜像状态</span><strong>{health?.docker_image.available ? "本地已准备" : "未下载"}</strong></div></div></div><div className="panel"><div className="panel-header"><h2>扫描差异</h2><span>{diff?.base_scan_id ? "与上一批次比较" : "等待第二次扫描"}</span></div><div className="kv-list"><div><span>新增</span><strong>{diff?.summary.added ?? 0}</strong></div><div><span>消失</span><strong>{diff?.summary.removed ?? 0}</strong></div><div><span>等级变化</span><strong>{diff?.summary.severity_changed ?? 0}</strong></div><div><span>历史批次</span><strong>{history.length}</strong></div></div></div><div className="panel full"><div className="panel-header"><h2>项目自定义规则</h2><span>正则规则会在本地 SAST 引擎中实际运行；样例仅做命中预览</span></div><div className="filter-grid"><label>规则 ID<input value={draft.rule_id} onChange={(event) => setDraft((value) => ({ ...value, rule_id: event.target.value }))} /></label><label>标题<input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} /></label><label>等级<select value={draft.severity} onChange={(event) => setDraft((value) => ({ ...value, severity: event.target.value as Severity }))}>{(["critical", "high", "medium", "low", "info"] as Severity[]).map((item) => <option key={item}>{item}</option>)}</select></label><label>分类<input value={draft.category} onChange={(event) => setDraft((value) => ({ ...value, category: event.target.value }))} /></label><label>文件后缀（逗号分隔）<input value={draft.file_extensions} onChange={(event) => setDraft((value) => ({ ...value, file_extensions: event.target.value }))} /></label><label>正则模式<input value={draft.pattern} onChange={(event) => setDraft((value) => ({ ...value, pattern: event.target.value }))} /></label><label>命中样例<textarea value={draft.test_sample} onChange={(event) => setDraft((value) => ({ ...value, test_sample: event.target.value }))} /></label><label>说明<input value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} /></label><label>修复建议<input value={draft.remediation} onChange={(event) => setDraft((value) => ({ ...value, remediation: event.target.value }))} /></label><button className="secondary-action" onClick={() => void validateRule()}>校验 / 预览</button><button className="primary-action" onClick={() => void createRule()}>保存并启用</button></div>{validation ? <div className="empty-project">规则有效；样例：{validation.test_sample_matched === null ? "未提供" : validation.test_sample_matched ? "命中" : "未命中"}。</div> : null}{profile?.custom_rules.length ? <table><thead><tr><th>ID / 版本</th><th>规则</th><th>范围</th><th>状态</th></tr></thead><tbody>{profile.custom_rules.map((rule) => <tr key={rule.id}><td>{rule.rule_id}<span className="cell-subtext">v{rule.version}</span></td><td><strong>{rule.title}</strong><span className="cell-subtext">{rule.pattern}</span></td><td>{rule.file_extensions.join(", ") || "所有已扫描文件"}<span className="cell-subtext">{rule.severity} · {rule.category}</span></td><td><button className="secondary-action" onClick={() => void toggleRule(rule)}>{rule.enabled ? "停用" : "启用"}</button></td></tr>)}</tbody></table> : <div className="empty-project">尚未创建项目自定义规则。</div>}</div></section></div></details>;
 }
 
 function GovernanceOverview({ summary, enabledModules, components, findings, validations, evidence, graph, onOpenDast, onOpenSandbox, onUpdateFinding }: { summary: AspmSummary | null; enabledModules: Set<ModuleKey>; components: Component[]; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; onOpenDast: (findingId: string) => void; onOpenSandbox: (findingId: string) => void; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
