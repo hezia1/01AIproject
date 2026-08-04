@@ -30,7 +30,6 @@ type SastScanDiff = { target_scan_id: string; base_scan_id: string | null; summa
 type SastReport = { project_id: string; scan: SastScanHistoryItem; summary: { finding_count: number; severity: Record<string, number>; categories: Record<string, number> }; trend: SastScanDiff; git: { available?: boolean; baseline_ref?: string | null; changed_files?: string[]; history_secret_files?: string[]; history_secret_count?: number }; quality_gate: { status: string; threshold: string; blocking_finding_count: number }; validation_suggestions: { finding_id: string; recommended_module: string; next_step: string; automatic_execution: boolean }[] };
 type SastFixDraft = { finding_id: string; status: string; category: string; patch: string; recommended_change: string; limitations: string[]; regression_scan: { endpoint: string; required_fields: string[] } };
 type ScanTask = { id: string; project_id: string; scan_type: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; metadata: Record<string, unknown>; progress: number; stage: string | null; attempt: number; error: string | null; created_at: string };
-type AuthSession = { access_token: string; expires_at: number; user: { id: string; username: string; role: string }; tenant: { id: string; name: string } };
 type ScaScanHistoryItem = { scan_task_id: string; status: string; started_at: string | null; finished_at: string | null; created_at: string; component_count: number; direct_dependency_count: number; transitive_dependency_count: number; critical_count: number; high_count: number; vulnerable_count: number; license_risk_count: number; tool_status?: ScaToolStatus | null; osv_status: string; osv_error_count: number };
 type ScaScanDiffItem = { ecosystem: string; name: string; change_type: string; base_version: string | null; target_version: string | null; base_risk_status: string | null; target_risk_status: string | null; base_severity: Severity | null; target_severity: Severity | null; base_license_risk: string | null; target_license_risk: string | null; base_vulnerability_ids: string[]; target_vulnerability_ids: string[]; summary: string };
 type ScaScanDiffSummary = { added_components: number; removed_components: number; version_changes: number; risk_added: number; risk_removed: number; license_risk_changes: number; total_changes: number };
@@ -71,7 +70,6 @@ type SecurityReport = { generated_at: string; project: Project; summary: AspmSum
 type ReportRow = { id: string; title: string; subtitle: string; summary: string; details: [string, string][] };
 
 const API_BASE = "http://127.0.0.1:8000/api";
-const AUTH_STORAGE_KEY = "ai-security-local-session";
 const DEFAULT_ENABLED_MODULES: ModuleKey[] = ["sast", "sca", "aspm"];
 const OPTIONAL_MODULES: ModuleKey[] = ["sast", "sca", "agent", "dast", "sandbox"];
 const DEFAULT_SOURCE_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\sca-sample";
@@ -91,33 +89,7 @@ const fallbackModules: SecurityModule[] = [
 const moduleIcons: Record<ModuleKey, React.ReactNode> = { sast: <Bug size={20} />, sca: <Boxes size={20} />, agent: <Network size={20} />, dast: <Activity size={20} />, sandbox: <FlaskConical size={20} />, aspm: <ShieldCheck size={20} /> };
 
 function Root() {
-  const [session, setSession] = useState<AuthSession | null>(() => {
-    try { const saved = localStorage.getItem(AUTH_STORAGE_KEY); return saved ? JSON.parse(saved) as AuthSession : null; } catch { return null; }
-  });
-  if (session && session.expires_at * 1000 > Date.now()) return <App />;
-  return <AuthenticationScreen onAuthenticated={(next) => { localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(next)); setSession(next); }} />;
-}
-
-function AuthenticationScreen({ onAuthenticated }: { onAuthenticated: (session: AuthSession) => void }) {
-  const [needsBootstrap, setNeedsBootstrap] = useState<boolean | null>(null);
-  const [tenantName, setTenantName] = useState("Default Workspace");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("正在检查本地身份服务...");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { void fetch(`${API_BASE}/auth/bootstrap-status`).then(async (response) => { if (!response.ok) throw new Error("身份服务不可用"); return response.json() as Promise<{ needs_bootstrap: boolean }>; }).then((value) => { setNeedsBootstrap(value.needs_bootstrap); setMessage(value.needs_bootstrap ? "首次使用：创建本地管理员账户。" : "使用本地账户登录。"); }).catch((error: unknown) => setMessage(errorMessage(error))); }, []);
-  async function submit() {
-    setBusy(true); setMessage("");
-    try {
-      const path = needsBootstrap ? "/auth/bootstrap" : "/auth/login";
-      const payload = needsBootstrap ? { tenant_name: tenantName, username, password } : { tenant_name: tenantName || undefined, username, password };
-      const response = await fetch(`${API_BASE}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const data = await response.json() as AuthSession & { detail?: string };
-      if (!response.ok || !data.access_token) throw new Error(data.detail || "认证失败");
-      onAuthenticated(data);
-    } catch (error) { setMessage(errorMessage(error)); } finally { setBusy(false); }
-  }
-  return <main className="auth-shell"><section className="auth-card"><ShieldCheck size={32} /><span className="section-kicker">本地身份与租户隔离</span><h1>{needsBootstrap ? "初始化管理员" : "登录安全平台"}</h1><p>账户仅保存在本地 PostgreSQL；访问令牌由平台签名，不依赖第三方登录服务。</p><label>租户 / 工作区<input value={tenantName} onChange={(event) => setTenantName(event.target.value)} placeholder="Default Workspace" /></label><label>用户名<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" /></label><label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={needsBootstrap ? "new-password" : "current-password"} /></label><button className="primary-action" disabled={busy || needsBootstrap === null || !username || password.length < 8} onClick={() => void submit()}>{busy ? "处理中..." : needsBootstrap ? "创建管理员并进入" : "登录"}</button><small>{message}</small></section></main>;
+  return <App />;
 }
 
 function App() {
@@ -2490,7 +2462,7 @@ function emptyToNull(value: string) { const trimmed = value.trim(); return trimm
 async function enableProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}`, { method: "POST", body: JSON.stringify({ module_key: moduleKey, enabled, config: {} }) }); }
 async function updateProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}/${moduleKey}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : "未知错误"; }
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> { let token = ""; try { token = (JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) ?? "{}") as Partial<AuthSession>).access_token ?? ""; } catch { /* anonymous bootstrap paths do not use request() */ } const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : detail; } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : detail; } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><Root /></React.StrictMode>);
 

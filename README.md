@@ -6,7 +6,7 @@
 
 ## 2026-08-03 SAST 与交付更新（本节覆盖下方较早的状态描述）
 
-- 新增本地账户初始化/登录、PBKDF2 密码哈希、签名 JWT、`admin` / `security_engineer` / `developer` / `viewer` 角色、租户项目隔离、项目成员关系与审计事件。首次运行在前端创建管理员；生产环境必须设置唯一的 `AI_SECURITY_AUTH_SECRET`，并执行 `alembic upgrade head`（包含 `20260803_0007`）。
+- 平台当前按单机本地模式运行：前端直接进入项目控制台，不要求注册、登录、令牌、租户或成员关系。为兼容已有 PostgreSQL 数据，历史身份与租户表保留但不参与 API 访问控制。
 - SAST 默认使用仓库内置的离线 Semgrep YAML 规则包。项目可在当前 SAST 治理页面校验、发布、启停、版本化自定义 YAML 规则包；运行时仅会将已启用包 materialize 到 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\runtime-rules`，不会自动下载规则或镜像。
 - 本地扫描新增 Python 标准库 AST 的同函数和直接本地跨函数 Source → Sink → Sanitizer 检查，以及 JS/TS 保守本地数据流检查，覆盖 SQL、命令执行、SSRF、路径穿越和不安全反序列化。它们是有边界的静态线索，不是全程序数据流或可利用性证明。
 - SAST 扫描可记录 Git 基线差异和历史密钥标识：历史扫描只保存路径、信号摘要，绝不保存历史密钥值。API/前端提供 JSON、HTML、SARIF、扫描趋势、按分支/阈值/新增项/排除规则可配置的质量门禁、人工确认后的 DAST/SANDBOX 建议和“仅草案”修复补丁。

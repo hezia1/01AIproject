@@ -102,29 +102,6 @@ class ScanProgressUpdate(BaseModel):
     detail: str | None = Field(default=None, max_length=1000)
 
 
-class AuthBootstrap(BaseModel):
-    tenant_name: str = Field(default="Default Workspace", min_length=1, max_length=120)
-    username: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=8, max_length=200)
-
-
-class AuthLogin(BaseModel):
-    username: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=8, max_length=200)
-    tenant_name: str | None = Field(default=None, max_length=120)
-
-
-class UserCreate(BaseModel):
-    username: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=8, max_length=200)
-    role: str = Field(default="viewer", max_length=40)
-
-
-class ProjectMembershipCreate(BaseModel):
-    username: str = Field(min_length=3, max_length=120)
-    role: str = Field(default="viewer", max_length=40)
-
-
 class FindingCreate(BaseModel):
     project_id: UUID
     scan_task_id: UUID | None = None

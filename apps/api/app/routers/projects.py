@@ -1,18 +1,16 @@
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.db_models import (
     ComponentRecord,
-    AuditRecord,
     DastValidationRecord,
     FindingRecord,
     ProjectModuleRecord,
-    ProjectMembershipRecord,
     ProjectRecord,
     SandboxEvidenceRecord,
     ScanTaskRecord,
@@ -20,7 +18,6 @@ from app.db_models import (
 )
 from app.models import Project, ProjectAssetProbe, ProjectCreate, ProjectUpdate
 from app.repositories.mappers import project_to_schema
-from app.services.audit import record_audit
 
 router = APIRouter()
 
@@ -44,25 +41,17 @@ SOURCE_SUFFIXES = {
 
 
 @router.get("", response_model=list[Project])
-def list_projects(request: Request, db: Session = Depends(get_db)) -> list[Project]:
-    statement = select(ProjectRecord).order_by(ProjectRecord.created_at.desc())
-    identity = getattr(request.state, "identity", None)
-    if identity is not None:
-        statement = statement.where(ProjectRecord.tenant_id == identity.tenant_id)
-    records = db.scalars(statement).all()
+def list_projects(db: Session = Depends(get_db)) -> list[Project]:
+    records = db.scalars(select(ProjectRecord).order_by(ProjectRecord.created_at.desc())).all()
     return [project_to_schema(record) for record in records]
 
 
 @router.post("", response_model=Project, status_code=201)
-def create_project(payload: ProjectCreate, request: Request, db: Session = Depends(get_db)) -> Project:
-    identity = getattr(request.state, "identity", None)
-    tenant_id = identity.tenant_id if identity is not None else ensure_legacy_tenant(db)
+def create_project(payload: ProjectCreate, db: Session = Depends(get_db)) -> Project:
+    tenant_id = ensure_legacy_tenant(db)
     record = ProjectRecord(**payload.model_dump(), tenant_id=tenant_id)
     db.add(record)
     db.flush()
-    if identity is not None:
-        db.add(ProjectMembershipRecord(project_id=str(record.id), user_id=identity.user_id, role="admin" if identity.role == "admin" else identity.role))
-        record_audit(db, tenant_id=tenant_id, user_id=identity.user_id, project_id=str(record.id), action="project.create", outcome="completed", detail={"name": record.name})
     db.commit()
     db.refresh(record)
     return project_to_schema(record)
@@ -77,7 +66,7 @@ def get_project(project_id: UUID, db: Session = Depends(get_db)) -> Project:
 
 
 @router.patch("/{project_id}", response_model=Project)
-def update_project(project_id: UUID, payload: ProjectUpdate, request: Request, db: Session = Depends(get_db)) -> Project:
+def update_project(project_id: UUID, payload: ProjectUpdate, db: Session = Depends(get_db)) -> Project:
     record = db.get(ProjectRecord, str(project_id))
     if record is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -85,16 +74,13 @@ def update_project(project_id: UUID, payload: ProjectUpdate, request: Request, d
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(record, field, value)
-    identity = getattr(request.state, "identity", None)
-    if identity is not None:
-        record_audit(db, tenant_id=identity.tenant_id, user_id=identity.user_id, project_id=str(record.id), action="project.update", outcome="completed", detail={"fields": sorted(updates)})
     db.commit()
     db.refresh(record)
     return project_to_schema(record)
 
 
 @router.delete("/{project_id}", status_code=204)
-def delete_project(project_id: UUID, request: Request, db: Session = Depends(get_db)) -> None:
+def delete_project(project_id: UUID, db: Session = Depends(get_db)) -> None:
     project_key = str(project_id)
     record = db.get(ProjectRecord, project_key)
     if record is None:
@@ -106,11 +92,6 @@ def delete_project(project_id: UUID, request: Request, db: Session = Depends(get
     db.execute(delete(FindingRecord).where(FindingRecord.project_id == project_key))
     db.execute(delete(ScanTaskRecord).where(ScanTaskRecord.project_id == project_key))
     db.execute(delete(ProjectModuleRecord).where(ProjectModuleRecord.project_id == project_key))
-    db.execute(delete(ProjectMembershipRecord).where(ProjectMembershipRecord.project_id == project_key))
-    db.execute(delete(AuditRecord).where(AuditRecord.project_id == project_key))
-    identity = getattr(request.state, "identity", None)
-    if identity is not None:
-        record_audit(db, tenant_id=identity.tenant_id, user_id=identity.user_id, project_id=None, action="project.delete", outcome="completed", detail={"project_id": project_key, "name": record.name})
     db.delete(record)
     db.commit()
 
