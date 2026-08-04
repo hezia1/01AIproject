@@ -348,9 +348,10 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
     try:
         parsed = parse_dependency_tree(source_path)
         python_environment = inspect_python_environment(source_path)
-        tool_scan = scan_with_syft_grype(source_path) if payload.enable_tool_scan else None
+        baseline_components = [*parsed.components, *python_environment.components]
+        tool_scan = scan_with_syft_grype(source_path, baseline_components) if payload.enable_tool_scan else None
         tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
-        parsed_components = merge_tool_components([*parsed.components, *python_environment.components], tool_scan)
+        parsed_components = merge_tool_components(baseline_components, tool_scan)
         policy_overrides = scoped_policy_overrides(db, payload.project_id)
         vulnerability_rules = effective_vulnerability_rules(load_vulnerability_rules(), policy_overrides)
         license_policies = effective_license_policies(load_license_policies(), policy_overrides)
@@ -863,9 +864,11 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         return ScaToolStatus(enabled=False, status="disabled")
     if tool_scan is None:
         return ScaToolStatus(enabled=True, status="failed", errors=["tool scan did not run"])
-    if not tool_scan.errors:
+    successful_tools = sum(status in {"success", "fallback"} for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
+    failed_tools = sum(status == "failed" for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
+    if failed_tools == 0:
         status = "success"
-    elif tool_scan.components or tool_scan.vulnerabilities:
+    elif successful_tools:
         status = "partial_failed"
     else:
         status = "failed"
@@ -873,9 +876,15 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         enabled=True,
         status=status,
         syft_component_count=len(tool_scan.components),
-        grype_vulnerability_count=len(tool_scan.vulnerabilities),
+        grype_vulnerability_count=sum(item.tool == "grype" for item in tool_scan.vulnerabilities),
         grype_input=tool_scan.grype_input,
         trivy_vulnerability_count=tool_scan.trivy_vulnerabilities,
+        syft_status=tool_scan.syft_status,
+        syft_detail=tool_scan.syft_detail,
+        grype_status=tool_scan.grype_status,
+        grype_detail=tool_scan.grype_detail,
+        trivy_status=tool_scan.trivy_status,
+        trivy_detail=tool_scan.trivy_detail,
         errors=tool_scan.errors,
     )
 

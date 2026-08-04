@@ -139,7 +139,7 @@ cd D:\project\PYproject\AI网安项目
 
 `--offline` 禁止在线情报访问；`--fail-on-block` 在门禁阻断时返回非零退出码。Git 忽略的 `artifacts/sca-offline/` 可放置 OSV、Grype、Trivy 的离线资源；数据导入、更新频率、签名校验与可信来源由部署环境负责。
 
-Syft/Grype/Trivy 是可选增强：需要 Docker、镜像和相应离线/在线漏洞库。工具不可用时基础解析扫描仍会完成，并在结果中显式标出降级。
+Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、镜像和相应离线/在线漏洞库。若 Syft 无法从锁文件或已安装目录识别组件，平台会用基础解析结果生成 CycloneDX SBOM 供 Grype 扫描；`artifacts/sca-offline/grype-cache/` 中已有数据库归档但尚未导入时，首次扫描会自动完成本地导入。离线 Grype 数据库最多允许使用 30 天，超过后会明确提示更新；任一工具不可用时基础解析扫描仍会完成，并分别展示 Syft、Grype、Trivy 状态和降级原因。
 
 ## 其他模块的接口与实际边界
 

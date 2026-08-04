@@ -281,7 +281,7 @@ class ScaScanRequest(BaseModel):
     project_id: UUID
     source_path: str = Field(min_length=1)
     clear_previous: bool = True
-    enable_tool_scan: bool = False
+    enable_tool_scan: bool = True
 
 
 class ScaToolStatus(BaseModel):
@@ -291,6 +291,12 @@ class ScaToolStatus(BaseModel):
     grype_vulnerability_count: int = 0
     grype_input: str | None = None
     trivy_vulnerability_count: int = 0
+    syft_status: str = "not_run"
+    syft_detail: str | None = None
+    grype_status: str = "not_run"
+    grype_detail: str | None = None
+    trivy_status: str = "not_run"
+    trivy_detail: str | None = None
     errors: list[str] = Field(default_factory=list)
 
 

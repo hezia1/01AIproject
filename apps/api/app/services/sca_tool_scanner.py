@@ -4,10 +4,11 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
+from uuid import uuid4
 
 from app.services.sca_parser import ParsedComponent
 
@@ -17,6 +18,8 @@ GRYPE_IMAGE = "anchore/grype:latest"
 TRIVY_IMAGE = "aquasec/trivy:latest"
 TOOL_TIMEOUT_SECONDS = 120
 HEALTH_TIMEOUT_SECONDS = 20
+DATABASE_IMPORT_TIMEOUT_SECONDS = 600
+GRYPE_OFFLINE_MAX_DATABASE_AGE = "720h"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,12 @@ class ToolScanResult:
     errors: list[str]
     grype_input: str | None = None
     trivy_vulnerabilities: int = 0
+    syft_status: str = "not_run"
+    syft_detail: str | None = None
+    grype_status: str = "not_run"
+    grype_detail: str | None = None
+    trivy_status: str = "not_run"
+    trivy_detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,7 +128,7 @@ def check_syft_grype_health() -> ToolHealthResult:
     checks.append(check_image("grype_image", GRYPE_IMAGE, "docker pull anchore/grype:latest"))
     checks.append(check_image("trivy_image", TRIVY_IMAGE, "docker pull aquasec/trivy:latest"))
 
-    grype_db = run_health_command(["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"])
+    grype_db = run_health_command(["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"])
     if grype_db[0] == 0:
         checks.append(ToolHealthCheck(name="grype_db", status="success", detail=grype_db[1]))
     else:
@@ -128,7 +137,7 @@ def check_syft_grype_health() -> ToolHealthResult:
                 name="grype_db",
                 status="warning",
                 detail=grype_db[1],
-                remediation="首次运行可能需要联网下载 Grype 漏洞库；如处于离线环境，需要提前准备 Grype DB。",
+                remediation=grype_database_remediation(),
             )
         )
 
@@ -166,19 +175,19 @@ def check_image(name: str, image: str, pull_command: str) -> ToolHealthCheck:
     )
 
 
-def run_health_command(command: list[str]) -> tuple[int, str]:
+def run_health_command(command: list[str], timeout: int = HEALTH_TIMEOUT_SECONDS) -> tuple[int, str]:
     try:
         completed = subprocess.run(
             command,
             shell=False,
             capture_output=True,
             text=True,
-            timeout=HEALTH_TIMEOUT_SECONDS,
+            timeout=timeout,
             encoding="utf-8",
             errors="replace",
         )
     except subprocess.TimeoutExpired:
-        return 124, f"timed out after {HEALTH_TIMEOUT_SECONDS}s"
+        return 124, f"timed out after {timeout}s"
     except OSError as exc:
         return 1, str(exc)
 
@@ -186,7 +195,90 @@ def run_health_command(command: list[str]) -> tuple[int, str]:
     return completed.returncode, output or f"exit code {completed.returncode}"
 
 
-def scan_with_syft_grype(source_path: str) -> ToolScanResult:
+def grype_database_archive() -> Path | None:
+    archives = sorted(grype_cache_dir().glob("grype-db-*.tar.zst"), key=lambda item: item.stat().st_mtime, reverse=True)
+    return archives[0] if archives else None
+
+
+def grype_database_remediation() -> str:
+    archive = grype_database_archive()
+    if archive:
+        return f"已找到离线数据库 {archive.name}，执行增强扫描时会自动导入；首次导入可能需要数分钟。"
+    return "未找到 Grype 离线数据库；请将数据库归档放入 artifacts/sca-offline/grype-cache。"
+
+
+def ensure_grype_database() -> str | None:
+    status_command = ["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"]
+    status = run_health_command(status_command)
+    if status[0] == 0:
+        return None
+    archive = grype_database_archive()
+    if archive is None:
+        return f"Grype 离线数据库不可用：{status[1]}；未找到可导入的数据库归档"
+    import_result = run_health_command(
+        ["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "import", f"/cache/{archive.name}"],
+        timeout=DATABASE_IMPORT_TIMEOUT_SECONDS,
+    )
+    if import_result[0] != 0:
+        return f"Grype 离线数据库导入失败：{import_result[1]}"
+    verified = run_health_command(status_command)
+    if verified[0] != 0:
+        return f"Grype 离线数据库导入后仍不可用：{verified[1]}"
+    return None
+
+
+def build_platform_cyclonedx(components: list[ParsedComponent]) -> dict:
+    payload_components: list[dict[str, object]] = []
+    for component in components:
+        item: dict[str, object] = {
+            "type": "library",
+            "name": component.name,
+            "bom-ref": parsed_component_ref(component),
+            "properties": [
+                {"name": "sca:source", "value": "platform-parser"},
+                {"name": "sca:dependency_type", "value": component.dependency_type},
+            ],
+        }
+        if component.version:
+            item["version"] = component.version
+        purl = parsed_component_purl(component)
+        if purl:
+            item["purl"] = purl
+        payload_components.append(item)
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "version": 1,
+        "metadata": {"component": {"type": "application", "name": "local-project", "version": "scan"}},
+        "components": payload_components,
+    }
+
+
+def parsed_component_ref(component: ParsedComponent) -> str:
+    return f"pkg:{component.ecosystem}:{component.name}:{component.version or 'unknown'}"
+
+
+def parsed_component_purl(component: ParsedComponent) -> str | None:
+    if not component.version:
+        return None
+    package_type = {
+        "python": "pypi",
+        "pip": "pypi",
+        "node": "npm",
+        "javascript": "npm",
+        "golang": "golang",
+        "go": "golang",
+    }.get(component.ecosystem.lower(), component.ecosystem.lower())
+    name = component.name
+    if package_type == "maven" and ":" in name:
+        namespace, package_name = name.split(":", 1)
+        encoded_name = f"{quote(namespace, safe='')}/{quote(package_name, safe='')}"
+    else:
+        encoded_name = quote(name, safe="/")
+    return f"pkg:{package_type}/{encoded_name}@{quote(component.version, safe='.-_+')}"
+
+
+def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedComponent] | None = None) -> ToolScanResult:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         return ToolScanResult(components=[], vulnerabilities=[], errors=["source_path must be an existing directory"])
@@ -198,24 +290,51 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
     grype_vulnerabilities: list[ToolVulnerability] = []
     trivy_vulnerabilities: list[ToolVulnerability] = []
     grype_input: str | None = None
+    syft_status = "not_run"
+    syft_detail: str | None = None
+    grype_status = "not_run"
+    grype_detail: str | None = None
+    trivy_status = "not_run"
+    trivy_detail: str | None = None
 
     syft_payload, syft_error = run_tool_json(root, SYFT_IMAGE, ["dir:/workspace", "-o", "cyclonedx-json"])
     if syft_error:
         errors.append(f"Syft failed: {syft_error}")
+        syft_status = "failed"
+        syft_detail = syft_error
     elif syft_payload:
         syft_components = parse_syft_cyclonedx(syft_payload)
+        if syft_components:
+            syft_status = "success"
+            syft_detail = f"Syft 识别到 {len(syft_components)} 个组件"
+        else:
+            syft_status = "fallback"
+            syft_detail = "Syft 未从锁文件或已安装目录识别到组件，已使用平台基础组件生成 SBOM"
 
-    grype_payload, grype_error, grype_input = run_grype(root, syft_payload)
+    grype_sbom = syft_payload if syft_components else build_platform_cyclonedx(fallback_components or [])
+    database_error = ensure_grype_database()
+    if database_error:
+        grype_payload, grype_error, grype_input = None, database_error, "platform-sbom" if not syft_components else "syft-sbom"
+    else:
+        grype_payload, grype_error, grype_input = run_grype(root, grype_sbom, "platform-sbom" if not syft_components else "syft-sbom")
     if grype_error:
         errors.append(f"Grype failed: {grype_error}")
+        grype_status = "failed"
+        grype_detail = grype_error
     elif grype_payload:
         grype_vulnerabilities = parse_grype_json(grype_payload)
+        grype_status = "success"
+        grype_detail = f"Grype 扫描完成，发现 {len(grype_vulnerabilities)} 条漏洞匹配"
 
     trivy_payload, trivy_error = run_trivy(root)
     if trivy_error:
         errors.append(f"Trivy failed: {trivy_error}")
+        trivy_status = "failed"
+        trivy_detail = trivy_error
     elif trivy_payload:
         trivy_vulnerabilities = parse_trivy_json(trivy_payload)
+        trivy_status = "success"
+        trivy_detail = f"Trivy 扫描完成，发现 {len(trivy_vulnerabilities)} 条漏洞匹配"
 
     return ToolScanResult(
         components=syft_components,
@@ -223,24 +342,30 @@ def scan_with_syft_grype(source_path: str) -> ToolScanResult:
         errors=errors,
         grype_input=grype_input,
         trivy_vulnerabilities=len(trivy_vulnerabilities),
+        syft_status=syft_status,
+        syft_detail=syft_detail,
+        grype_status=grype_status,
+        grype_detail=grype_detail,
+        trivy_status=trivy_status,
+        trivy_detail=trivy_detail,
     )
 
 
-def run_grype(root: Path, syft_payload: dict | None) -> tuple[dict | None, str | None, str]:
-    if syft_payload:
-        with temporary_sbom_dir(root) as temp_dir:
-            sbom_path = Path(temp_dir) / "syft.cdx.json"
-            sbom_path.write_text(json.dumps(syft_payload), encoding="utf-8")
+def run_grype(root: Path, sbom_payload: dict | None, input_name: str = "syft-sbom") -> tuple[dict | None, str | None, str]:
+    if sbom_payload:
+        with temporary_sbom_file() as sbom_path:
+            sbom_path.write_text(json.dumps(sbom_payload), encoding="utf-8")
+            container_sbom_path = "/cache/" + sbom_path.relative_to(grype_cache_dir()).as_posix()
             payload, error = run_tool_json(
                 root,
                 GRYPE_IMAGE,
-                ["sbom:/tmp/sca/syft.cdx.json", "-o", "json"],
-                container_env={"XDG_CACHE_HOME": "/cache", "GRYPE_DB_AUTO_UPDATE": "false"},
-                extra_mounts=[(Path(temp_dir), "/tmp/sca"), (grype_cache_dir(), "/cache")],
+                [f"sbom:{container_sbom_path}", "-o", "json"],
+                container_env={"XDG_CACHE_HOME": "/cache", "GRYPE_DB_AUTO_UPDATE": "false", "GRYPE_DB_MAX_ALLOWED_BUILT_AGE": GRYPE_OFFLINE_MAX_DATABASE_AGE},
+                extra_mounts=[(grype_cache_dir(), "/cache")],
             )
-            return payload, error, "syft-sbom"
+            return payload, error, input_name
 
-    payload, error = run_tool_json(root, GRYPE_IMAGE, ["dir:/workspace", "-o", "json"], extra_mounts=[(grype_cache_dir(), "/cache")], container_env={"XDG_CACHE_HOME": "/cache", "GRYPE_DB_AUTO_UPDATE": "false"})
+    payload, error = run_tool_json(root, GRYPE_IMAGE, ["dir:/workspace", "-o", "json"], extra_mounts=[(grype_cache_dir(), "/cache")], container_env={"XDG_CACHE_HOME": "/cache", "GRYPE_DB_AUTO_UPDATE": "false", "GRYPE_DB_MAX_ALLOWED_BUILT_AGE": GRYPE_OFFLINE_MAX_DATABASE_AGE})
     return payload, error, "directory"
 
 
@@ -256,11 +381,15 @@ def run_trivy(root: Path) -> tuple[dict | None, str | None]:
     )
 
 
-def temporary_sbom_dir(root: Path) -> tempfile.TemporaryDirectory:
+@contextmanager
+def temporary_sbom_file():
+    runtime_dir = grype_cache_dir() / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    path = runtime_dir / f"sca-sbom-{uuid4().hex}.cdx.json"
     try:
-        return tempfile.TemporaryDirectory(prefix="sca-sbom-", dir=str(root.parent))
-    except OSError:
-        return tempfile.TemporaryDirectory(prefix="sca-sbom-")
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def run_tool_json(
