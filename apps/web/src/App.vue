@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
-import { Activity, BookOpen, Boxes, Bug, FlaskConical, FolderKanban, GitBranch, Network, Play, ShieldCheck } from "lucide-vue-next";
+import { BookOpen, FolderKanban, GitBranch, Play, ShieldCheck } from "lucide-vue-next";
 import { usePlatformStore } from "./stores/platform";
 
 const route = useRoute();
@@ -12,7 +12,6 @@ const nav = [
   ["projects", "项目管理", FolderKanban], ["assets", "项目资产", GitBranch], ["detection", "安全检测", Play],
   ["governance", "治理总览", ShieldCheck], ["knowledge", "安全知识中枢", BookOpen],
 ];
-const modules = [["sca", "SCA", Boxes], ["sast", "SAST", Bug], ["agent", "AGENT", Network], ["dast", "DAST", Activity], ["sandbox", "SANDBOX", FlaskConical]];
 onMounted(() => store.bootstrap());
 </script>
 
@@ -22,8 +21,6 @@ onMounted(() => store.bootstrap());
       <div class="brand"><ShieldCheck :size="26" /><div><strong>AI 安全平台</strong><span>Application Security</span></div></div>
       <nav class="nav-list">
         <RouterLink v-for="[key, label, icon] in nav" :key="String(key)" class="nav-item" :to="`/${key}`"><component :is="icon" :size="18" />{{ label }}</RouterLink>
-        <div class="nav-section-label">模块工作台</div>
-        <RouterLink v-for="[key, label, icon] in modules" :key="String(key)" class="nav-item" :to="`/${key}`"><component :is="icon" :size="18" />{{ label }}</RouterLink>
       </nav>
     </aside>
     <section class="workspace">

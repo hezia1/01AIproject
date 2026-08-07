@@ -38,6 +38,7 @@ export const usePlatformStore = defineStore("platform", () => {
   const runCommand = ref("python agent_runner.py");
   const sandboxImage = ref("python:3.12-slim");
   const scaEnhanced = ref(true);
+  const executionSteps = ref<Entity[]>([]);
   const loading = ref(false);
   const status = ref("正在连接 API...");
 
@@ -169,7 +170,13 @@ export const usePlatformStore = defineStore("platform", () => {
   }
 
   async function runUnified() {
-    for (const key of ["sca", "sast", "agent"] as const) if (enabled(key)) await scan(key);
+    const selected = (["sca", "sast", "agent", "dast", "sandbox"] as ModuleKey[]).filter(enabled);
+    executionSteps.value = selected.map((module) => ({ module, status: "waiting", detail: "等待执行" }));
+    for (const key of ["sca", "sast", "agent"] as const) if (enabled(key)) {
+      const step = executionSteps.value.find((item) => item.module === key); if (step) { step.status = "running"; step.detail = "正在扫描"; }
+      await scan(key); if (step) { step.status = status.value.includes("失败") ? "failed" : "completed"; step.detail = status.value; }
+    }
+    for (const key of ["dast", "sandbox"] as const) if (enabled(key)) { const step = executionSteps.value.find((item) => item.module === key); if (step) { step.status = "skipped"; step.detail = "请在治理总览中选择关联风险后执行"; } }
     status.value = "统一安全检测已执行完成";
   }
 
@@ -179,5 +186,5 @@ export const usePlatformStore = defineStore("platform", () => {
   async function exportScaReport() { if (!project.value) return; const query = scaScanId.value ? `?scan_task_id=${scaScanId.value}` : ""; await download(`/sca/projects/${project.value.id}/report.html${query}`, `${project.value.name}-sca-report.html`, "text/html"); }
   async function runSastReview() { if (!project.value) return; loading.value = true; try { await api(`/sast/projects/${project.value.id}/agent-review`, { method: "POST" }); await refreshData(); status.value = "SAST Sub-agent 复核完成"; } catch (error) { status.value = `复核失败：${errorText(error)}`; } finally { loading.value = false; } }
 
-  return { modules, projects, project, enabledModules, assetProbe, components, scaHistory, scaScanId, dependencyGraph, scaDiff, findings, validations, evidence, sandboxTemplates, summary, evidenceGraph, retests, sourcePath, targetUrl, runCommand, sandboxImage, scaEnhanced, loading, status, counts, enabled, bootstrap, selectProject, refreshContext, refreshData, createProject, updateProject, deleteProject, toggleModule, scan, runUnified, selectScaSnapshot, updateFinding, exportSbom, exportScaReport, runSastReview };
+  return { modules, projects, project, enabledModules, assetProbe, components, scaHistory, scaScanId, dependencyGraph, scaDiff, findings, validations, evidence, sandboxTemplates, summary, evidenceGraph, retests, sourcePath, targetUrl, runCommand, sandboxImage, scaEnhanced, executionSteps, loading, status, counts, enabled, bootstrap, selectProject, refreshContext, refreshData, createProject, updateProject, deleteProject, toggleModule, scan, runUnified, selectScaSnapshot, updateFinding, exportSbom, exportScaReport, runSastReview };
 });
