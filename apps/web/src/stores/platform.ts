@@ -34,11 +34,17 @@ export const usePlatformStore = defineStore("platform", () => {
   const evidenceGraph = ref<Entity | null>(null);
   const retests = ref<Record<string, Entity | null>>({ sca: null, sast: null, agent: null });
   const sourcePath = ref("D:\\project\\PYproject\\AI网安项目");
+  const scaPath = ref(sourcePath.value);
+  const sastPath = ref(sourcePath.value);
+  const agentPath = ref(sourcePath.value);
   const targetUrl = ref("https://example.com/login");
   const runCommand = ref("python agent_runner.py");
   const sandboxImage = ref("python:3.12-slim");
   const scaEnhanced = ref(true);
   const executionSteps = ref<Entity[]>([]);
+  const moduleLoading = ref<Record<Exclude<ModuleKey, "aspm">, boolean>>({ sca: false, sast: false, agent: false, dast: false, sandbox: false });
+  const moduleStatus = ref<Record<Exclude<ModuleKey, "aspm">, string>>({ sca: "尚未执行", sast: "尚未执行", agent: "尚未执行", dast: "尚未执行", sandbox: "尚未执行" });
+  const unifiedLoading = ref(false);
   const loading = ref(false);
   const status = ref("正在连接 API...");
 
@@ -76,6 +82,9 @@ export const usePlatformStore = defineStore("platform", () => {
   async function selectProject(next: Entity) {
     project.value = next;
     sourcePath.value = next.source_path || sourcePath.value;
+    scaPath.value = sourcePath.value;
+    sastPath.value = sourcePath.value;
+    agentPath.value = sourcePath.value;
     targetUrl.value = next.runtime_url || next.api_base_url || targetUrl.value;
     runCommand.value = next.sandbox_command || runCommand.value;
     sandboxImage.value = next.sandbox_image || sandboxImage.value;
@@ -115,6 +124,65 @@ export const usePlatformStore = defineStore("platform", () => {
     [components.value, dependencyGraph.value, scaDiff.value, findings.value, validations.value, evidence.value, sandboxTemplates.value, summary.value, evidenceGraph.value] = values;
     const comparisons = await Promise.all(["SCA", "SAST", "AGENT"].map((source) => api<Entity>(`/findings/projects/${projectId}/retest-comparison?source=${source}`).catch(() => null)));
     retests.value = { sca: comparisons[0], sast: comparisons[1], agent: comparisons[2] };
+    moduleStatus.value = {
+      sca: history.length ? (history[0]?.status === "completed" ? "已完成" : String(history[0]?.status ?? "已有记录")) : "尚未执行",
+      sast: findings.value.some((item) => item.source === "SAST") ? "已完成" : "尚未执行",
+      agent: findings.value.some((item) => item.source === "AGENT") ? "已完成" : "尚未执行",
+      dast: validations.value.length ? "已完成" : "尚未执行",
+      sandbox: evidence.value.length ? "已完成" : "尚未执行",
+    };
+  }
+
+  async function refreshSharedGovernance(projectId: string) {
+    const [summaryData, graphData] = await Promise.all([
+      api<Entity>(`/aspm/projects/${projectId}/summary`).catch(() => summary.value),
+      api<Entity>(`/aspm/projects/${projectId}/evidence-graph`).catch(() => evidenceGraph.value),
+    ]);
+    summary.value = summaryData;
+    evidenceGraph.value = graphData;
+  }
+
+  async function refreshModuleData(kind: Exclude<ModuleKey, "aspm">, projectId = project.value?.id, scanId: string | null = scaScanId.value) {
+    if (!projectId) return;
+    if (kind === "sca") {
+      const history = await api<Entity[]>(`/sca/projects/${projectId}/scan-history`).catch(() => scaHistory.value);
+      const effective = scanId ?? history[0]?.scan_task_id ?? null;
+      const query = effective ? `?scan_task_id=${effective}` : "";
+      const diffQuery = effective ? `?target_scan_id=${effective}` : "";
+      const [nextComponents, graph, diff, allFindings, comparison] = await Promise.all([
+        api<Entity[]>(`/sca/projects/${projectId}/components${query}`).catch(() => components.value),
+        api<Entity>(`/sca/projects/${projectId}/dependency-graph${query}`).catch(() => dependencyGraph.value),
+        api<Entity>(`/sca/projects/${projectId}/scan-diff${diffQuery}`).catch(() => scaDiff.value),
+        api<Entity[]>(`/findings?project_id=${projectId}`).catch(() => findings.value),
+        api<Entity>(`/findings/projects/${projectId}/retest-comparison?source=SCA`).catch(() => retests.value.sca),
+      ]);
+      scaHistory.value = history; scaScanId.value = effective; components.value = nextComponents; dependencyGraph.value = graph; scaDiff.value = diff;
+      findings.value = [...findings.value.filter((item) => item.source !== "SCA"), ...allFindings.filter((item) => item.source === "SCA")];
+      retests.value = { ...retests.value, sca: comparison };
+    } else if (kind === "sast" || kind === "agent") {
+      const source = kind.toUpperCase();
+      const [allFindings, comparison] = await Promise.all([
+        api<Entity[]>(`/findings?project_id=${projectId}`).catch(() => findings.value),
+        api<Entity>(`/findings/projects/${projectId}/retest-comparison?source=${source}`).catch(() => retests.value[kind]),
+      ]);
+      findings.value = [...findings.value.filter((item) => item.source !== source), ...allFindings.filter((item) => item.source === source)];
+      retests.value = { ...retests.value, [kind]: comparison };
+    } else if (kind === "dast") {
+      validations.value = await api<Entity[]>(`/dast/projects/${projectId}/validations`).catch(() => validations.value);
+    } else if (kind === "sandbox") {
+      [evidence.value, sandboxTemplates.value] = await Promise.all([
+        api<Entity[]>(`/sandbox/projects/${projectId}/evidence`).catch(() => evidence.value),
+        api<Entity[]>(`/sandbox/projects/${projectId}/templates`).catch(() => sandboxTemplates.value),
+      ]);
+    }
+    await refreshSharedGovernance(projectId);
+  }
+
+  function setUnifiedSourcePath(value: string) {
+    sourcePath.value = value;
+    scaPath.value = value;
+    sastPath.value = value;
+    agentPath.value = value;
   }
 
   async function createProject(draft: Entity) {
@@ -158,33 +226,41 @@ export const usePlatformStore = defineStore("platform", () => {
 
   async function scan(kind: "sca" | "sast" | "agent") {
     if (!project.value) return;
-    loading.value = true;
+    moduleLoading.value[kind] = true;
+    moduleStatus.value[kind] = "执行中";
     try {
-      const body: Entity = { project_id: project.value.id, source_path: sourcePath.value, clear_previous: false };
+      const paths = { sca: scaPath.value, sast: sastPath.value, agent: agentPath.value };
+      const body: Entity = { project_id: project.value.id, source_path: paths[kind], clear_previous: false };
       if (kind === "sca") body.enable_tool_scan = scaEnhanced.value;
       const result = await api<Entity>(`/${kind}/scan`, { method: "POST", body: JSON.stringify(body) });
       if (kind === "sca" && result.scan_task_id) scaScanId.value = result.scan_task_id;
-      await refreshContext(project.value.id, scaScanId.value); status.value = `${kind.toUpperCase()} 扫描完成`;
-    } catch (error) { status.value = `${kind.toUpperCase()} 扫描失败：${errorText(error)}`; }
-    finally { loading.value = false; }
+      await refreshModuleData(kind, project.value.id, scaScanId.value);
+      moduleStatus.value[kind] = "已完成";
+      status.value = `${kind.toUpperCase()} 扫描完成；其他模块未执行`;
+    } catch (error) {
+      moduleStatus.value[kind] = `失败：${errorText(error)}`;
+      status.value = `${kind.toUpperCase()} 扫描失败：${errorText(error)}`;
+    } finally { moduleLoading.value[kind] = false; }
   }
 
   async function runUnified() {
+    unifiedLoading.value = true;
     const selected = (["sca", "sast", "agent", "dast", "sandbox"] as ModuleKey[]).filter(enabled);
     executionSteps.value = selected.map((module) => ({ module, status: "waiting", detail: "等待执行" }));
     for (const key of ["sca", "sast", "agent"] as const) if (enabled(key)) {
       const step = executionSteps.value.find((item) => item.module === key); if (step) { step.status = "running"; step.detail = "正在扫描"; }
-      await scan(key); if (step) { step.status = status.value.includes("失败") ? "failed" : "completed"; step.detail = status.value; }
+      await scan(key); if (step) { step.status = moduleStatus.value[key].startsWith("失败") ? "failed" : "completed"; step.detail = moduleStatus.value[key]; }
     }
     for (const key of ["dast", "sandbox"] as const) if (enabled(key)) { const step = executionSteps.value.find((item) => item.module === key); if (step) { step.status = "skipped"; step.detail = "请在治理总览中选择关联风险后执行"; } }
     status.value = "统一安全检测已执行完成";
+    unifiedLoading.value = false;
   }
 
-  async function selectScaSnapshot(id: string) { scaScanId.value = id; await refreshData(project.value?.id, id); status.value = "SCA 历史快照已切换"; }
+  async function selectScaSnapshot(id: string) { scaScanId.value = id; await refreshModuleData("sca", project.value?.id, id); status.value = "SCA 历史快照已切换；其他模块数据未刷新"; }
   async function updateFinding(id: string, patch: Entity) { await api(`/findings/${id}/governance`, { method: "PATCH", body: JSON.stringify(patch) }); await refreshData(); status.value = "整改信息已更新"; }
   async function exportSbom(format: "cyclonedx" | "spdx") { if (!project.value) return; const suffix = scaScanId.value ? `&scan_task_id=${scaScanId.value}` : ""; await download(`/sca/projects/${project.value.id}/sbom?format=${format}${suffix}`, `${project.value.name}-${format}-sbom.json`); }
   async function exportScaReport() { if (!project.value) return; const query = scaScanId.value ? `?scan_task_id=${scaScanId.value}` : ""; await download(`/sca/projects/${project.value.id}/report.html${query}`, `${project.value.name}-sca-report.html`, "text/html"); }
-  async function runSastReview() { if (!project.value) return; loading.value = true; try { await api(`/sast/projects/${project.value.id}/agent-review`, { method: "POST" }); await refreshData(); status.value = "SAST Sub-agent 复核完成"; } catch (error) { status.value = `复核失败：${errorText(error)}`; } finally { loading.value = false; } }
+  async function runSastReview() { if (!project.value) return; moduleLoading.value.sast = true; try { await api(`/sast/projects/${project.value.id}/agent-review`, { method: "POST" }); await refreshModuleData("sast"); moduleStatus.value.sast = "复核完成"; status.value = "SAST Sub-agent 复核完成；其他模块未执行"; } catch (error) { moduleStatus.value.sast = `复核失败：${errorText(error)}`; status.value = moduleStatus.value.sast; } finally { moduleLoading.value.sast = false; } }
 
-  return { modules, projects, project, enabledModules, assetProbe, components, scaHistory, scaScanId, dependencyGraph, scaDiff, findings, validations, evidence, sandboxTemplates, summary, evidenceGraph, retests, sourcePath, targetUrl, runCommand, sandboxImage, scaEnhanced, executionSteps, loading, status, counts, enabled, bootstrap, selectProject, refreshContext, refreshData, createProject, updateProject, deleteProject, toggleModule, scan, runUnified, selectScaSnapshot, updateFinding, exportSbom, exportScaReport, runSastReview };
+  return { modules, projects, project, enabledModules, assetProbe, components, scaHistory, scaScanId, dependencyGraph, scaDiff, findings, validations, evidence, sandboxTemplates, summary, evidenceGraph, retests, sourcePath, scaPath, sastPath, agentPath, targetUrl, runCommand, sandboxImage, scaEnhanced, executionSteps, moduleLoading, moduleStatus, unifiedLoading, loading, status, counts, enabled, bootstrap, selectProject, refreshContext, refreshData, refreshModuleData, setUnifiedSourcePath, createProject, updateProject, deleteProject, toggleModule, scan, runUnified, selectScaSnapshot, updateFinding, exportSbom, exportScaReport, runSastReview };
 });

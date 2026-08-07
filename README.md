@@ -8,6 +8,7 @@
 
 - 前端已从 React 19 整体迁移到 Vue 3 + TypeScript + Vite，使用 Vue Router 管理页面路由、Pinia 管理项目与安全数据状态。
 - Vue 页面以迁移前提交 `2d43a7c` 为视觉与交互基准：保留原五入口侧栏、项目资产、安全能力接入、ASPM 闭环、知识中枢及各模块治理工作台的原有结构，不因框架迁移重新设计界面。
+- SCA、SAST、AGENT、DAST、SANDBOX 使用独立输入与运行状态；单模块操作只调用并刷新本模块，一键执行是唯一主动编排多个模块的入口。ASPM 汇总和证据图会在结果变化后只读刷新，但这不代表其他模块被执行。
 - 项目管理、资产、安全检测、治理总览、知识中枢及 SCA、SAST、AGENT、DAST、SANDBOX、ASPM/任务入口均已迁移；FastAPI 接口和 PostgreSQL 数据结构不变。
 - SCA 仍默认启用 Syft/Grype 增强扫描，保留扫描快照、复测口径、SBOM/报告、离线情报、风险例外和 VEX；所有时间统一按北京时间展示。
 - 旧 React 入口与依赖已删除，生产构建使用 `vue-tsc --noEmit && vite build`。
