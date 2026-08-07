@@ -2,7 +2,14 @@
 
 本项目实现 `01.pptx` 所描述的本地安全治理平台：围绕一个已存在的项目，接入本地源码、运行地址与运行入口，提供 SCA、SAST、AGENT、DAST、SANDBOX 和 ASPM 六个模块的扫描、验证、证据关联与治理汇总。
 
-本文档反映 **2026-08-03** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
+本文档反映 **2026-08-07** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 Vue 控制台开放；没有把计划能力写成已完成能力。
+
+## 2026-08-07 前端整体迁移
+
+- 前端已从 React 19 整体迁移到 Vue 3 + TypeScript + Vite，使用 Vue Router 管理页面路由、Pinia 管理项目与安全数据状态。
+- 项目管理、资产、安全检测、治理总览、知识中枢及 SCA、SAST、AGENT、DAST、SANDBOX、ASPM/任务入口均已迁移；FastAPI 接口和 PostgreSQL 数据结构不变。
+- SCA 仍默认启用 Syft/Grype 增强扫描，保留扫描快照、复测口径、SBOM/报告、离线情报、风险例外和 VEX；所有时间统一按北京时间展示。
+- 旧 React 入口与依赖已删除，生产构建使用 `vue-tsc --noEmit && vite build`。
 
 ## 2026-08-03 SAST 与交付更新（本节覆盖下方较早的状态描述）
 
@@ -19,12 +26,12 @@
 ## 当前架构
 
 - `apps/api/`：FastAPI 后端，提供项目、模块、扫描、Finding、证据和治理 API。
-- `apps/web/`：React + Vite 前端控制台；功能目前集中在 `src/main.tsx`。
+- `apps/web/`：Vue 3 + TypeScript + Vite 前端控制台；路由、Pinia 状态、API 和业务页面分别位于 `src/router.ts`、`src/stores/`、`src/api.ts` 与 `src/views/`。
 - `infra/`：本地 PostgreSQL / Redis Docker Compose 配置。
 - `.github/workflows/`：SCA 本地 CI 与部署 API 门禁示例。
 - `scripts/sca_ci.py`、`scripts/sast_ci.py`：无需启动平台 API 的本地 SCA/SAST CLI，支持 JSON、SARIF 与退出码。
 
-运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。路由层处理接口和参数，服务层处理扫描、证据关联、图谱、复测、门禁和导出。
+运行链路：`Vue 前端 → /api → FastAPI routers → services → PostgreSQL`。路由层处理接口和参数，服务层处理扫描、证据关联、图谱、复测、门禁和导出。
 
 ## 本地启动
 

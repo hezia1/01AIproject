@@ -3232,3 +3232,25 @@ th {
     grid-column: 2;
   }
 }
+
+.nav-item.router-link-active { background: #e8efff; color: #2448c8; }
+.nav-section-label { margin: 18px 12px 6px; color: #8290a8; font-size: 12px; letter-spacing: .08em; }
+.stack-layout { display: grid; gap: 20px; }
+.toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.toolbar label { display: grid; gap: 6px; flex: 1 1 260px; }
+.check-control { display: inline-flex !important; grid-auto-flow: column; justify-content: start; align-items: center; flex: 0 1 auto !important; }
+.check-control input { width: auto; }
+.split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.json-preview { max-height: 440px; overflow: auto; padding: 16px; border-radius: 10px; background: #f5f7fb; white-space: pre-wrap; overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; }
+.table-wrap table { width: 100%; border-collapse: collapse; }
+.table-wrap th, .table-wrap td { padding: 12px 10px; border-bottom: 1px solid #e4e9f2; text-align: left; vertical-align: top; }
+.empty-row { text-align: center !important; color: #75829a; }
+.chip-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.filter-chip { border: 1px solid #d4dceb; border-radius: 999px; padding: 7px 12px; background: white; }
+.filter-chip.active { background: #e8efff; border-color: #5879e8; color: #2448c8; }
+.helper-text { color: #65748f; }
+.governance-list details, details.panel { margin-top: 10px; }
+details.panel > summary { cursor: pointer; font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+textarea { min-height: 90px; resize: vertical; }
+@media (max-width: 900px) { .split-grid { grid-template-columns: 1fr; } }
