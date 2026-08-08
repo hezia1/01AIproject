@@ -5,6 +5,8 @@ import "./styles.css";
 
 type ViewKey = "projects" | "assets" | "detection" | "governance" | "knowledge" | "modules" | "sca" | "sast" | "agent" | "dast" | "sandbox" | "tasks" | "aspm";
 type ModuleKey = "sast" | "sca" | "agent" | "dast" | "sandbox" | "aspm";
+type ExecutableModuleKey = Exclude<ModuleKey, "aspm">;
+type ModuleLoadingState = Record<ExecutableModuleKey, boolean>;
 type Severity = "critical" | "high" | "medium" | "low" | "info";
 type FindingStatus = "open" | "pending" | "confirmed" | "fixing" | "fixed" | "accepted_risk" | "false_positive" | "retest" | "closed";
 
@@ -72,6 +74,7 @@ type ReportRow = { id: string; title: string; subtitle: string; summary: string;
 const API_BASE = "http://127.0.0.1:8000/api";
 const DEFAULT_ENABLED_MODULES: ModuleKey[] = ["sast", "sca", "aspm"];
 const OPTIONAL_MODULES: ModuleKey[] = ["sast", "sca", "agent", "dast", "sandbox"];
+const EMPTY_MODULE_LOADING: ModuleLoadingState = { sca: false, sast: false, agent: false, dast: false, sandbox: false };
 const DEFAULT_SOURCE_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\sca-sample";
 const DEFAULT_SAST_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\sast-sample";
 const DEFAULT_AGENT_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\agent-sample";
@@ -132,7 +135,27 @@ function App() {
   const [retestComparisons, setRetestComparisons] = useState<Record<"sca" | "sast" | "agent", FindingRetestComparison | null>>({ sca: null, sast: null, agent: null });
   const [status, setStatus] = useState("正在连接 API...");
   const [loading, setLoading] = useState(false);
+  const [unifiedLoading, setUnifiedLoading] = useState(false);
+  const [moduleLoading, setModuleLoading] = useState<ModuleLoadingState>(EMPTY_MODULE_LOADING);
+  const unifiedLoadingRef = React.useRef(false);
+  const moduleLoadingRef = React.useRef<ModuleLoadingState>({ ...EMPTY_MODULE_LOADING });
   const [savingKey, setSavingKey] = useState<ModuleKey | null>(null);
+  const anyModuleLoading = Object.values(moduleLoading).some(Boolean);
+  const projectControlsLoading = loading || unifiedLoading || anyModuleLoading;
+
+  function setModuleBusy(moduleKey: ExecutableModuleKey, busy: boolean) {
+    moduleLoadingRef.current = { ...moduleLoadingRef.current, [moduleKey]: busy };
+    setModuleLoading((current) => ({ ...current, [moduleKey]: busy }));
+  }
+
+  function setUnifiedBusy(busy: boolean) {
+    unifiedLoadingRef.current = busy;
+    setUnifiedLoading(busy);
+  }
+
+  function isAnyModuleBusy() {
+    return Object.values(moduleLoadingRef.current).some(Boolean);
+  }
 
   useEffect(() => { void bootstrap(); }, []);
   useEffect(() => {
@@ -321,6 +344,66 @@ function App() {
     setRetestComparisons({ sca: scaRetest, sast: sastRetest, agent: agentRetest });
   }
 
+  async function refreshGovernanceOverview(projectId: string) {
+    const [summaryData, evidenceGraphData] = await Promise.all([
+      request<AspmSummary>(`/aspm/projects/${projectId}/summary`),
+      request<EvidenceGraph>(`/aspm/projects/${projectId}/evidence-graph`),
+    ]);
+    setSummary(summaryData);
+    setEvidenceGraph(evidenceGraphData);
+  }
+
+  async function refreshSingleModuleData(moduleKey: ExecutableModuleKey, projectId: string, scaScanId: string | null = selectedScaScanId) {
+    if (moduleKey === "sca") {
+      const historyData = await request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`).catch(() => []);
+      const effectiveScaScanId = scaScanId ?? historyData[0]?.scan_task_id ?? null;
+      const scaQuery = effectiveScaScanId ? `?scan_task_id=${effectiveScaScanId}` : "";
+      const diffQuery = effectiveScaScanId ? `?target_scan_id=${effectiveScaScanId}` : "";
+      const [componentData, graphData, diffData, findingData, retestData] = await Promise.all([
+        request<Component[]>(`/sca/projects/${projectId}/components${scaQuery}`),
+        request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph${scaQuery}`).catch(() => null),
+        request<ScaScanDiff>(`/sca/projects/${projectId}/scan-diff${diffQuery}`).catch(() => null),
+        request<Finding[]>(`/findings?project_id=${projectId}`),
+        request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SCA`).catch(() => null),
+      ]);
+      setScaScanHistory(historyData);
+      setSelectedScaScanId(effectiveScaScanId);
+      setComponents(componentData);
+      setDependencyGraph(graphData);
+      setScaScanDiff(diffData);
+      setFindings((current) => [...current.filter((item) => item.source !== "SCA"), ...findingData.filter((item) => item.source === "SCA")]);
+      setRetestComparisons((current) => ({ ...current, sca: retestData }));
+      await refreshGovernanceOverview(projectId);
+      return;
+    }
+
+    if (moduleKey === "sast" || moduleKey === "agent") {
+      const source = moduleKey.toUpperCase();
+      const [findingData, retestData] = await Promise.all([
+        request<Finding[]>(`/findings?project_id=${projectId}`),
+        request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=${source}`).catch(() => null),
+      ]);
+      setFindings((current) => [...current.filter((item) => item.source !== source), ...findingData.filter((item) => item.source === source)]);
+      setRetestComparisons((current) => ({ ...current, [moduleKey]: retestData }));
+      await refreshGovernanceOverview(projectId);
+      return;
+    }
+
+    if (moduleKey === "dast") {
+      setValidations(await request<DastValidation[]>(`/dast/projects/${projectId}/validations`));
+      await refreshGovernanceOverview(projectId);
+      return;
+    }
+
+    const [evidenceData, templateData] = await Promise.all([
+      request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`),
+      request<SandboxTemplate[]>(`/sandbox/projects/${projectId}/templates`),
+    ]);
+    setEvidence(evidenceData);
+    setSandboxTemplates(templateData);
+    await refreshGovernanceOverview(projectId);
+  }
+
   async function createProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectDraft.name.trim()) return setStatus("项目名称不能为空");
@@ -500,13 +583,14 @@ function App() {
 
   async function runUnifiedSecurityCheck() {
     if (!project) return setStatus("请先选择项目");
+    if (loading || unifiedLoadingRef.current || isAnyModuleBusy()) return setStatus("已有任务正在执行，请等待完成后再运行一键检测");
     const order: Array<Exclude<ModuleKey, "aspm">> = ["sca", "sast", "agent", "dast", "sandbox"];
     const selected = order.filter((moduleKey) => enabledModules.has(moduleKey));
     if (selected.length === 0) return setStatus("请至少接入一个安全模块");
 
     const initialSteps = selected.map((moduleKey) => ({ module: moduleKey, status: "waiting" as ExecutionStatus, detail: "等待执行" }));
     setExecutionSteps(initialSteps);
-    setLoading(true);
+    setUnifiedBusy(true);
     let nextScaScanId = selectedScaScanId;
     let completedCount = 0;
 
@@ -514,67 +598,72 @@ function App() {
       setExecutionSteps((steps) => steps.map((step) => step.module === moduleKey ? { ...step, status: statusValue, detail } : step));
     };
 
-    for (const moduleKey of selected) {
-      updateStep(moduleKey, "running", "正在执行");
-      try {
-        const result = await performModuleCheck(moduleKey);
-        if (result.status === "skipped") {
-          updateStep(moduleKey, "skipped", result.detail);
-          continue;
+    try {
+      for (const moduleKey of selected) {
+        updateStep(moduleKey, "running", "正在执行");
+        try {
+          const result = await performModuleCheck(moduleKey);
+          if (result.status === "skipped") {
+            updateStep(moduleKey, "skipped", result.detail);
+            continue;
+          }
+          if (moduleKey === "sca") nextScaScanId = result.scanId ?? nextScaScanId;
+          completedCount += 1;
+          updateStep(moduleKey, "completed", result.detail);
+        } catch (error) {
+          console.error(error);
+          updateStep(moduleKey, "failed", errorMessage(error));
         }
-        if (moduleKey === "sca") nextScaScanId = result.scanId ?? nextScaScanId;
-        completedCount += 1;
-        updateStep(moduleKey, "completed", result.detail);
-      } catch (error) {
-        console.error(error);
-        updateStep(moduleKey, "failed", errorMessage(error));
       }
+      setSelectedScaScanId(nextScaScanId);
+      await refreshProjectContext(project.id, nextScaScanId).catch((error) => console.error(error));
+      setStatus(`一键检测完成：${completedCount} / ${selected.length} 个模块执行成功`);
+    } finally {
+      setUnifiedBusy(false);
     }
-
-    setSelectedScaScanId(nextScaScanId);
-    await refreshProjectContext(project.id, nextScaScanId).catch((error) => console.error(error));
-    setStatus(`一键检测完成：${completedCount} / ${selected.length} 个模块执行成功`);
-    setLoading(false);
   }
 
   async function runSingleModuleCheck(moduleKey: Exclude<ModuleKey, "aspm">) {
     if (!project) return setStatus("请先选择项目");
-    setLoading(true);
-    setExecutionSteps([{ module: moduleKey, status: "running", detail: "正在单独执行" }]);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current[moduleKey]) return setStatus(`${MODULE_DISPLAY[moduleKey].name}已有任务正在执行`);
+    setModuleBusy(moduleKey, true);
+    setExecutionSteps((steps) => [...steps.filter((step) => step.module !== moduleKey), { module: moduleKey, status: "running", detail: "正在单独执行" }]);
     try {
       const result = await performModuleCheck(moduleKey);
-      setExecutionSteps([{ module: moduleKey, status: result.status, detail: result.detail }]);
+      setExecutionSteps((steps) => steps.map((step) => step.module === moduleKey ? { module: moduleKey, status: result.status, detail: result.detail } : step));
       const nextScaScanId = moduleKey === "sca" ? result.scanId ?? selectedScaScanId : selectedScaScanId;
       if (moduleKey === "sca") setSelectedScaScanId(nextScaScanId);
-      await refreshProjectContext(project.id, nextScaScanId);
+      await refreshSingleModuleData(moduleKey, project.id, nextScaScanId);
       setStatus(`${MODULE_DISPLAY[moduleKey].name}：${result.detail}`);
     } catch (error) {
       console.error(error);
-      setExecutionSteps([{ module: moduleKey, status: "failed", detail: errorMessage(error) }]);
+      setExecutionSteps((steps) => steps.map((step) => step.module === moduleKey ? { module: moduleKey, status: "failed", detail: errorMessage(error) } : step));
       setStatus(`${MODULE_DISPLAY[moduleKey].name}执行失败：${errorMessage(error)}`);
     } finally {
-      setLoading(false);
+      setModuleBusy(moduleKey, false);
     }
   }
 
   async function runScan(kind: "sca" | "sast" | "agent") {
     if (!project) return setStatus("API 未连接，无法执行任务");
     const source = kind === "sca" ? sourcePath : kind === "sast" ? sastPath : agentPath;
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current[kind]) return setStatus(`${kind.toUpperCase()} 已有任务正在执行`);
+    setModuleBusy(kind, true);
     try {
       const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, ...(kind === "sast" ? {} : { clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) }) });
       const nextScaScanId = kind === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId;
       if (kind === "sca") setSelectedScaScanId(nextScaScanId);
-      await refreshProjectContext(project.id, nextScaScanId);
+      await refreshSingleModuleData(kind, project.id, nextScaScanId);
       setStatus(`${kind.toUpperCase()} 扫描完成`);
-    } catch (error) { console.error(error); setStatus(`${kind.toUpperCase()} 扫描失败：${errorMessage(error)}`); } finally { setLoading(false); }
+    } catch (error) { console.error(error); setStatus(`${kind.toUpperCase()} 扫描失败：${errorMessage(error)}`); } finally { setModuleBusy(kind, false); }
   }
 
   async function runRecommendedScans() {
     if (!project || !assetProbe) return;
     const runnable = assetProbe.recommended_tasks.filter((kind) => enabledModules.has(kind));
     if (runnable.length === 0) return setStatus("没有可执行的推荐任务，请先配置源码路径并启用对应模块");
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || isAnyModuleBusy()) return setStatus("已有任务正在执行，请等待完成后再运行推荐任务");
+    setUnifiedBusy(true);
     try {
       let nextScaScanId = selectedScaScanId;
       for (const kind of runnable) {
@@ -588,14 +677,15 @@ function App() {
       console.error(error);
       setStatus("推荐任务执行失败，请确认模块已启用、路径可访问");
     } finally {
-      setLoading(false);
+      setUnifiedBusy(false);
     }
   }
 
   async function createDastValidation() {
     if (!project) return;
     if (!correlationFindingId && !correlationComponentId) return setStatus("请先选择一条待验证风险，再执行 DAST");
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.dast) return setStatus("DAST 已有任务正在执行");
+    setModuleBusy("dast", true);
     try {
       await request("/dast/probe", { method: "POST", body: JSON.stringify({
         project_id: project.id,
@@ -607,15 +697,16 @@ function App() {
         link_confidence: correlationLinkConfidence,
         strategy_id: dastStrategyId,
       }) });
-      await refreshProjectContext(project.id);
+      await refreshSingleModuleData("dast", project.id);
       setStatus("DAST 自动验证已完成");
-    } catch (error) { console.error(error); setStatus("DAST 记录创建失败，请确认模块已启用"); } finally { setLoading(false); }
+    } catch (error) { console.error(error); setStatus("DAST 记录创建失败，请确认模块已启用"); } finally { setModuleBusy("dast", false); }
   }
 
   async function createSandboxEvidence(plan: SandboxExecutionPlan) {
     if (!project) return;
     if (!correlationFindingId && !correlationComponentId && !correlationValidationId) return setStatus("请先选择一条风险或 DAST 验证，再执行 SANDBOX");
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.sandbox) return setStatus("SANDBOX 已有任务正在执行");
+    setModuleBusy("sandbox", true);
     try {
       await request("/sandbox/run", { method: "POST", body: JSON.stringify({
         project_id: project.id,
@@ -632,9 +723,9 @@ function App() {
         purpose: plan.purpose,
         limitations: plan.limitations,
       }) });
-      await refreshProjectContext(project.id);
+      await refreshSingleModuleData("sandbox", project.id);
       setStatus("SANDBOX 受控执行已完成");
-    } catch (error) { console.error(error); setStatus("SANDBOX 执行失败，请确认模块已启用且命令未被安全策略阻止"); } finally { setLoading(false); }
+    } catch (error) { console.error(error); setStatus("SANDBOX 执行失败，请确认模块已启用且命令未被安全策略阻止"); } finally { setModuleBusy("sandbox", false); }
   }
 
   function applyLinkSuggestion(suggestion: LinkSuggestion) {
@@ -688,37 +779,40 @@ function App() {
 
   async function runSastAgentReview() {
     if (!project) return;
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.sast) return setStatus("SAST 已有任务正在执行");
+    setModuleBusy("sast", true);
     try {
       await request<Finding[]>(`/sast/projects/${project.id}/agent-review`, { method: "POST" });
-      await refreshProjectContext(project.id);
+      await refreshSingleModuleData("sast", project.id);
       setStatus("SAST Sub-agent 编排复核已完成");
     } catch (error) {
       console.error(error);
       setStatus(`SAST Sub-agent 编排失败：${errorMessage(error)}`);
     } finally {
-      setLoading(false);
+      setModuleBusy("sast", false);
     }
   }
 
   async function selectScaScanSnapshot(scanTaskId: string) {
     if (!project) return;
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.sca) return setStatus("SCA 已有任务正在执行");
+    setModuleBusy("sca", true);
     try {
       setSelectedScaScanId(scanTaskId);
-      await refreshProjectData(project.id, scanTaskId);
+      await refreshSingleModuleData("sca", project.id, scanTaskId);
       setStatus("SCA 历史快照已切换");
     } catch (error) {
       console.error(error);
       setStatus(`SCA 历史快照切换失败：${errorMessage(error)}`);
     } finally {
-      setLoading(false);
+      setModuleBusy("sca", false);
     }
   }
 
   async function exportScaSbom(format: "cyclonedx" | "spdx") {
     if (!project) return setStatus("请先选择项目");
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.sca) return setStatus("SCA 已有任务正在执行");
+    setModuleBusy("sca", true);
     try {
       const scanQuery = selectedScaScanId ? `&scan_task_id=${selectedScaScanId}` : "";
       const response = await fetch(`${API_BASE}/sca/projects/${project.id}/sbom?format=${format}${scanQuery}`);
@@ -744,13 +838,14 @@ function App() {
       console.error(error);
       setStatus(`SBOM 导出失败：${errorMessage(error)}`);
     } finally {
-      setLoading(false);
+      setModuleBusy("sca", false);
     }
   }
 
   async function exportScaReport() {
     if (!project) return setStatus("请先选择项目");
-    setLoading(true);
+    if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.sca) return setStatus("SCA 已有任务正在执行");
+    setModuleBusy("sca", true);
     try {
       const scanQuery = selectedScaScanId ? `?scan_task_id=${selectedScaScanId}` : "";
       const response = await fetch(`${API_BASE}/sca/projects/${project.id}/report.html${scanQuery}`);
@@ -776,7 +871,7 @@ function App() {
       console.error(error);
       setStatus(`SCA 报告导出失败：${errorMessage(error)}`);
     } finally {
-      setLoading(false);
+      setModuleBusy("sca", false);
     }
   }
 
@@ -789,12 +884,12 @@ function App() {
         <NavButton active={activeView === "governance"} onClick={() => setActiveView("governance")} icon={<ShieldCheck size={18} />} label="治理总览" />
         <NavButton active={activeView === "knowledge"} onClick={() => setActiveView("knowledge")} icon={<BookOpen size={18} />} label="安全知识中枢" />
       </nav></aside>
-      <section className="workspace"><header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><div className="current-project-pill"><span>当前项目</span><strong>{project?.name ?? "未选择"}</strong></div><button className="primary-action" onClick={() => void bootstrap()} disabled={loading}>刷新数据</button></div></header>
+      <section className="workspace"><header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><div className="current-project-pill"><span>当前项目</span><strong>{project?.name ?? "未选择"}</strong></div><button className="primary-action" onClick={() => void bootstrap()} disabled={projectControlsLoading}>刷新数据</button></div></header>
         <div className={`api-status ${status.includes("失败") || status.includes("未连接") ? "warning" : "ok"}`}>{status}</div>
-        {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={loading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
-        {activeView === "assets" && <><ProjectAssetConfig project={project} loading={loading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
-        {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
-    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} loading={loading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
+        {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={projectControlsLoading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
+        {activeView === "assets" && <><ProjectAssetConfig project={project} loading={projectControlsLoading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
+        {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading || unifiedLoading} runBlocked={anyModuleLoading} moduleLoading={moduleLoading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
+    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
         {activeView === "knowledge" && <KnowledgeHubView project={project} findings={findings} validations={validations} evidence={evidence} summary={summary} />}
       </section>
     </main>
@@ -853,6 +948,8 @@ function SecurityDetectionCenter({
   enabledModules,
   savingKey,
   loading,
+  runBlocked,
+  moduleLoading,
   executionSteps,
   sourcePath,
   targetUrl,
@@ -871,6 +968,8 @@ function SecurityDetectionCenter({
   enabledModules: Set<ModuleKey>;
   savingKey: ModuleKey | null;
   loading: boolean;
+  runBlocked: boolean;
+  moduleLoading: ModuleLoadingState;
   executionSteps: ExecutionStep[];
   sourcePath: string;
   targetUrl: string;
@@ -914,7 +1013,7 @@ function SecurityDetectionCenter({
         const display = MODULE_DISPLAY[module.key as Exclude<ModuleKey, "aspm">];
         return <article className={`detection-module-card ${enabled ? "enabled" : ""}`} key={module.key}>
           <div className="detection-module-heading"><span className="module-icon">{moduleIcons[module.key]}</span><div><strong>{display?.name ?? module.name}</strong><span>{display?.purpose ?? module.description}</span></div></div>
-          <button className={`module-select-button ${enabled ? "selected" : ""}`} disabled={!project || savingKey === module.key || loading} onClick={() => void onToggle(module)}>{enabled ? "已接入" : "接入模块"}</button>
+          <button className={`module-select-button ${enabled ? "selected" : ""}`} disabled={!project || savingKey === module.key || loading || moduleLoading[module.key as ExecutableModuleKey]} onClick={() => void onToggle(module)}>{enabled ? "已接入" : "接入模块"}</button>
         </article>;
       })}
     </div>
@@ -935,7 +1034,7 @@ function SecurityDetectionCenter({
 
     <section className="panel detection-run-panel">
       <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>系统按照 SCA → SAST → AGENT → DAST → SANDBOX 的顺序执行已接入模块，单个模块失败不会阻断后续检查。</p></div>
-      <button className="primary-action run-all-button" disabled={!project || loading || selected.length === 0} onClick={() => void onRun()}>{loading ? "检测执行中" : "一键执行"}</button>
+      <button className="primary-action run-all-button" disabled={!project || loading || runBlocked || selected.length === 0} onClick={() => void onRun()}>{loading ? "检测执行中" : runBlocked ? "单模块执行中" : "一键执行"}</button>
       {executionSteps.length > 0 ? <div className="execution-progress">{executionSteps.map((step) => <div className={`execution-step ${step.status}`} key={step.module}><span>{MODULE_DISPLAY[step.module].name}</span><strong>{executionStatusLabel(step.status)}</strong><small>{step.detail}</small></div>)}</div> : null}
     </section>
   </section>;
@@ -962,6 +1061,8 @@ function GovernanceCenter({
   dastStrategies,
   dastStrategyId,
   loading,
+  unifiedLoading,
+  moduleLoading,
   targetUrl,
   runCommand,
   sandboxImage,
@@ -1002,6 +1103,8 @@ function GovernanceCenter({
   dastStrategies: DastStrategy[];
   dastStrategyId: string;
   loading: boolean;
+  unifiedLoading: boolean;
+  moduleLoading: ModuleLoadingState;
   targetUrl: string;
   runCommand: string;
   sandboxImage: string;
@@ -1026,6 +1129,7 @@ function GovernanceCenter({
 }) {
   const scopes: GovernanceScope[] = ["overview", ...(["sca", "sast", "agent", "dast", "sandbox"] as const).filter((key) => enabledModules.has(key))];
   const [scope, setScope] = useState<GovernanceScope>("overview");
+  const scopeLoading = (moduleKey: ExecutableModuleKey) => loading || unifiedLoading || moduleLoading[moduleKey];
   useEffect(() => { if (!scopes.includes(scope)) setScope("overview"); }, [enabledModules, scope]);
 
   if (!project) return <div className="panel empty-project">请先选择项目，再查看治理结果。</div>;
@@ -1035,11 +1139,11 @@ function GovernanceCenter({
       {scopes.map((item) => <button className={scope === item ? "active" : ""} key={item} onClick={() => setScope(item)}>{item === "overview" ? "综合总览" : MODULE_DISPLAY[item].name}</button>)}
     </nav>
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={loading} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
-    {scope === "sast" ? <><SastOperationsConsole project={project} /><SastRuleReleaseConsole project={project} /><SastSemanticDelivery project={project} /><SastFixDrafts project={project} /><SastRuleManagement project={project} /><FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={loading} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /></> : null}
-    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={loading} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={loading} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
-    {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={loading} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
+    {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={scopeLoading("sca")} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
+    {scope === "sast" ? <><SastOperationsConsole project={project} /><SastRuleReleaseConsole project={project} /><SastSemanticDelivery project={project} /><SastFixDrafts project={project} /><SastRuleManagement project={project} /><FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={scopeLoading("sast")} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /></> : null}
+    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={scopeLoading("agent")} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={scopeLoading("dast")} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
+    {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={scopeLoading("sandbox")} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
 }
 
