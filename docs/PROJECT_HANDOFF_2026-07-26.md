@@ -57,7 +57,7 @@ AI网安项目/
 │  │  ├─ app/routers/              # project/module/sca/sast/agent/dast/sandbox/aspm/findings API
 │  │  ├─ app/services/             # 扫描、依赖图谱、证据关联、复测、报告等业务逻辑
 │  │  └─ app/rules/                # 本地 SCA 漏洞与许可证规则 JSON
-│  └─ web/src/                     # Vue 3 + Vite；Router、Pinia、API 与业务页面已拆分
+│  └─ web/src/                     # React + Vite 前端；主页面目前在 main.tsx
 ├─ infra/docker-compose.yml        # PostgreSQL / Redis
 ├─ outputs/                        # SCA、SAST、AGENT 演示输入
 ├─ artifacts/sca-offline/          # 本地离线资源（忽略，不提交）
@@ -65,7 +65,7 @@ AI网安项目/
 └─ README.md
 ```
 
-运行链路：`Vue 前端 → /api → FastAPI routers → services → PostgreSQL`。`routers` 负责接口和参数，`services` 负责扫描、关联、图谱、复测和导出。2026-08-07 已完成 React → Vue 3 整体迁移，后端接口与数据库结构未改动。
+运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。`routers` 负责接口和参数，`services` 负责扫描、关联、图谱、复测和导出。
 
 ## 4. 平台级已完成能力
 
