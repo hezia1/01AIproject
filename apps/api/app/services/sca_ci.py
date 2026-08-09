@@ -7,6 +7,7 @@ from app.services.sca_gate_policy import DEFAULT_GATE_POLICY
 from app.services.sca_parser import dedupe_components, parse_dependency_tree
 from app.services.sca_python_environment import inspect_python_environment
 from app.services.sca_risk_analyzer import analyze_components
+from app.services.sca_assurance import build_sca_assurance
 
 
 def run_local_sca(source_path: str, policy: dict[str, object] | None = None) -> dict[str, object]:
@@ -15,6 +16,7 @@ def run_local_sca(source_path: str, policy: dict[str, object] | None = None) -> 
     components = analyze_components(dedupe_components([*parsed.components, *environment.components]))
     effective_policy = {**DEFAULT_GATE_POLICY, **(policy or {})}
     gate = evaluate_local_gate(components, effective_policy)
+    assurance = build_sca_assurance(components, parsed.scanned_files)
     return {
         "source_path": source_path,
         "scanned_files": parsed.scanned_files,
@@ -22,6 +24,7 @@ def run_local_sca(source_path: str, policy: dict[str, object] | None = None) -> 
         "artifact_hashes": collect_artifact_hashes(source_path, components),
         "python_environment": {"status": "available" if environment.available else "unavailable", "interpreter": environment.interpreter, "error": environment.error},
         "components": [asdict(component) for component in components],
+        "assurance": assurance,
         "gate": gate,
         "sarif": build_sarif(components),
     }
@@ -42,6 +45,8 @@ def evaluate_local_gate(components, policy: dict[str, object]) -> dict[str, obje
             reasons.append(f"risk_score:{metadata.get('risk_score')}")
         if policy.get("block_kev") and metadata.get("kev"):
             reasons.append("kev")
+        if policy.get("block_unverified_components") and metadata.get("vulnerability_verification") == "unverified":
+            reasons.append("vulnerability_intelligence_unverified")
         if reasons:
             blocked.append({"name": component.name, "version": component.version, "ecosystem": component.ecosystem, "vulnerability_ids": component.vulnerability_ids or [], "reasons": reasons})
     if not policy.get("enabled", True):

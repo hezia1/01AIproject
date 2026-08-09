@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import time
 from typing import Callable
+import re
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -84,6 +85,7 @@ class DeepSeekClient:
         user_prompt: str,
         review: bool = False,
         max_tokens: int = 2200,
+        required_keys: tuple[str, ...] = (),
     ) -> DeepSeekCallResult:
         if not self.settings.configured:
             raise DeepSeekUnavailable("未配置 DEEPSEEK_API_KEY")
@@ -95,7 +97,7 @@ class DeepSeekClient:
                 {"role": "user", "content": user_prompt},
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.1,
+            "temperature": 0.0,
             "max_tokens": max(256, min(max_tokens, 8000)),
             "stream": False,
             "thinking": {"type": "enabled" if self.settings.thinking_enabled else "disabled"},
@@ -104,6 +106,7 @@ class DeepSeekClient:
         for attempt in range(self.settings.max_retries + 1):
             attempt_payload = dict(payload)
             if attempt:
+                attempt_payload["max_tokens"] = min(8000, int(payload["max_tokens"]) * (attempt + 1))
                 attempt_payload["messages"] = [
                     payload["messages"][0],
                     {
@@ -136,6 +139,9 @@ class DeepSeekClient:
                 result = parse_chat_completion(raw, int((time.perf_counter() - started) * 1000))
                 if not result.content:
                     raise DeepSeekUnavailable("DeepSeek 返回了空 JSON 内容")
+                missing = [key for key in required_keys if key not in result.content]
+                if missing:
+                    raise DeepSeekUnavailable("DeepSeek JSON 缺少必需字段：" + ", ".join(missing))
                 return result
             except HTTPError as exc:
                 last_error = readable_http_error(exc)
@@ -162,11 +168,13 @@ def parse_chat_completion(raw: str, latency_ms: int) -> DeepSeekCallResult:
     content_text = str(message.get("content") or "").strip()
     if not content_text:
         raise DeepSeekUnavailable("DeepSeek 返回了空内容")
+    if str(choice.get("finish_reason") or "").lower() in {"length", "max_tokens"}:
+        raise DeepSeekUnavailable("DeepSeek JSON 因输出长度限制被截断")
     # JSON mode responses can still contain an unescaped control character in a
     # generated string (most often a newline in a patch draft).  The outer API
     # envelope is valid JSON, so accepting those characters here is safe and
     # avoids discarding an otherwise structured response.
-    content = json.loads(strip_code_fence(content_text), strict=False)
+    content = parse_json_object(strip_code_fence(content_text))
     if not isinstance(content, dict):
         raise DeepSeekUnavailable("DeepSeek JSON 输出必须是对象")
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -225,6 +233,33 @@ def strip_code_fence(value: str) -> str:
             lines = lines[:-1]
         return "\n".join(lines).strip()
     return text
+
+
+def parse_json_object(value: str) -> dict[str, object]:
+    """Parse a complete object while tolerating harmless model formatting.
+
+    We may remove a code fence, surrounding prose and trailing commas, but we
+    never synthesize missing quotes/braces from a truncated response.
+    """
+    candidates = [value.strip()]
+    start = value.find("{")
+    end = value.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(value[start : end + 1].strip())
+    last_error: json.JSONDecodeError | None = None
+    for candidate in dict.fromkeys(candidates):
+        for normalized in (candidate, re.sub(r",\s*([}\]])", r"\1", candidate)):
+            try:
+                parsed = json.loads(normalized, strict=False)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+            raise DeepSeekUnavailable("DeepSeek JSON 输出必须是对象")
+    if last_error is not None:
+        raise last_error
+    raise DeepSeekUnavailable("DeepSeek 返回的内容不包含完整 JSON 对象")
 
 
 def readable_http_error(exc: HTTPError) -> str:

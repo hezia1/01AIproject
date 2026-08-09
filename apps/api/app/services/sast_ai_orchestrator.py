@@ -20,6 +20,15 @@ AGENT_ROLES = [
     "fix_agent",
     "independent_review_agent",
 ]
+ROLE_REQUIRED_KEYS = {
+    "strategy_agent": ("summary",),
+    "discovery_agent": ("candidates",),
+    "review_agent": ("candidate_reviews", "finding_reviews"),
+    "evidence_agent": ("evidence_reviews",),
+    "knowledge_agent": ("knowledge_links",),
+    "fix_agent": ("fixes",),
+    "independent_review_agent": ("final_candidates", "finding_reviews", "disagreements"),
+}
 
 SUPPORTED_SUFFIXES = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".php", ".rb", ".rs", ".cs",
@@ -47,6 +56,7 @@ class SastAiPipelineResult:
     error: str | None = None
 
     def audit_summary(self) -> dict[str, object]:
+        completed_roles = [str(item.get("role")) for item in self.agent_steps if item.get("status") == "completed"]
         return {
             "status": self.status,
             "agent_steps": self.agent_steps,
@@ -57,6 +67,10 @@ class SastAiPipelineResult:
             "token_usage": self.token_usage,
             "context_summary": self.context_summary,
             "error": self.error,
+            "expected_agent_count": len(AGENT_ROLES),
+            "completed_agent_count": len(completed_roles),
+            "completed_roles": completed_roles,
+            "incomplete_roles": [role for role in AGENT_ROLES if role not in completed_roles],
         }
 
 
@@ -89,6 +103,7 @@ def run_deepseek_sast_pipeline(
                 user_prompt=prompt,
                 review=role in {"review_agent", "independent_review_agent"},
                 max_tokens=4000 if role in {"discovery_agent", "fix_agent", "independent_review_agent"} else 2600,
+                required_keys=ROLE_REQUIRED_KEYS[role],
             )
         except DeepSeekUnavailable as exc:
             result.status = "degraded"
@@ -150,7 +165,10 @@ def run_deepseek_sast_pipeline(
             "owasp": string_value(item.get("owasp"), 120),
         }
 
-    result.status = "completed"
+    completed_roles = [str(item.get("role")) for item in result.agent_steps if item.get("status") == "completed"]
+    result.status = "completed" if completed_roles == AGENT_ROLES else "degraded"
+    if result.status != "completed":
+        result.error = "DeepSeek 七角色流程未完整执行"
     finalize_usage(result)
     return result
 

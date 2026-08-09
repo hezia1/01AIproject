@@ -22,9 +22,12 @@ SINKS = {
     "ssrf": ("Outbound request receives request-controlled URL", "CWE-918", "A10:2021 Server-Side Request Forgery", Severity.high, "Allow-list schemes, hosts and resolved IP ranges before making the request."),
     "path": ("File operation receives request-controlled path", "CWE-22", "A01:2021 Broken Access Control", Severity.high, "Resolve against a fixed root and reject traversal or absolute paths."),
     "deserialize": ("Unsafe deserialization receives request-controlled data", "CWE-502", "A08:2021 Software and Data Integrity Failures", Severity.high, "Use a safe data format and a restricted loader; never deserialize untrusted objects."),
+    "xss": ("Browser/HTML output receives request-controlled data", "CWE-79", "A03:2021 Injection", Severity.high, "Use context-aware output encoding and a vetted HTML sanitizer; avoid innerHTML and raw HTML rendering."),
+    "redirect": ("Redirect target receives request-controlled data", "CWE-601", "A01:2021 Broken Access Control", Severity.medium, "Resolve redirects through an allow-list of local destinations and reject external schemes/hosts."),
+    "xxe": ("XML parser receives request-controlled data", "CWE-611", "A05:2021 Security Misconfiguration", Severity.high, "Disable DTD, external entities and network access in the XML parser."),
 }
 
-SOURCE_MARKERS = ("request.", "request[", "req.", "ctx.request", "input(", "argv", "query.", "params.", "body.", "form.", "cookies.")
+SOURCE_MARKERS = ("request.", "request[", "req.", "ctx.request", "input(", "argv", "query.", "params.", "body.", "form.", "cookies.", "location.", "document.url", "document.location")
 SANITIZER_MARKERS = ("safe_join", "secure_filename", "shlex.quote", "validate_url", "is_safe_url", "urlparse", "quote_plus", "parameterized", "sanitize")
 
 
@@ -236,7 +239,8 @@ def _scan_javascript(file_path: Path, relative_path: str) -> list[ParsedFinding]
         sink = _javascript_sink_kind(lowered)
         if sink is None:
             continue
-        if any(re.search(rf"\b{re.escape(name)}\b", line) for name in tainted) and not any(marker in lowered for marker in SANITIZER_MARKERS):
+        tainted_input = any(re.search(rf"\b{re.escape(name)}\b", line) for name in tainted) or any(marker in lowered for marker in SOURCE_MARKERS)
+        if tainted_input and not any(marker in lowered for marker in SANITIZER_MARKERS):
             title, cwe, owasp, severity, remediation = SINKS[sink]
             findings.append(ParsedFinding(
                 rule_id=f"SAST.TAINT.JAVASCRIPT.{sink.upper()}", title=title, severity=severity,
@@ -295,4 +299,10 @@ def _javascript_sink_kind(line: str) -> str | None:
         return "path"
     if re.search(r"\b(yaml\.load|deserialize|unserialize)\s*\(", line):
         return "deserialize"
+    if re.search(r"(?:\.innerhtml\s*=|\bdocument\.write\s*\(|\.html\s*\()", line):
+        return "xss"
+    if re.search(r"\bredirect\s*\(", line):
+        return "redirect"
+    if re.search(r"\b(parsexml(?:string)?|parsefromstring|loadxml)\s*\(", line):
+        return "xxe"
     return None

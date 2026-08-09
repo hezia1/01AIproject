@@ -10,6 +10,7 @@ from app.services.sca_osv_mirror import lookup_osv_mirror
 from app.services.osv_client import OsvLookupError, supports_osv, query_osv
 from app.services.sca_parser import ParsedComponent
 from app.services.sca_vulnerability_rules import VulnerabilityRule, load_vulnerability_rules, matches_vulnerability_rule
+from app.services.sca_assurance import component_resolution
 
 SEVERITY_WEIGHT = {
     Severity.critical: 5,
@@ -38,7 +39,8 @@ def analyze_component(
         for rule in (vulnerability_rules or load_vulnerability_rules())
         if matches_vulnerability_rule(component.ecosystem, component.name, component.version, rule)
     ]
-    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(component)
+    resolution = component_resolution(component)
+    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(component, resolution)
     vulnerability_ids = [item.vulnerability_id for item in osv_vulnerabilities] + [
         rule.vulnerability_id for rule in matched_rules
     ]
@@ -72,17 +74,21 @@ def analyze_component(
         risk_status = "vulnerable"
     elif license_policy in {"restricted", "review_required", "unknown"}:
         risk_status = "license-risk"
-    elif component.version is None:
+    elif resolution["status"] in {"missing", "constraint"}:
         risk_status = "review-required"
-        summaries.append("组件版本缺失，无法完成精确漏洞匹配。")
+        summaries.append(str(resolution["reason"]) + "，无法完成精确漏洞匹配。")
         remediation.append("补全锁文件或固定依赖版本后重新执行 SCA。")
+    elif not osv_checked:
+        risk_status = "review-required"
+        summaries.append("漏洞情报未完成验证；未发现匹配不代表组件安全。")
+        remediation.append("提供可信锁文件或实际安装环境，并配置可用的 OSV/Grype/Trivy 情报后重新扫描。")
     else:
         risk_status = "clean"
     risk_source = determine_risk_source(
         osv_matched=bool(osv_vulnerabilities),
         local_matched=bool(matched_rules),
         license_risk=license_policy,
-        version_missing=component.version is None,
+        version_missing=resolution["status"] == "missing",
         osv_checked=osv_checked,
         osv_error=osv_error,
         osv_mirror_matched=mirror_matched,
@@ -99,22 +105,38 @@ def analyze_component(
         risk_source=risk_source,
         osv_checked=osv_checked,
         osv_error=osv_error,
-        risk_metadata=intelligence,
+        risk_metadata={
+            **intelligence,
+            "version_resolution": resolution,
+            "vulnerability_verification": (
+                "unverified"
+                if resolution["status"] in {"missing", "constraint"}
+                else "matched"
+                if vulnerability_ids
+                else "verified_no_match"
+                if osv_checked
+                else "unverified"
+            ),
+        },
     )
 
 
-def lookup_osv_vulnerabilities(component: ParsedComponent):
-    if not supports_osv(component.ecosystem) or component.version is None:
-        return [], False, None, False
-    mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, component.version)
+def lookup_osv_vulnerabilities(component: ParsedComponent, resolution: dict[str, object] | None = None):
+    resolved = resolution or component_resolution(component)
+    lookup_version = resolved.get("lookup_version")
+    if not supports_osv(component.ecosystem):
+        return [], False, "OSV does not support this ecosystem", False
+    if not isinstance(lookup_version, str) or not lookup_version:
+        return [], False, str(resolved.get("reason") or "exact component version is unavailable"), False
+    mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, lookup_version)
     if mirror_matched:
         return mirrored, True, None, True
     if os.getenv("SCA_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"}:
         return [], False, "SCA offline-only mode: no matching local OSV record", False
     try:
-        return query_osv(component.ecosystem, component.name, component.version), True, None, False
+        return query_osv(component.ecosystem, component.name, lookup_version), True, None, False
     except OsvLookupError as exc:
-        return [], True, str(exc)[:300], False
+        return [], False, str(exc)[:300], False
 
 
 def determine_risk_source(

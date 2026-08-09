@@ -30,3 +30,26 @@ rules:
       - pattern: pickle.loads(...)
       - pattern: pickle.load(...)
       - pattern: yaml.load(...)
+  - id: ai-security.javascript.untrusted-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Redirect target is request-controlled; enforce a local destination allow-list.
+    patterns:
+      - pattern: $RES.redirect($REQ.$SOURCE)
+      - metavariable-regex:
+          metavariable: $SOURCE
+          regex: (query|body|params).*
+  - id: ai-security.javascript.raw-html-output
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Raw HTML assignment requires trusted, context-encoded content.
+    pattern-either:
+      - pattern: $ELEMENT.innerHTML = $VALUE
+      - pattern: document.write($VALUE)
+  - id: ai-security.javascript.external-xml-entity
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: XML external entity expansion is enabled.
+    pattern-either:
+      - pattern: $PARSER(..., { ..., noent: true, ... })
+      - pattern: $PARSER(..., { ..., resolveExternals: true, ... })

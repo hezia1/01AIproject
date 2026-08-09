@@ -75,7 +75,11 @@ def test_local_ci_scan_writes_reproducible_input_fingerprint_without_network(tmp
     result = run_local_sca(str(tmp_path))
     fingerprint = source_fingerprint(str(tmp_path))
 
-    assert result["gate"]["decision"] == "pass"
+    assert result["gate"]["decision"] == "block"
+    assert result["assurance"]["status"] == "partial"
+    assert result["components"][0]["risk_status"] in {"review-required", "license-risk"}
+    assert result["components"][0]["risk_metadata"]["vulnerability_verification"] == "unverified"
+    assert "vulnerability_intelligence_unverified" in result["gate"]["blocked_components"][0]["reasons"]
     assert result["sarif"]["version"] == "2.1.0"
     assert fingerprint["status"] == "available"
     assert len(str(fingerprint["sha256"])) == 64

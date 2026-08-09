@@ -5,7 +5,7 @@ import pytest
 
 from app.db_models import FindingRecord
 from app.models import AiReview
-from app.services.deepseek_client import DeepSeekCallResult, DeepSeekClient, DeepSeekSettings, DeepSeekUnavailable
+from app.services.deepseek_client import DeepSeekCallResult, DeepSeekClient, DeepSeekSettings, DeepSeekUnavailable, parse_json_object
 from app.services.sast_ai_orchestrator import AGENT_ROLES, build_source_context, finding_key, run_deepseek_sast_pipeline
 from app.services.sast_governance import effective_sast_profile, update_sast_profile
 
@@ -50,6 +50,12 @@ def test_deepseek_client_accepts_raw_newline_in_inner_json_string():
     result = client.complete_json(role="fix_agent", system_prompt="json", user_prompt="json")
 
     assert result.content["fixes"][0]["patch"] == "line 1\nline 2"
+
+
+def test_deepseek_json_parser_accepts_prose_and_trailing_comma_but_not_truncation():
+    assert parse_json_object('result: {"items":[1,2,],}') == {"items": [1, 2]}
+    with pytest.raises(json.JSONDecodeError):
+        parse_json_object('{"items":["unfinished]')
 
 
 def test_deepseek_client_requires_api_key():
@@ -110,6 +116,8 @@ def test_seven_agent_pipeline_confirms_evidence_backed_candidate(tmp_path):
     assert result.confirmed_findings[0]["confidence"] == 94
     assert result.context_summary["redaction_count"] >= 2
     assert result.token_usage["call_count"] == 7
+    assert result.audit_summary()["completed_agent_count"] == 7
+    assert result.audit_summary()["incomplete_roles"] == []
 
 
 def test_agent_pipeline_degrades_without_losing_local_finding(tmp_path):
@@ -120,6 +128,7 @@ def test_agent_pipeline_degrades_without_losing_local_finding(tmp_path):
 
     assert result.status == "degraded"
     assert result.error == "simulated provider failure"
+    assert "evidence_agent" in result.audit_summary()["incomplete_roles"]
     assert finding_key(finding).startswith("SAST.EVAL|")
 
 

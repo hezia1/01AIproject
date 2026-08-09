@@ -682,7 +682,10 @@ def merge_component(existing: ParsedComponent, candidate: ParsedComponent) -> Pa
     dependency_type = best_dependency_type(existing.dependency_type, candidate.dependency_type)
     version = best_version(existing, candidate, dependency_type)
     source_file = existing.source_file
-    if existing.version is None and candidate.version is not None:
+    if version == candidate.version and (
+        existing.version is None
+        or (looks_like_range(existing.version) and not looks_like_range(candidate.version or ""))
+    ):
         source_file = candidate.source_file
     package_manager = existing.package_manager or candidate.package_manager
     if existing.package_manager and candidate.package_manager and existing.package_manager != candidate.package_manager:

@@ -51,6 +51,7 @@ from app.services.sca_python_environment import environment_metadata, inspect_py
 from app.services.sca_artifacts import collect_artifact_hashes, source_fingerprint
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
+from app.services.sca_assurance import build_sca_assurance, component_resolution
 
 router = APIRouter()
 
@@ -360,6 +361,11 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             analyze_components(parsed_components, vulnerability_rules, license_policies),
             tool_scan,
         )
+        assurance = build_sca_assurance(
+            analyzed_components,
+            parsed.scanned_files,
+            tool_status=tool_status.model_dump(),
+        )
         records: list[ComponentRecord] = []
         for component in analyzed_components:
             record = ComponentRecord(
@@ -405,6 +411,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
                 "edges": dependency_graph["edges"],
                 "summary": dependency_graph["summary"],
             },
+            "assurance": assurance,
         }
 
         scan.status = ScanStatus.completed.value
@@ -432,6 +439,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         component_count=len(records),
         components=[component_to_schema(record) for record in records],
         tool_status=tool_status,
+        assurance=assurance,
     )
 
 
@@ -490,6 +498,7 @@ def list_project_sca_scan_history(project_id: UUID, db: Session = Depends(get_db
                 tool_status=scan_tool_status(scan),
                 osv_status=osv_lookup_status(scan),
                 osv_error_count=osv_lookup_error_count(scan),
+                assurance=scan_metadata_value(scan, "assurance") or {},
             )
         )
     return history
@@ -567,6 +576,7 @@ def export_project_sca_report(
             "native_dependency_sources": scan_metadata_value(scan, "native_dependency_sources") or {},
             "policy_snapshot": scan_metadata_value(scan, "policy_snapshot") or {},
             "dependency_snapshot": scan_metadata_value(scan, "dependency_snapshot") or {},
+            "assurance": scan_metadata_value(scan, "assurance") or {},
         },
     )
 
@@ -642,6 +652,7 @@ def get_sca_evidence(project_id: UUID, scan_task_id: UUID | None = None, db: Ses
         "intelligence": scan_metadata_value(scan, "intelligence") or {},
         "native_dependency_sources": scan_metadata_value(scan, "native_dependency_sources") or {},
         "policy_snapshot": scan_metadata_value(scan, "policy_snapshot") or {},
+        "assurance": scan_metadata_value(scan, "assurance") or {},
         "gate": build_sca_gate_result(project_id, resolved_scan_id, components, scan, effective_gate_policy(scoped_policy_overrides(db, project_id))),
     }
 
@@ -819,6 +830,8 @@ def build_sca_gate_result(
             reasons.append("kev")
         if policy.get("require_intelligence_for_critical") and item.severity == "critical" and not metadata.get("advisories"):
             reasons.append("critical_without_intelligence")
+        if policy.get("block_unverified_components") and metadata.get("vulnerability_verification") == "unverified":
+            reasons.append("vulnerability_intelligence_unverified")
         if reasons:
             block_reasons.append({"component": item, "reasons": reasons})
     stale = False
@@ -1145,24 +1158,37 @@ def apply_tool_vulnerabilities(
     components: list[ParsedComponent],
     tool_scan: ToolScanResult | None,
 ) -> list[ParsedComponent]:
-    if tool_scan is None or not tool_scan.vulnerabilities:
+    if tool_scan is None:
         return components
 
     vulnerabilities_by_exact: dict[tuple[str, str, str | None], list] = {}
-    vulnerabilities_by_name: dict[tuple[str, str], list] = {}
     for vulnerability in tool_scan.vulnerabilities:
         exact_key = (vulnerability.ecosystem, vulnerability.name.lower(), vulnerability.version)
-        name_key = (vulnerability.ecosystem, vulnerability.name.lower())
         vulnerabilities_by_exact.setdefault(exact_key, []).append(vulnerability)
-        vulnerabilities_by_name.setdefault(name_key, []).append(vulnerability)
 
     updated: list[ParsedComponent] = []
     for component in components:
         exact_matches = vulnerabilities_by_exact.get((component.ecosystem, component.name.lower(), component.version), [])
-        name_matches = vulnerabilities_by_name.get((component.ecosystem, component.name.lower()), [])
-        matches = exact_matches or name_matches
+        # A package name alone is not sufficient evidence: assigning a finding
+        # from another installed version would create a false positive.
+        matches = exact_matches
+        metadata = dict(component.risk_metadata or {})
+        resolution = component_resolution(component)
+        grype_verified = tool_scan.grype_status == "success" and bool(resolution.get("lookup_version"))
+        metadata["tool_coverage"] = {
+            "grype_status": tool_scan.grype_status,
+            "trivy_status": tool_scan.trivy_status,
+            "grype_input": tool_scan.grype_input,
+            "verified": grype_verified,
+        }
         if not matches:
-            updated.append(component)
+            risk_status = component.risk_status
+            risk_source = component.risk_source
+            if grype_verified and risk_status == "review-required" and component.license_risk == "allowed":
+                risk_status = "clean"
+                risk_source = merge_risk_source(risk_source, "grype")
+                metadata["vulnerability_verification"] = "verified_no_match"
+            updated.append(replace(component, risk_status=risk_status, risk_source=risk_source, risk_metadata=metadata))
             continue
 
         vulnerability_ids = sorted({*(component.vulnerability_ids or []), *(match.vulnerability_id for match in matches)})
@@ -1178,6 +1204,10 @@ def apply_tool_vulnerabilities(
                 risk_summary=risk_summary,
                 remediation=remediation,
                 risk_source=merge_risk_source(component.risk_source, matches[0].tool),
+                risk_metadata={
+                    **metadata,
+                    "vulnerability_verification": "matched" if resolution.get("lookup_version") else "unverified",
+                },
             )
         )
     return updated

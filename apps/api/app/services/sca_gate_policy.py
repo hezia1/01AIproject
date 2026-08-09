@@ -13,6 +13,7 @@ DEFAULT_GATE_POLICY: dict[str, object] = {
     "block_kev": True,
     "max_scan_age_hours": 168,
     "require_intelligence_for_critical": False,
+    "block_unverified_components": True,
 }
 
 
@@ -45,7 +46,7 @@ def validate_gate_config(config: dict[str, object]) -> dict[str, object]:
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise ValueError(f"{name} must be an array of strings")
         result[name] = [item.lower() for item in value]
-    for name in ("enabled", "block_kev", "require_intelligence_for_critical"):
+    for name in ("enabled", "block_kev", "require_intelligence_for_critical", "block_unverified_components"):
         if name in config:
             result[name] = bool(config[name])
     for name in ("min_risk_score", "max_scan_age_hours"):

@@ -330,6 +330,7 @@ class ScaScanResult(BaseModel):
     component_count: int
     components: list[Component]
     tool_status: ScaToolStatus | None = None
+    assurance: dict[str, object] = Field(default_factory=dict)
 
 
 class ScaScanHistoryItem(BaseModel):
@@ -348,6 +349,7 @@ class ScaScanHistoryItem(BaseModel):
     tool_status: ScaToolStatus | None = None
     osv_status: str = "not_checked"
     osv_error_count: int = 0
+    assurance: dict[str, object] = Field(default_factory=dict)
 
 
 class ScaScanDiffItem(BaseModel):

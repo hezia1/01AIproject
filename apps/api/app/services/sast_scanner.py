@@ -148,11 +148,35 @@ SAST_RULES = [
         remediation="区分开发和生产配置，生产环境关闭 debug/dev mode 并限制错误详情输出。",
         pattern=re.compile(r"(?i)\b(debug|dev_mode)\b\s*[:=]\s*(true|1|yes)")
     ),
+    SastRule(
+        rule_id="SAST.XSS.EJS_UNESCAPED_OUTPUT",
+        title="EJS 模板使用未转义输出",
+        severity=Severity.medium,
+        category="xss",
+        cwe="CWE-79",
+        owasp="A03:2021 Injection",
+        description="EJS 的 <%- ... %> 会直接输出 HTML；当表达式包含用户或数据库输入时可能形成 XSS。该结果需要结合数据来源复核。",
+        remediation="默认使用 <%= ... %> 转义输出；确需渲染 HTML 时使用经过上下文适配的可信净化器。",
+        pattern=re.compile(r"<%-\s*[^%]+%>"),
+        file_extensions={".ejs"},
+    ),
+    SastRule(
+        rule_id="SAST.XML.EXTERNAL_ENTITY_ENABLED",
+        title="XML 解析器疑似启用外部实体",
+        severity=Severity.high,
+        category="xxe",
+        cwe="CWE-611",
+        owasp="A05:2021 Security Misconfiguration",
+        description="XML 解析配置显式启用了实体展开或外部资源解析，攻击者可读取本地文件或访问内网。",
+        remediation="关闭 noent/resolveExternals 等选项，禁止 DTD 和外部实体，并限制解析输入大小。",
+        pattern=re.compile(r"(?i)\b(noent|resolveExternals|loadExternalDTD)\b\s*[:=]\s*(true|1)"),
+        file_extensions={".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".xml"},
+    ),
 ]
 
 SOURCE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".php", ".rb", ".cs",
-    ".yaml", ".yml", ".json", ".env", ".properties", ".xml",
+    ".yaml", ".yml", ".json", ".env", ".properties", ".xml", ".ejs",
 }
 
 MAX_FILE_BYTES = 512 * 1024
@@ -280,6 +304,8 @@ def detect_language(file_path: Path) -> str:
         return "Python"
     if suffix in {".js", ".jsx"}:
         return "JavaScript"
+    if suffix == ".ejs":
+        return "EJS"
     if suffix in {".ts", ".tsx"}:
         return "TypeScript"
     if suffix == ".java":

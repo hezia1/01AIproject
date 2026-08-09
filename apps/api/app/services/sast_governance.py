@@ -10,10 +10,11 @@ from uuid import uuid4
 from app.services.sast_scanner import ParsedFinding
 from app.services.sast_semgrep_rules import BUILTIN_CONFIG, validate_semgrep_yaml
 
+BUILTIN_RULE_PACK_VERSION = "local-2026.08.09.1"
 
 DEFAULT_SAST_PROFILE: dict[str, object] = {
     "profile_version": 1,
-    "rule_pack_version": "local-2026.08.03.1",
+    "rule_pack_version": BUILTIN_RULE_PACK_VERSION,
     "semgrep_enabled": True,
     "semgrep_config": BUILTIN_CONFIG,
     "include_local_rules": True,
@@ -45,6 +46,9 @@ def effective_sast_profile(config: dict[str, object] | None) -> dict[str, object
     profile = dict(DEFAULT_SAST_PROFILE)
     if isinstance(saved, dict):
         profile.update({key: value for key, value in saved.items() if key in DEFAULT_SAST_PROFILE})
+    # The built-in scanner code and rule bundle are versioned together. A stored
+    # project profile must not make a newer runtime report an obsolete rule version.
+    profile["rule_pack_version"] = BUILTIN_RULE_PACK_VERSION
     profile["semgrep_config"] = validate_semgrep_config(profile.get("semgrep_config"))
     try:
         profile["profile_version"] = max(1, int(profile.get("profile_version") or 1))

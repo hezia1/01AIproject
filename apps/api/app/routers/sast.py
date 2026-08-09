@@ -118,7 +118,9 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
         engine_status = dict(parsed.engine_status or {})
         engine_status["deepseek_agents"] = {
             "status": ai_summary.get("status", "disabled"),
-            "agent_count": len(ai_summary.get("agent_steps") or []),
+            "agent_count": int(ai_summary.get("completed_agent_count") or 0),
+            "expected_agent_count": int(ai_summary.get("expected_agent_count") or len(AGENT_ROLES)),
+            "incomplete_roles": ai_summary.get("incomplete_roles") or [],
             "candidate_count": int(ai_summary.get("candidate_count") or 0),
             "confirmed_count": int(ai_summary.get("confirmed_count") or 0),
             "detail": ai_summary.get("error"),
@@ -650,6 +652,28 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
         engine_status["local_rules"] = {"status": "disabled"}
     if not outputs:
         raise ValueError("No SAST engines completed; enable local rules or make Semgrep available")
+    completed_engines = [name for name in ("semgrep", "local_rules") if engine_status.get(name, {}).get("status") == "completed"]
+    enabled_engines = [name for name in ("semgrep", "local_rules") if engine_status.get(name, {}).get("status") != "disabled"]
+    execution_complete = bool(enabled_engines) and len(completed_engines) == len(enabled_engines)
+    engine_status["assurance"] = {
+        "status": "bounded" if execution_complete else "partial",
+        "execution_status": "complete" if execution_complete else "partial",
+        "confidence": "medium",
+        "completed_engines": completed_engines,
+        "enabled_engines": enabled_engines,
+        "scan_scope": "git-diff" if include_paths else "source-tree",
+        "statement": (
+            "已启用的静态分析引擎均执行完成；结果仅代表当前规则和有限数据流范围内的证据，"
+            "不表示项目不存在其他漏洞。"
+            if execution_complete
+            else "部分静态分析引擎未完整执行，当前结果不具备完整的已配置引擎覆盖。"
+        ),
+        "limitations": [
+            "静态分析不能证明所有业务权限、CSRF 和运行时可利用性",
+            "Python 仅支持有限本地跨函数数据流；JS/TS 为保守的文件内数据流",
+            "未命中不等于不存在漏洞，关键结果需要人工或动态验证",
+        ],
+    }
     return SastScanOutput(
         findings=dedupe_findings([finding for output in outputs for finding in output.findings]),
         scanned_files=sorted({file_path for output in outputs for file_path in output.scanned_files}),
