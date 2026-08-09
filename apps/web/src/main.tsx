@@ -1143,27 +1143,108 @@ function GovernanceCenter({
     </nav>
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={scopeLoading("sca")} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
-    {scope === "sast" ? <><SastAiAgentsPanel project={project} onRunReview={onRunSastAgentReview} /><SastOperationsConsole project={project} /><SastRuleReleaseConsole project={project} /><SastSemanticDelivery project={project} /><SastFixDrafts project={project} /><SastRuleManagement project={project} /><SastEvidenceGovernance project={project} /><FindingModuleGovernance moduleKey="sast" findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={scopeLoading("sast")} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /></> : null}
+    {scope === "sast" ? <SastGovernanceWorkspace project={project} findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={scopeLoading("sast")} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={scopeLoading("agent")} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={scopeLoading("dast")} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
     {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={scopeLoading("sandbox")} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
 }
 
-function SastRuleReleaseConsole({ project }: { project: Project }) {
-  const [packs, setPacks] = useState<SastSemgrepRule[]>([]);
-  const [message, setMessage] = useState("");
+function SastGovernanceWorkspace({ project, findings, validations, evidence, graph, comparison, loading, onRunReview, onRun, onUpdateFinding }: { project: Project; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRunReview: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+  return <section className="sast-governance-workspace">
+    <section className="panel full"><div className="panel-header"><div><h2>SAST 日常检测</h2><span>日常只需关注引擎状态、风险列表和 DeepSeek 审计</span></div></div><p>点击“重新扫描并复测”即可执行完整 SAST。下方高级管理仅用于 Git 增量、规则开发、CI/Worker、豁免和报告导出，不配置也不会影响基础扫描。</p></section>
+    <SastDailyEngineStatus project={project} />
+    <FindingModuleGovernance moduleKey="sast" findings={findings} validations={validations} evidence={evidence} graph={graph} comparison={comparison} loading={loading} onRunReview={onRunReview} onRun={onRun} onUpdateFinding={onUpdateFinding} />
+    <SastAiAgentsPanel project={project} onRunReview={onRunReview} />
+    <details className="advanced-details governance-advanced-details sast-advanced-hub"><summary>高级管理（规则、Git、CI/Worker、豁免与报告）</summary><div className="advanced-details-body"><p>这些能力面向安全规则维护和服务器交付，普通本地扫描可以保持默认设置。</p><SastOperationsConsole project={project} /><SastExpertDelivery project={project} /><SastRuleManagement project={project} /><SastEvidenceGovernance project={project} /></div></details>
+  </section>;
+}
+
+function SastDailyEngineStatus({ project }: { project: Project }) {
+  const [health, setHealth] = useState<SastToolHealth | null>(null);
+  const [history, setHistory] = useState<SastScanHistoryItem[]>([]);
   useEffect(() => { void load(); }, [project.id]);
-  async function load() { const result = await request<{ semgrep_rules: SastSemgrepRule[] }>(`/sast/projects/${project.id}/semgrep-rules`).catch(() => ({ semgrep_rules: [] })); setPacks(result.semgrep_rules ?? []); }
+  async function load() {
+    const [nextHealth, nextHistory] = await Promise.all([
+      request<SastToolHealth>("/sast/tool-health").catch(() => null),
+      request<SastScanHistoryItem[]>(`/sast/projects/${project.id}/scan-history`).catch(() => []),
+    ]);
+    setHealth(nextHealth); setHistory(nextHistory);
+  }
+  const latest = history[0] ?? null;
+  const semgrepStatus = latest?.engine_status.semgrep?.status;
+  const localStatus = latest?.engine_status.local_rules?.status;
+  return <section className="content-grid"><div className="panel"><div className="panel-header"><h2>当前扫描引擎</h2><button className="secondary-action" onClick={() => void load()}>刷新</button></div><div className="kv-list"><div><span>本地规则</span><strong>{toolStatusLabel(localStatus)}</strong></div><div><span>Semgrep</span><strong>{toolStatusLabel(semgrepStatus)}</strong></div><div><span>Semgrep 运行方式</span><strong>{health?.semgrep_cli.available ? `本机 CLI ${health.semgrep_cli.version ?? ""}` : health?.docker_image.available ? "本地 Docker 镜像" : "不可用，扫描将自动降级"}</strong></div></div></div><div className="panel"><div className="panel-header"><h2>最近扫描</h2><span>{latest ? formatDateTime(latest.finished_at ?? latest.created_at) : "尚未执行"}</span></div><div className="kv-list"><div><span>状态</span><strong>{scanStatusLabel(latest?.status)}</strong></div><div><span>风险记录</span><strong>{latest?.finding_count ?? 0}</strong></div><div><span>已忽略</span><strong>{latest?.suppressed_count ?? 0}</strong></div></div>{semgrepStatus === "degraded" ? <p>Semgrep 增强扫描未完整完成，但本地规则结果仍然有效。</p> : null}</div></section>;
+}
+
+function SastExpertDelivery({ project }: { project: Project }) {
+  const [profile, setProfile] = useState<SastProfile | null>(null);
+  const [packs, setPacks] = useState<SastSemgrepRule[]>([]);
+  const [report, setReport] = useState<SastReport | null>(null);
+  const [message, setMessage] = useState("");
+  const [draft, setDraft] = useState({ name: "项目自定义规则包", status: "draft" as "draft" | "published", content: "rules:\n  - id: project.example.rule\n    languages: [python]\n    severity: WARNING\n    message: 请填写规则说明\n    pattern: eval(...)\n" });
+
+  useEffect(() => { void load(); }, [project.id]);
+
+  async function load() {
+    const [nextProfile, packResult, nextReport] = await Promise.all([
+      request<SastProfile>(`/sast/projects/${project.id}/profile`).catch(() => null),
+      request<{ semgrep_rules: SastSemgrepRule[] }>(`/sast/projects/${project.id}/semgrep-rules`).catch(() => ({ semgrep_rules: [] })),
+      request<SastReport>(`/sast/projects/${project.id}/report`).catch(() => null),
+    ]);
+    setProfile(nextProfile); setPacks(packResult.semgrep_rules ?? []); setReport(nextReport);
+  }
+
+  async function saveGitProfile() {
+    if (!profile) return;
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/profile`, { method: "PATCH", body: JSON.stringify({ git_baseline_ref: profile.git_baseline_ref, scan_git_history_secrets: profile.scan_git_history_secrets, changed_files_only: profile.changed_files_only }) });
+      setProfile(saved); setMessage("Git 基线配置已保存，将从下一次扫描开始生效。");
+    } catch (error) { setMessage(`保存失败：${errorMessage(error)}`); }
+  }
+
+  async function validatePack() {
+    try {
+      const result = await request<{ yaml: { rule_count: number; sha256: string } }>("/sast/semgrep-rules/validate", { method: "POST", body: JSON.stringify(draft) });
+      setMessage(`规则结构有效：${result.yaml.rule_count} 条规则，校验值 ${result.yaml.sha256.slice(0, 12)}。`);
+    } catch (error) { setMessage(`规则校验失败：${errorMessage(error)}`); }
+  }
+
+  async function savePack() {
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/semgrep-rules`, { method: "POST", body: JSON.stringify(draft) });
+      setProfile(saved); setPacks(saved.semgrep_rules ?? []); setMessage(draft.status === "draft" ? "规则包已保存为草稿；发布后才会参与扫描。" : "规则包已发布，将从下一次 Semgrep 扫描开始生效。");
+    } catch (error) { setMessage(`保存失败：${errorMessage(error)}`); }
+  }
+
   async function preflight(pack: SastSemgrepRule) {
-    try { const result = await request<{ engine_checked: boolean; engine_status: string; detail: string }>("/sast/semgrep-rules/preflight", { method: "POST", body: JSON.stringify({ content: pack.content }) }); setMessage(`${pack.name}：${result.engine_status} · ${result.detail}`); }
-    catch (error) { setMessage(`预检失败：${errorMessage(error)}`); }
+    try {
+      const result = await request<{ engine_checked: boolean; engine_status: string; detail: string }>("/sast/semgrep-rules/preflight", { method: "POST", body: JSON.stringify({ content: pack.content }) });
+      setMessage(`${pack.name}：${toolStatusLabel(result.engine_status)}。${result.detail}`);
+    } catch (error) { setMessage(`真实引擎预检失败：${errorMessage(error)}`); }
   }
+
   async function publish(pack: SastSemgrepRule) {
-    try { await request<SastProfile>(`/sast/projects/${project.id}/semgrep-rules/${pack.id}/publish`, { method: "POST" }); setMessage(`${pack.name} 已发布。`); await load(); }
-    catch (error) { setMessage(`发布失败：${errorMessage(error)}`); }
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/semgrep-rules/${pack.id}/publish`, { method: "POST" });
+      setProfile(saved); setPacks(saved.semgrep_rules ?? []); setMessage(`${pack.name} 已发布。`);
+    } catch (error) { setMessage(`发布失败：${errorMessage(error)}`); }
   }
-  return <details className="advanced-details governance-advanced-details"><summary>Semgrep 规则发布与真实引擎预检</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>规则包生命周期</h2><span>draft / published / archived；发布后的包才会实际进入 Semgrep 扫描</span></div>{packs.length ? <table><thead><tr><th>名称</th><th>状态</th><th>审批</th><th>操作</th></tr></thead><tbody>{packs.map((pack) => <tr key={pack.id}><td>{pack.name}<span className="cell-subtext">{pack.rule_ids.join(", ")}</span></td><td>{pack.status}</td><td>{pack.approved_by ?? "未记录"}</td><td><button className="secondary-action" onClick={() => void preflight(pack)}>真实引擎预检</button>{pack.status !== "published" ? <button className="secondary-action" onClick={() => void publish(pack)}>发布</button> : null}</td></tr>)}</tbody></table> : <div className="empty-project">先在“语义分析、Git 基线与交付门禁”区域创建 YAML 规则包。</div>}{message ? <div className="empty-project">{message}</div> : null}</div></section></div></details>;
+
+  async function toggle(pack: SastSemgrepRule) {
+    try {
+      const saved = await request<SastProfile>(`/sast/projects/${project.id}/semgrep-rules/${pack.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !pack.enabled }) });
+      setProfile(saved); setPacks(saved.semgrep_rules ?? []);
+    } catch (error) { setMessage(`更新失败：${errorMessage(error)}`); }
+  }
+
+  return <details className="advanced-details governance-advanced-details"><summary>Git 增量扫描与 Semgrep YAML 专家规则</summary><div className="advanced-details-body"><section className="content-grid">
+    <div className="panel full"><div className="panel-header"><h2>Git 对比与历史密钥检查</h2><span>留空基线时仍会执行完整扫描</span></div><div className="filter-grid"><label>对比的 Git 版本<input value={profile?.git_baseline_ref ?? ""} placeholder="例如 origin/main 或 HEAD~1" onChange={(event) => setProfile((value) => value ? { ...value, git_baseline_ref: event.target.value } : value)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.scan_git_history_secrets ?? true} onChange={(event) => setProfile((value) => value ? { ...value, scan_git_history_secrets: event.target.checked } : value)} />检查历史提交中的疑似密钥路径</label><label className="inline-check"><input type="checkbox" checked={profile?.changed_files_only ?? false} disabled={!profile?.git_baseline_ref} onChange={(event) => setProfile((value) => value ? { ...value, changed_files_only: event.target.checked } : value)} />只扫描相对基线发生变化的文件</label><button className="secondary-action" disabled={!profile} onClick={() => void saveGitProfile()}>保存 Git 配置</button><button className="secondary-action" onClick={() => void load()}>刷新统计</button></div>{message ? <div className="empty-project">{message}</div> : null}</div>
+    <div className="panel"><div className="panel-header"><h2>CI 门禁结果</h2><span>{qualityGateStatusLabel(report?.quality_gate.status)}</span></div><div className="kv-list"><div><span>阻断等级</span><strong>{severityLabel(report?.quality_gate.threshold)}</strong></div><div><span>达到门槛的问题</span><strong>{report?.quality_gate.blocking_finding_count ?? 0}</strong></div><div><span>本次风险记录</span><strong>{report?.summary.finding_count ?? 0}</strong></div></div></div>
+    <div className="panel"><div className="panel-header"><h2>Git 证据</h2><span>{report?.git.available ? "已读取 Git 信息" : "未读取到 Git 信息"}</span></div><div className="kv-list"><div><span>对比版本</span><strong>{report?.git.baseline_ref ?? "未设置"}</strong></div><div><span>变化文件</span><strong>{report?.git.changed_files?.length ?? 0}</strong></div><div><span>疑似历史密钥路径</span><strong>{report?.git.history_secret_count ?? report?.git.history_secret_files?.length ?? 0}</strong></div></div></div>
+    <div className="panel full"><div className="panel-header"><h2>Semgrep YAML 规则包</h2><span>只有“已发布 + 已启用”的规则包才参与扫描</span></div><details className="advanced-details"><summary>新建专家规则包</summary><p>普通项目无需创建。只有熟悉 Semgrep YAML 时才使用这里。</p><div className="filter-grid"><label>规则包名称<input value={draft.name} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} /></label><label>保存状态<select value={draft.status} onChange={(event) => setDraft((value) => ({ ...value, status: event.target.value as "draft" | "published" }))}><option value="draft">仅保存草稿</option><option value="published">保存并发布</option></select></label><label className="wide-field">规则 YAML<textarea value={draft.content} onChange={(event) => setDraft((value) => ({ ...value, content: event.target.value }))} rows={9} /></label><button className="secondary-action" onClick={() => void validatePack()}>校验规则</button><button className="primary-action" onClick={() => void savePack()}>{draft.status === "draft" ? "保存草稿" : "保存并发布"}</button></div></details>{packs.length ? <table><thead><tr><th>规则包</th><th>规则 ID</th><th>生命周期</th><th>操作</th></tr></thead><tbody>{packs.map((pack) => <tr key={pack.id}><td>{pack.name}<span className="cell-subtext">v{pack.version} · {pack.approved_by ? `审批：${pack.approved_by}` : "未记录审批人"}</span></td><td>{pack.rule_ids.join(", ")}</td><td>{semgrepRuleStatusLabel(pack.status)}<span className="cell-subtext">{pack.enabled ? "已启用" : "已停用"}</span></td><td><button className="secondary-action" onClick={() => void preflight(pack)}>真实引擎预检</button>{pack.status !== "published" ? <button className="secondary-action" onClick={() => void publish(pack)}>发布</button> : null}<button className="secondary-action" onClick={() => void toggle(pack)}>{pack.enabled ? "停用" : "启用"}</button></td></tr>)}</tbody></table> : <div className="empty-project">没有项目自定义 YAML 规则包；默认离线规则仍会参与扫描。</div>}</div>
+    <div className="panel full"><div className="panel-header"><h2>后续验证建议</h2><span>不会自动发送请求或执行沙箱命令</span></div>{report?.validation_suggestions.length ? <ul>{report.validation_suggestions.map((item) => <li key={item.finding_id}><strong>{item.recommended_module}</strong> · {item.next_step}</li>)}</ul> : <div className="empty-project">当前没有需要跨模块验证的高风险线索。</div>}</div>
+  </section></div></details>;
 }
 
 function SastAiAgentsPanel({ project, onRunReview }: { project: Project; onRunReview: () => Promise<void> }) {
@@ -1254,20 +1335,7 @@ function SastOperationsConsole({ project }: { project: Project }) {
     try { setProfile(await request<SastProfile>(`/sast/projects/${project.id}/profile`, { method: "PATCH", body: JSON.stringify({ quality_gate: profile.quality_gate }) })); setMessage("项目级 SAST 门禁已保存。"); }
     catch (error) { setMessage(`门禁保存失败：${errorMessage(error)}`); }
   }
-  return <details className="advanced-details governance-advanced-details" open><summary>SAST 异步任务与可配置质量门禁</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>可追踪 SAST Job</h2><span>队列、进度、取消、重试和 Worker 入口</span></div><div className="filter-grid"><label className="wide-field">源码路径<input value={sourcePath} onChange={(event) => setSourcePath(event.target.value)} /></label><button className="primary-action" onClick={() => void queue()} disabled={!sourcePath.trim()}>创建 SAST Job</button><button className="secondary-action" onClick={() => void load()}>刷新状态</button></div><p>常驻 Worker：<code>python scripts\sast_worker.py --max-jobs 0 --concurrency 1</code>。不启动 Worker 时，可对单个 Job 点击“本次运行”。</p>{jobs.length ? <table><thead><tr><th>状态</th><th>阶段 / 进度</th><th>尝试</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td>{job.status}<span className="cell-subtext">{formatDateTime(job.created_at)}</span></td><td>{job.stage ?? "-"}<span className="cell-subtext">{job.progress}% {job.error ? `· ${job.error}` : ""}</span></td><td>{job.attempt}</td><td>{job.status === "queued" ? <><button className="secondary-action" onClick={() => void run(job)}>本次运行</button><button className="secondary-action" onClick={() => void changeJob(job, "cancel")}>取消</button></> : job.status === "failed" || job.status === "cancelled" ? <button className="secondary-action" onClick={() => void changeJob(job, "retry")}>重试</button> : "-"}</td></tr>)}</tbody></table> : <div className="empty-project">尚无 SAST Job。</div>}</div><div className="panel full"><div className="panel-header"><h2>项目质量门禁</h2><span>按分支、等级、新问题和规则例外计算</span></div><div className="filter-grid"><label>阻断等级<select value={profile?.quality_gate.threshold ?? "high"} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, threshold: event.target.value as SastQualityGate["threshold"] } } : value)}>{(["critical", "high", "medium", "low", "info", "none"] as const).map((item) => <option key={item}>{item}</option>)}</select></label><label>分支 glob<input value={profile?.quality_gate.branch_patterns.join(",") ?? "*"} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, branch_patterns: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } } : value)} /></label><label>排除规则 ID<input value={profile?.quality_gate.excluded_rule_ids.join(",") ?? ""} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, excluded_rule_ids: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } } : value)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.quality_gate.enabled ?? true} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, enabled: event.target.checked } } : value)} />启用门禁</label><label className="inline-check"><input type="checkbox" checked={profile?.quality_gate.block_new_only ?? false} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, block_new_only: event.target.checked } } : value)} />只阻断新增问题</label><button className="secondary-action" disabled={!profile} onClick={() => void saveGate()}>保存门禁</button></div>{message ? <div className="empty-project">{message}</div> : null}</div></section></div></details>;
-}
-
-function SastFixDrafts({ project }: { project: Project }) {
-  const [findings, setFindings] = useState<Finding[]>([]);
-  const [draft, setDraft] = useState<SastFixDraft | null>(null);
-  const [message, setMessage] = useState("");
-  useEffect(() => { void request<Finding[]>(`/sast/projects/${project.id}/findings`).then(setFindings).catch(() => setFindings([])); setDraft(null); }, [project.id]);
-  async function loadDraft(findingId: string) {
-    try { setDraft(await request<SastFixDraft>(`/sast/findings/${findingId}/fix-draft`)); setMessage(""); }
-    catch (error) { setMessage(`无法生成草案：${errorMessage(error)}`); }
-  }
-  const candidates = findings.filter((item) => item.severity === "critical" || item.severity === "high").slice(0, 8);
-  return <details className="advanced-details governance-advanced-details"><summary>修复草案与回归扫描（仅供人工评审）</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>高风险 Finding 修复草案</h2><span>不会写入源码、不会创建 PR，也不会自动执行回归</span></div>{candidates.length ? <table><thead><tr><th>等级</th><th>Finding</th><th>位置</th><th>操作</th></tr></thead><tbody>{candidates.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{item.severity}</span></td><td>{item.title}<span className="cell-subtext">{item.rule_id}</span></td><td>{item.file_path ?? "项目级"}:{item.line_start ?? "-"}</td><td><button className="secondary-action" onClick={() => void loadDraft(item.id)}>生成评审草案</button></td></tr>)}</tbody></table> : <div className="empty-project">先执行 SAST；出现 critical/high Finding 后可生成不落盘的修复草案。</div>}{message ? <div className="empty-project">{message}</div> : null}</div>{draft ? <div className="panel full"><div className="panel-header"><h2>草案：{draft.category}</h2><span>{draft.status}</span></div><p>{draft.recommended_change}</p><pre className="code-preview">{draft.patch}</pre><p>{draft.limitations.join(" ")}</p><small>回归：{draft.regression_scan.endpoint}（必填：{draft.regression_scan.required_fields.join("、")}）。</small></div> : null}</section></div></details>;
+  return <details className="advanced-details governance-advanced-details"><summary>异步任务与 CI 质量门禁（服务器部署可选）</summary><div className="advanced-details-body"><section className="content-grid"><div className="panel full"><div className="panel-header"><h2>后台扫描任务</h2><span>仅在需要排队、Worker 或失败重试时使用</span></div><div className="filter-grid"><label className="wide-field">源码路径<input value={sourcePath} onChange={(event) => setSourcePath(event.target.value)} /></label><button className="primary-action" onClick={() => void queue()} disabled={!sourcePath.trim()}>创建后台任务</button><button className="secondary-action" onClick={() => void load()}>刷新状态</button></div><p>服务器常驻 Worker：<code>python scripts\sast_worker.py --max-jobs 0 --concurrency 1</code>。本地日常扫描不需要使用这里。</p>{jobs.length ? <table><thead><tr><th>状态</th><th>阶段 / 进度</th><th>尝试次数</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td>{scanStatusLabel(job.status)}<span className="cell-subtext">{formatDateTime(job.created_at)}</span></td><td>{scanStageLabel(job.stage)}<span className="cell-subtext">{job.progress}% {job.error ? `· ${job.error}` : ""}</span></td><td>{job.attempt}</td><td>{job.status === "queued" ? <><button className="secondary-action" onClick={() => void run(job)}>立即执行此任务</button><button className="secondary-action" onClick={() => void changeJob(job, "cancel")}>取消</button></> : job.status === "failed" || job.status === "cancelled" ? <button className="secondary-action" onClick={() => void changeJob(job, "retry")}>重新排队</button> : "-"}</td></tr>)}</tbody></table> : <div className="empty-project">没有后台 SAST 任务；普通扫描无需创建任务。</div>}</div><div className="panel full"><div className="panel-header"><h2>CI 发布门禁</h2><span>用于决定代码流水线是否允许继续发布，不影响本地查看扫描结果</span></div><div className="filter-grid"><label>阻断等级<select value={profile?.quality_gate.threshold ?? "high"} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, threshold: event.target.value as SastQualityGate["threshold"] } } : value)}>{(["critical", "high", "medium", "low", "info", "none"] as const).map((item) => <option value={item} key={item}>{severityLabel(item)}</option>)}</select></label><label>适用分支（glob）<input value={profile?.quality_gate.branch_patterns.join(",") ?? "*"} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, branch_patterns: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } } : value)} /></label><label>不参与阻断的规则 ID<input value={profile?.quality_gate.excluded_rule_ids.join(",") ?? ""} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, excluded_rule_ids: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } } : value)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.quality_gate.enabled ?? true} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, enabled: event.target.checked } } : value)} />启用 CI 门禁</label><label className="inline-check"><input type="checkbox" checked={profile?.quality_gate.block_new_only ?? false} onChange={(event) => setProfile((value) => value ? { ...value, quality_gate: { ...value.quality_gate, block_new_only: event.target.checked } } : value)} />只阻断本次新增问题</label><button className="secondary-action" disabled={!profile} onClick={() => void saveGate()}>保存门禁配置</button></div>{message ? <div className="empty-project">{message}</div> : null}</div></section></div></details>;
 }
 
 function SastSemanticDelivery({ project }: { project: Project }) {
@@ -1406,7 +1474,10 @@ function SastEvidenceGovernance({ project }: { project: Project }) {
       request<SastScanHistoryItem[]>(`/sast/projects/${project.id}/scan-history`).catch(() => []),
     ]);
     setProfile(nextProfile);
-    setHistory(nextHistory);
+    setHistory(nextHistory.map((item) => ({
+      ...item,
+      engine_status: Object.fromEntries(Object.entries(item.engine_status).map(([key, value]) => [key, { ...value, status: toolStatusLabel(value.status), detail: sastEngineDetailLabel(value.detail) }])),
+    })));
     setSelectedScanId((current) => current && nextHistory.some((item) => item.scan_task_id === current) ? current : nextHistory[0]?.scan_task_id ?? "");
   }
 
@@ -2094,19 +2165,31 @@ function RetestComparisonPanel({ comparison }: { comparison: FindingRetestCompar
 
 function FindingEvidenceDetail({ finding, validations, evidence, graph, onClose }: { finding: Finding; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; onClose: () => void }) {
   const [recordPage, setRecordPage] = useState(1);
+  const [fixDraft, setFixDraft] = useState<SastFixDraft | null>(null);
+  const [fixDraftMessage, setFixDraftMessage] = useState("");
+  const [fixDraftLoading, setFixDraftLoading] = useState(false);
   const nodes = findingEvidenceNodes(finding.id, graph);
   const relatedValidations = validations.filter((item) => item.finding_id === finding.id);
   const validationIds = new Set(relatedValidations.map((item) => item.id));
   const relatedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id)));
   const relatedRecords = [...relatedValidations.map((item) => ({ kind: "validation" as const, item })), ...relatedEvidence.map((item) => ({ kind: "evidence" as const, item }))];
   const recordPagination = paginate(relatedRecords, recordPage);
-  useEffect(() => { setRecordPage(1); }, [finding.id, relatedRecords.length]);
+  useEffect(() => { setRecordPage(1); setFixDraft(null); setFixDraftMessage(""); }, [finding.id, relatedRecords.length]);
   const hasValidation = relatedValidations.length > 0 || nodes.some((node) => node.kind === "validation");
   const hasRuntimeEvidence = relatedEvidence.length > 0 || nodes.some((node) => node.kind === "evidence");
   const conclusion = hasValidation && hasRuntimeEvidence ? "已形成完整证据链" : hasRuntimeEvidence ? "已有运行证据" : hasValidation ? "已完成动态验证" : "仅发现，尚未验证";
+  async function loadFixDraft() {
+    setFixDraftLoading(true);
+    try {
+      setFixDraft(await request<SastFixDraft>(`/sast/findings/${finding.id}/fix-draft`));
+      setFixDraftMessage("");
+    } catch (error) { setFixDraftMessage(`无法生成草案：${errorMessage(error)}`); }
+    finally { setFixDraftLoading(false); }
+  }
   return <section className="finding-evidence-detail">
     <div className="panel-header"><div><h3>风险证据链</h3><span>{finding.title}</span></div><button className="secondary-action" onClick={onClose}>关闭</button></div>
     <div className="evidence-conclusion"><strong>{conclusion}</strong><span>{nodes.length ? "以下内容来自已保存的显式关联，不代表自动确认漏洞成立。" : "当前问题还没有关联 DAST 或 SANDBOX 证据。"}</span></div>
+      {finding.source === "SAST" && ["critical", "high"].includes(finding.severity) ? <details className="record-evidence"><summary>人工评审修复草案（不会修改源码）</summary><p>草案仅供开发人员参考，不会写入文件、创建提交、创建 PR 或自动执行回归。</p><button className="secondary-action" disabled={fixDraftLoading} onClick={() => void loadFixDraft()}>{fixDraftLoading ? "正在生成" : fixDraft ? "重新生成草案" : "生成修复草案"}</button>{fixDraftMessage ? <div className="empty-project">{fixDraftMessage}</div> : null}{fixDraft ? <dl><div><dt>建议修改</dt><dd>{fixDraft.recommended_change}</dd></div><div><dt>补丁草案</dt><dd><pre className="code-preview">{fixDraft.patch}</pre></dd></div><div><dt>限制</dt><dd>{fixDraft.limitations.join("；") || "无额外说明"}</dd></div><div><dt>回归入口</dt><dd>{fixDraft.regression_scan.endpoint}（必填：{fixDraft.regression_scan.required_fields.join("、")}）</dd></div></dl> : null}</details> : null}
       {finding.ai_review?.ai_provider ? <details className="record-evidence" open><summary>DeepSeek 多 Agent 复核：{finding.ai_review.review_verdict ?? "等待人工确认"} · 置信度 {finding.ai_review.ai_confidence ?? 0}%</summary><dl><div><dt>证据摘要</dt><dd>{finding.ai_review.evidence_summary ?? finding.ai_review.summary}</dd></div><div><dt>Agent 流程</dt><dd>{(finding.ai_review.agent_pipeline ?? []).map(sastAgentRoleLabel).join(" → ")}</dd></div><div><dt>修复建议</dt><dd>{finding.ai_review.fix_draft?.recommended_change ?? finding.ai_review.fix_strategy ?? finding.ai_review.remediation}</dd></div><div><dt>补丁草案</dt><dd>{finding.ai_review.fix_draft?.patch ? <pre className="code-preview">{finding.ai_review.fix_draft.patch}</pre> : "未保存补丁草案"}</dd></div></dl></details> : null}
       <ol className="evidence-timeline">
       <li><b>{finding.source}</b><div><strong>发现风险</strong><span>{finding.file_path ?? "项目级问题"} · {severityLabel(finding.severity)}</span></div></li>
@@ -2578,8 +2661,12 @@ function scaExceptionStatusLabel(value: string) { return value === "pending" ? "
 function vexStatusLabel(value: ScaVex["status"]) { return value === "not_affected" ? "未受影响" : value === "fixed" ? "已修复" : value === "affected" ? "受影响" : "调查中"; }
 function dependencyTypeLabel(value?: string | null) { return value === "runtime" ? "运行依赖" : value === "development" ? "开发依赖" : value === "optional" ? "可选依赖" : value === "peer" ? "对等依赖" : value === "test" ? "测试依赖" : value === "transitive" ? "传递依赖" : value === "compile" ? "编译依赖" : value === "provided" ? "容器提供" : value === "system" ? "系统依赖" : value === "import" ? "导入依赖" : value ?? "-"; }
 function licensePolicyLabel(value?: string | null) { return value === "allowed" ? "允许" : value === "review_required" ? "需合规复核" : value === "restricted" ? "受限需审批" : value === "unknown" ? "未知需确认" : value ?? "-"; }
-function scanStatusLabel(value?: string | null) { return value === "queued" ? "排队中" : value === "running" ? "运行中" : value === "completed" ? "已完成" : value === "failed" ? "失败" : value ?? "-"; }
-function toolStatusLabel(value?: string | null) { return value === "disabled" ? "未启用" : value === "success" ? "成功" : value === "partial_failed" ? "部分成功" : value === "failed" ? "失败" : value ?? "未知"; }
+function scanStatusLabel(value?: string | null) { return value === "queued" ? "排队中" : value === "running" ? "运行中" : value === "completed" ? "已完成" : value === "failed" ? "失败" : value === "cancelled" ? "已取消" : value ?? "-"; }
+function scanStageLabel(value?: string | null) { return value === "queued" ? "等待执行" : value === "running" ? "正在扫描" : value === "completed" ? "执行完成" : value === "failed" ? "执行失败" : value === "cancelled" ? "已取消" : value ?? "-"; }
+function toolStatusLabel(value?: string | null) { return value === "disabled" ? "未启用" : value === "success" || value === "completed" || value === "available" ? "已完成" : value === "partial_failed" || value === "degraded" ? "部分完成（已降级）" : value === "failed" ? "失败" : value === "not_run" ? "未运行" : value ?? "未知"; }
+function qualityGateStatusLabel(value?: string | null) { return value === "block" ? "未通过：存在达到阻断等级的问题" : value === "pass" ? "已通过" : "等待扫描"; }
+function semgrepRuleStatusLabel(value: SastSemgrepRule["status"]) { return value === "draft" ? "草稿（不参与扫描）" : value === "published" ? "已发布" : "已归档"; }
+function sastEngineDetailLabel(value?: string | null) { const text = value ?? ""; const timeout = text.match(/Semgrep scan timed out after (\d+)s/i); return timeout ? `Semgrep 扫描超过 ${timeout[1]} 秒，已超时；本地规则结果仍然有效。` : text || "无额外说明"; }
 function toolExecutionStatusLabel(value?: string | null) { return value === "success" ? "成功" : value === "fallback" ? "已使用基础清单" : value === "failed" ? "失败" : value === "not_run" ? "未运行" : value ?? "旧批次未记录"; }
 function scaDataStatusLabel(value?: unknown) { const status = String(value ?? ""); return status === "available" ? "已就绪" : status === "not_configured" ? "未导入（可选）" : status === "offline_degraded" ? "已使用基础本地规则" : status === "invalid" ? "数据不可用" : status === "missing" ? "未找到数据" : status || "未记录"; }
 function nativeDependencyStatusLabel(value?: unknown) { const status = String(value ?? ""); return status === "not_applicable" ? "不适用（未发现该生态）" : status === "fallback_used" ? "已使用清单推断" : status === "captured" ? "已读取实际关系" : status === "tool_unavailable" ? "未使用本机工具" : status === "available" ? "已就绪" : status || "未记录"; }
