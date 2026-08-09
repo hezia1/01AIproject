@@ -9,6 +9,11 @@ on:
         default: high
         type: choice
         options: [none, critical, high, medium, low]
+      profile_path:
+        description: Optional checked-out SAST CI config exported by the platform
+        required: false
+        default: ""
+        type: string
   pull_request:
     paths:
       - "apps/**"
@@ -38,9 +43,14 @@ jobs:
       - name: Scan repository and create SARIF
         id: sast
         shell: bash
+        env:
+          SAST_PROFILE_PATH: ${{ inputs.profile_path || '' }}
         run: |
           set +e
           args=(--source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on "${{ inputs.fail_on || 'high' }}")
+          if [[ -n "$SAST_PROFILE_PATH" ]]; then
+            args+=(--profile "$SAST_PROFILE_PATH")
+          fi
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             args+=(--baseline "${{ github.event.pull_request.base.sha }}" --changed-files-only)
           fi

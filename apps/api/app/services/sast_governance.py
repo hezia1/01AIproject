@@ -348,16 +348,16 @@ def normalize_suppression(value: dict[str, object], require_reason: bool) -> dic
 
 
 def validate_semgrep_config(value: object) -> str:
-    config = str(value or "p/default").strip()
+    config = str(value or BUILTIN_CONFIG).strip()
     if not config or len(config) > 500:
         raise ValueError("semgrep_config must be between 1 and 500 characters")
-    if config == BUILTIN_CONFIG:
-        return config
+    if config in {BUILTIN_CONFIG, "p/default"}:
+        return BUILTIN_CONFIG
     if config.startswith("p/"):
-        return config
+        raise ValueError("Remote Semgrep registry packs are disabled; import a local YAML rule pack instead")
     path = PurePosixPath(config.replace("\\", "/"))
     if path.is_absolute() or ".." in path.parts or path.suffix.lower() not in {".yaml", ".yml", ".json"}:
-        raise ValueError("semgrep_config must be a registry pack (p/...) or a project-relative .yml/.yaml/.json file")
+        raise ValueError("semgrep_config must be the built-in offline pack or a project-relative .yml/.yaml/.json file")
     return path.as_posix()
 
 

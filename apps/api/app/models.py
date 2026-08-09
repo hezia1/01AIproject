@@ -407,7 +407,7 @@ class SastScanRequest(BaseModel):
     project_id: UUID
     source_path: str = Field(min_length=1)
     clear_previous: bool = True
-    semgrep_config: str = "p/default"
+    semgrep_config: str = "builtin/offline-default.yml"
     include_local_rules: bool = True
     branch: str | None = Field(default=None, max_length=200)
 

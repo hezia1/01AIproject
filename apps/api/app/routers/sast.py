@@ -1,5 +1,6 @@
 from datetime import datetime
 from fnmatch import fnmatchcase
+from html import escape
 from pathlib import Path
 from uuid import UUID
 
@@ -145,7 +146,7 @@ def queue_sast_scan(payload: SastScanRequest, request: Request, db: Session = De
     if active:
         raise HTTPException(status_code=409, detail="A SAST job is already queued or running for this project")
     metadata = {
-        "task_kind": "sast_job", "payload": {**payload.model_dump(mode="json"), "source_path": source_path},
+        "task_kind": "sast_job", "payload": serialize_sast_job_payload(payload, source_path),
         "progress": 0, "stage": "queued", "attempt": 1,
         "events": [{"at": datetime.utcnow().isoformat() + "Z", "stage": "queued", "detail": "SAST job queued"}],
     }
@@ -187,16 +188,24 @@ def execute_queued_sast_job(db: Session, job: ScanTaskRecord, request: Request) 
     try:
         result = run_sast_scan(payload, request, db)
         db.refresh(job)
-        job.status = ScanStatus.completed.value
-        job.finished_at = datetime.utcnow()
         metadata = dict(job.scan_metadata or {})
         metadata["result_scan_task_id"] = str(result.scan_task_id)
         job.scan_metadata = metadata
+        if job.status == ScanStatus.cancelled.value:
+            update_sast_job_metadata(job, progress=100, stage="cancelled", detail="SAST execution finished after cancellation; the result batch was retained for audit")
+            db.commit()
+            return result
+        job.status = ScanStatus.completed.value
+        job.finished_at = datetime.utcnow()
         update_sast_job_metadata(job, progress=100, stage="completed", detail="Worker completed SAST execution")
         db.commit()
         return result
     except Exception as exc:
         db.refresh(job)
+        if job.status == ScanStatus.cancelled.value:
+            update_sast_job_metadata(job, progress=int((job.scan_metadata or {}).get("progress") or 10), stage="cancelled", detail=f"Cancelled job stopped with: {exc}")
+            db.commit()
+            raise
         job.status = ScanStatus.failed.value
         job.finished_at = datetime.utcnow()
         update_sast_job_metadata(job, progress=int((job.scan_metadata or {}).get("progress") or 10), stage="failed", detail=str(exc))
@@ -213,6 +222,15 @@ def update_sast_job_metadata(job: ScanTaskRecord, *, progress: int, stage: str, 
     events.append({"at": datetime.utcnow().isoformat() + "Z", "stage": stage, "detail": detail[:1000], "progress": progress})
     metadata.update({"progress": progress, "stage": stage, "queue_position": None, "events": events})
     job.scan_metadata = metadata
+
+
+def serialize_sast_job_payload(payload: SastScanRequest, source_path: str) -> dict[str, object]:
+    """Persist only caller-supplied overrides so a queued job keeps the project profile."""
+    return {
+        **payload.model_dump(mode="json", exclude_unset=True),
+        "project_id": str(payload.project_id),
+        "source_path": source_path,
+    }
 
 
 @router.get("/projects/{project_id}/findings", response_model=list[Finding])
@@ -472,9 +490,12 @@ def sast_report_html(project_id: UUID, scan_task_id: UUID | None = None, db: Ses
     report = sast_report(project_id, scan_task_id, db)
     summary = report["summary"]
     severity = summary["severity"] if isinstance(summary, dict) else {}
-    rows = "".join(f"<tr><td>{key}</td><td>{value}</td></tr>" for key, value in severity.items())
+    labels = {"critical": "严重", "high": "高危", "medium": "中危", "low": "低危", "info": "提示"}
+    rows = "".join(f"<tr><td>{escape(labels.get(str(key), str(key)))}</td><td>{int(value)}</td></tr>" for key, value in severity.items())
     gate = report["quality_gate"] if isinstance(report["quality_gate"], dict) else {}
-    return HTMLResponse(f"<!doctype html><html><head><meta charset='utf-8'><title>SAST report</title></head><body><h1>SAST report</h1><p>Project: {project_id}</p><p>Findings: {summary.get('finding_count', 0)}</p><p>Quality gate: {gate.get('status', 'unknown')}</p><table><thead><tr><th>Severity</th><th>Count</th></tr></thead><tbody>{rows}</tbody></table><p>This export contains summarized, redacted evidence only.</p></body></html>")
+    scan = report.get("scan") if isinstance(report.get("scan"), dict) else {}
+    html = f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>SAST 扫描报告</title><style>body{{font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #d9e0ec;padding:10px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>SAST 扫描报告</h1><div class='meta'><p>项目：{escape(str(project_id))}</p><p>扫描批次：{escape(str(scan.get('scan_task_id') or '-'))}</p><p>风险发现：{int(summary.get('finding_count', 0))}</p><p>质量门禁：{escape(str(gate.get('status', 'unknown')))}</p></div><h2>严重等级分布</h2><table><thead><tr><th>等级</th><th>数量</th></tr></thead><tbody>{rows}</tbody></table><p>本报告仅包含汇总信息和已脱敏证据。</p></body></html>"""
+    return HTMLResponse(html, headers={"Content-Disposition": 'attachment; filename="sast-report.html"'})
 
 
 @router.get("/projects/{project_id}/validation-suggestions")
@@ -502,7 +523,7 @@ def get_sast_ci_config(project_id: UUID, db: Session = Depends(get_db)) -> dict[
             "SAST_OFFLINE_ONLY": "true",
             "SAST_SEMGREP_IMAGE": DEFAULT_SEMGREP_IMAGE,
         },
-        "command": f"python scripts/sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on {gate.get('threshold', 'high')}",
+        "command": "python scripts/sast_ci.py --source . --offline --profile sast-ci-config.json --json sast-result.json --sarif sast-result.sarif",
         "quality_gate": gate,
         "workflow": ".github/workflows/sast-local.yml",
         "offline_assets": "D:\\project\\PYproject\\AI网安项目\\artifacts\\sast-offline",

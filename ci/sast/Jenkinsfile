@@ -1,11 +1,20 @@
 pipeline {
   agent any
-  environment { SAST_FAIL_ON = "high" }
+  environment {
+    SAST_FAIL_ON = "high"
+    SAST_PROFILE_PATH = ""
+  }
   stages {
     stage('SAST') {
       steps {
         bat 'python -m pip install -r apps\\api\\requirements.txt'
-        bat 'python scripts\\sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on %SAST_FAIL_ON%'
+        bat '''
+          if "%SAST_PROFILE_PATH%"=="" (
+            python scripts\sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on %SAST_FAIL_ON%
+          ) else (
+            python scripts\sast_ci.py --source . --offline --profile "%SAST_PROFILE_PATH%" --json sast-result.json --sarif sast-result.sarif --fail-on %SAST_FAIL_ON%
+          )
+        '''
       }
     }
   }

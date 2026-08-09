@@ -13,7 +13,7 @@ from app.services.sast_scanner import ParsedFinding, SastScanOutput, detect_lang
 from app.services.sast_semgrep_rules import BUILTIN_CONFIG, builtin_rule_pack_path
 
 
-DEFAULT_SEMGREP_IMAGE = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.95.0")
+DEFAULT_SEMGREP_IMAGE = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.167.0")
 
 
 class SemgrepUnavailable(RuntimeError):
@@ -24,8 +24,8 @@ def scan_with_semgrep(source_path: str, config: str = BUILTIN_CONFIG, timeout_se
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
-    if os.getenv("SAST_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"} and config.startswith("p/"):
-        raise SemgrepUnavailable("Offline mode cannot resolve a Semgrep registry pack; use local rules or a project-relative config file")
+    if config.startswith("p/"):
+        raise SemgrepUnavailable("Remote Semgrep registry packs are disabled; use the built-in offline rules or an imported local rule pack")
 
     configs: list[str | Path] = [builtin_rule_pack_path() if config == BUILTIN_CONFIG else config]
     configs.extend(extra_configs or [])
@@ -68,23 +68,15 @@ def build_semgrep_command(root: Path, configs: Iterable[str | Path], include_pat
     include_args = [item for path in (include_paths or []) for item in ("--include", path)]
     semgrep_path = shutil.which("semgrep")
     if semgrep_path:
-        return [semgrep_path, "scan", "--json", *config_args, *include_args, "--no-git-ignore", *semgrep_excludes(), "."]
+        return [semgrep_path, "scan", "--json", "--metrics=off", "--disable-version-check", *config_args, *include_args, "--no-git-ignore", *semgrep_excludes(), "."]
 
     docker_path = shutil.which("docker")
     if docker_path:
-        command = [
-            docker_path,
-            "run",
-            "--rm",
-            "-v",
-            f"{root}:/src",
-            "-w",
-            "/src",
-            DEFAULT_SEMGREP_IMAGE,
-            "semgrep",
-            "scan",
-            "--json",
-        ]
+        if not docker_image_available(docker_path, DEFAULT_SEMGREP_IMAGE):
+            raise SemgrepUnavailable(
+                f"本地未找到 Semgrep 镜像 {DEFAULT_SEMGREP_IMAGE}；平台不会自动联网拉取，请先离线导入镜像或通过 SAST_SEMGREP_IMAGE 指定已存在的镜像"
+            )
+        docker_mount_args: list[str] = []
         docker_config_args: list[str] = []
         for index, config in enumerate(values):
             if isinstance(config, Path) or Path(str(config)).is_absolute():
@@ -92,12 +84,48 @@ def build_semgrep_command(root: Path, configs: Iterable[str | Path], include_pat
                 if not path.is_file():
                     raise SemgrepUnavailable(f"Semgrep config file does not exist: {path}")
                 mount = f"/sast-config/{index}"
-                command[5:5] = ["-v", f"{path.parent}:{mount}:ro"]
+                docker_mount_args.extend(["-v", f"{path.parent}:{mount}:ro"])
                 docker_config_args.extend(["--config", f"{mount}/{path.name}"])
             else:
                 docker_config_args.extend(["--config", str(config)])
-        return [*command, *docker_config_args, *include_args, "--no-git-ignore", *semgrep_excludes(), "."]
+        return [
+            docker_path,
+            "run",
+            "--rm",
+            "--pull=never",
+            "-v",
+            f"{root}:/src:ro",
+            "-w",
+            "/src",
+            *docker_mount_args,
+            DEFAULT_SEMGREP_IMAGE,
+            "semgrep",
+            "scan",
+            "--json",
+            "--metrics=off",
+            "--disable-version-check",
+            *docker_config_args,
+            *include_args,
+            "--no-git-ignore",
+            *semgrep_excludes(),
+            ".",
+        ]
     return None
+
+
+def docker_image_available(docker_path: str, image: str) -> bool:
+    """Check the exact local image without giving Docker an opportunity to pull it."""
+    try:
+        return subprocess.run(
+            [docker_path, "image", "inspect", image],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=12,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def semgrep_excludes() -> list[str]:

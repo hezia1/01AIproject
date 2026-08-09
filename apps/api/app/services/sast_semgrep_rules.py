@@ -17,7 +17,8 @@ from typing import Iterable
 
 BUILTIN_CONFIG = "builtin/offline-default.yml"
 _RULES_ROOT = Path(__file__).resolve().parents[1] / "rules" / "sast"
-_OFFLINE_ROOT = Path(os.getenv("SAST_OFFLINE_DIR", r"D:\project\PYproject\AI网安项目\artifacts\sast-offline"))
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+_OFFLINE_ROOT = Path(os.getenv("SAST_OFFLINE_DIR", str(_REPOSITORY_ROOT / "artifacts" / "sast-offline")))
 
 
 def builtin_rule_pack_path() -> Path:
@@ -89,7 +90,7 @@ def semgrep_rule_preflight(content: object) -> dict[str, object]:
             return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": str(exc)[:500]}
         if image_check.returncode != 0:
             return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": f"Preloaded Docker image {DEFAULT_IMAGE_FOR_PREFLIGHT} is unavailable; structural YAML validation completed only."}
-        command = [docker, "run", "--rm", "-v", f"{path.parent}:/rules:ro", DEFAULT_IMAGE_FOR_PREFLIGHT, "semgrep", "validate", "--config", f"/rules/{path.name}"]
+        command = [docker, "run", "--rm", "--pull=never", "-v", f"{path.parent}:/rules:ro", DEFAULT_IMAGE_FOR_PREFLIGHT, "semgrep", "validate", "--config", f"/rules/{path.name}"]
     else:
         return {**structural, "engine_checked": False, "engine_status": "unavailable", "detail": "Semgrep CLI or Docker is unavailable; structural YAML validation completed only."}
     try:
@@ -101,4 +102,4 @@ def semgrep_rule_preflight(content: object) -> dict[str, object]:
     return {**structural, "engine_checked": True, "engine_status": "passed", "detail": (completed.stderr or completed.stdout or "Semgrep validation passed").strip()[:500]}
 
 
-DEFAULT_IMAGE_FOR_PREFLIGHT = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.95.0")
+DEFAULT_IMAGE_FOR_PREFLIGHT = os.getenv("SAST_SEMGREP_IMAGE", "semgrep/semgrep:1.167.0")

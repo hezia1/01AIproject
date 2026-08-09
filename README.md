@@ -2,7 +2,7 @@
 
 本项目实现 `01.pptx` 所描述的本地安全治理平台：围绕一个已存在的项目，接入本地源码、运行地址与运行入口，提供 SCA、SAST、AGENT、DAST、SANDBOX 和 ASPM 六个模块的扫描、验证、证据关联与治理汇总。
 
-本文档反映 **2026-08-08** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
+本文档反映 **2026-08-09** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
 ## 2026-08-03 SAST 与交付更新（本节覆盖下方较早的状态描述）
 
@@ -11,7 +11,7 @@
 - 本地扫描新增 Python 标准库 AST 的同函数和直接本地跨函数 Source → Sink → Sanitizer 检查，以及 JS/TS 保守本地数据流检查，覆盖 SQL、命令执行、SSRF、路径穿越和不安全反序列化。它们是有边界的静态线索，不是全程序数据流或可利用性证明。
 - SAST 扫描可记录 Git 基线差异和历史密钥标识：历史扫描只保存路径、信号摘要，绝不保存历史密钥值。API/前端提供 JSON、HTML、SARIF、扫描趋势、按分支/阈值/新增项/排除规则可配置的质量门禁、人工确认后的 DAST/SANDBOX 建议和“仅草案”修复补丁。
 - 项目 Semgrep YAML 规则包支持草稿、结构校验、已预载本地 CLI/Docker 引擎预检、审批发布、版本和启停；只有 enabled + published 包才 materialize 并参与扫描。
-- `scripts/sast_ci.py` 支持 Git 基线/差异文件与历史密钥参数；仓库同时提供 GitHub Actions、GitLab CI、Jenkins 和 Azure DevOps 的离线 CI 模板，会保存 JSON/SARIF 证据并执行本地门禁。
+- `scripts/sast_ci.py` 支持加载前端导出的项目 SAST 配置，统一使用项目自定义规则、已发布 YAML 规则包、抑制项、Git 基线和质量门禁；仓库同时提供 GitHub Actions、GitLab CI 和 Jenkins 的离线 CI 模板，会保存 JSON/SARIF 证据并执行本地门禁。
 - 扫描任务 API 提供持久化排队、并发上限、开始、进度、取消和重试事件；`scripts/sast_worker.py` 可作为常驻轮询 Worker 运行（`--once` 用于一次性处理），部署方应将它纳入自己的进程守护体系。
 
 仍未实现、也不应被宣称为已实现的是：真实外部模型或 Sub-agent 复核、自动提交修复补丁/PR、跨服务或动态调度的全程序污点分析、联网规则/镜像自动拉取，以及 DAST/SANDBOX 的自动攻击性执行。
@@ -77,16 +77,16 @@ npm run dev
 ### 平台仍缺少的共性能力
 
 - 用户登录、真实权限校验、组织/租户隔离与防篡改审计。
-- 扫描任务队列、后台 Worker、定时计划与失败重试。
+- 全模块统一任务队列、定时计划和分布式 Worker；目前 SAST 已有持久化队列、手动/常驻 Worker、取消与失败重试，其余模块仍是同步执行。
 - 跨模块的正式合规报告、签名与报表模板体系。
-- 覆盖全部模块的 CI/CD API、SDK 和外部系统集成；目前只有 SCA 已提供本地 CLI 和远程 API 门禁示例。
+- 覆盖全部模块的 CI/CD API、SDK 和外部系统集成；目前 SCA、SAST 已提供本地 CI CLI，SCA 另有远程 API 门禁示例。
 
 ## 模块完成度与边界
 
 | 模块 | 已实现（后端 + 前端） | 当前未完成的主要能力 |
 | --- | --- | --- |
 | SCA | 多生态依赖解析、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、可配置门禁、本地 CI CLI；所有治理和高级分析入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树；语义图推理与全平台 CI 集成。 |
-| SAST | 本地规则扫描、项目自定义正则规则（校验/样例预览/启停/版本）、固定版 Semgrep 可选增强、规则化 Agent 复核、项目级扫描配置/版本、工具健康与降级记录、规则/路径豁免、扫描历史/差异、SARIF 导出、本地离线 CI CLI 和 Finding 统一治理；入口均已在 SAST 治理页开放。 | 自定义 Semgrep YAML 规则编辑/发布、离线 Semgrep 镜像和规则包自动分发、AST/数据流/污点分析、真实外部 AI 复核和补丁生成。 |
+| SAST | 本地规则扫描、项目自定义正则规则、内置及项目自定义 Semgrep YAML 规则包（校验/预检/发布/启停/版本）、固定版 Semgrep 离线增强、Python AST 与有限跨函数污点分析、JS/TS 保守数据流、Git 基线、规则/路径豁免、扫描历史/差异、JSON/HTML/SARIF 导出、项目策略一致的离线 CI、持久化任务队列和 Finding 统一治理；入口均已在当前 SAST 页面开放。 | 真实外部 AI/Sub-agent 复核和自动补丁/PR；跨语言、跨服务、全程序数据流；行业业务语义 Skill 与历史漏洞知识自动学习；全模块分布式调度。 |
 | AGENT | Agent/MCP/插件配置与说明文件静态扫描，识别危险命令、敏感路径、网络能力、密钥风险；结果和统计已在 AGENT 页面开放。 | 不运行真实 Agent、不连接 MCP Server、不执行工具调用；缺少权限矩阵、行为回放与信任评分。 |
 | DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
 | SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
@@ -160,7 +160,7 @@ Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、
 
 - 基础 SCA/SAST/AGENT 需要被测项目的本地源码路径。
 - Syft/Grype/Trivy 增强需要 Docker、镜像及相应漏洞库；Semgrep 增强需要本机 CLI 或 Docker 镜像。
-- SAST 默认固定 Docker 镜像为 `semgrep/semgrep:1.95.0`，也可通过 `SAST_SEMGREP_IMAGE` 显式替换。离线运行时请将镜像和规则资源置于 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\`；该目录已忽略，不会自动下载或提交运行资源。
+- SAST 默认固定 Docker 镜像为 `semgrep/semgrep:1.167.0`，也可通过 `SAST_SEMGREP_IMAGE` 显式指定另一份本地已有镜像。运行前会先执行本地镜像检查，Docker 命令固定使用 `--pull=never`；平台不会自动下载 Registry 规则或镜像。项目 YAML 规则运行副本只写入 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\`，该目录已忽略。
 - DAST 需要可访问的目标 Web 地址；SANDBOX 需要 Docker Desktop 和可用镜像。
 - 当前没有登录、权限或租户隔离，不应直接暴露到公网。
 
@@ -181,7 +181,11 @@ cd D:\project\PYproject\AI网安项目
 .\.venv\Scripts\python.exe scripts\sast_ci.py --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on high
 ```
 
-`--offline` 使用本地规则且不依赖在线 Semgrep 规则包；`.github/workflows/sast-local.yml` 提供对应的 GitHub Actions 示例。
+`--offline` 使用本地规则且不依赖在线 Semgrep 规则包；`.github/workflows/sast-local.yml` 提供对应的 GitHub Actions 示例。若要让 CI 与平台项目配置完全一致，先在 SAST 页面导出 `sast-ci-config.json`，再执行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\sast_ci.py --source . --offline --profile sast-ci-config.json --json sast-result.json --sarif sast-result.sarif
+```
 
 ## 下一步最推荐的模块
 

@@ -6,14 +6,15 @@ sast_local:
   image: python:3.12-slim
   variables:
     SAST_FAIL_ON: "high"
+    SAST_PROFILE_PATH: ""
   before_script:
     - pip install -r apps/api/requirements.txt
     - git fetch --unshallow || true
   script:
-    - >-
-      python scripts/sast_ci.py --source . --offline
-      --json sast-result.json --sarif sast-result.sarif
-      --fail-on "$SAST_FAIL_ON"
+    - |
+      set -- --source . --offline --json sast-result.json --sarif sast-result.sarif --fail-on "$SAST_FAIL_ON"
+      if [ -n "$SAST_PROFILE_PATH" ]; then set -- "$@" --profile "$SAST_PROFILE_PATH"; fi
+      python scripts/sast_ci.py "$@"
   artifacts:
     when: always
     paths:

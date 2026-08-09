@@ -1,13 +1,18 @@
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from app.db_models import FindingRecord
+from app.models import SastScanRequest
 from app.services.sast_governance import add_custom_rule, add_suppression, apply_suppressions, effective_sast_profile, update_sast_profile, validate_custom_rule_payload
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import scan_source_tree
-from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE
-from app.routers.sast import sast_quality_gate
+from app.services.sast_semgrep_rules import BUILTIN_CONFIG, builtin_rule_pack_path
+from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, build_semgrep_command
+from app.routers.sast import sast_quality_gate, serialize_sast_job_payload
 
 
 def test_sast_profile_keeps_a_valid_engine_enabled():
@@ -60,6 +65,7 @@ def test_default_profile_is_safe_and_normalized():
     profile = effective_sast_profile({"sast_profile": {"semgrep_config": "p/default", "suppressions": "invalid"}})
 
     assert profile["include_local_rules"] is True
+    assert profile["semgrep_config"] == BUILTIN_CONFIG
     assert profile["suppressions"] == []
 
 
@@ -108,3 +114,42 @@ def test_custom_rule_is_validated_and_runs_in_local_scanner(tmp_path):
 def test_semgrep_docker_image_is_pinned():
     assert DEFAULT_SEMGREP_IMAGE.startswith("semgrep/semgrep:")
     assert not DEFAULT_SEMGREP_IMAGE.endswith(":latest")
+
+
+def test_queued_sast_payload_does_not_persist_request_defaults():
+    payload = SastScanRequest(project_id=uuid4(), source_path="D:/source")
+
+    stored = serialize_sast_job_payload(payload, "D:\\source")
+
+    assert stored["source_path"] == "D:\\source"
+    assert "semgrep_config" not in stored
+    assert "include_local_rules" not in stored
+    explicit = SastScanRequest(project_id=payload.project_id, source_path="D:/source", include_local_rules=False)
+    assert serialize_sast_job_payload(explicit, "D:\\source")["include_local_rules"] is False
+
+
+def test_semgrep_docker_command_never_pulls(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr("app.services.semgrep_scanner.shutil.which", lambda name: None if name == "semgrep" else "docker")
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("app.services.semgrep_scanner.subprocess.run", fake_run)
+    command = build_semgrep_command(tmp_path, [builtin_rule_pack_path()])
+
+    assert calls[0][:3] == ["docker", "image", "inspect"]
+    assert command is not None
+    assert "--pull=never" in command
+    assert f"{tmp_path.resolve()}:/src:ro" in command
+    assert "--metrics=off" in command
+
+
+def test_semgrep_missing_image_degrades_without_docker_run(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.services.semgrep_scanner.shutil.which", lambda name: None if name == "semgrep" else "docker")
+    monkeypatch.setattr("app.services.semgrep_scanner.subprocess.run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1))
+
+    with pytest.raises(SemgrepUnavailable, match="不会自动联网拉取"):
+        build_semgrep_command(Path(tmp_path), [builtin_rule_pack_path()])
