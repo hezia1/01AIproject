@@ -24,6 +24,11 @@ DEFAULT_SAST_PROFILE: dict[str, object] = {
     "git_baseline_ref": "",
     "scan_git_history_secrets": True,
     "changed_files_only": False,
+    "ai_enabled": False,
+    "ai_auto_scan": True,
+    "ai_max_input_chars": 60_000,
+    "ai_confidence_threshold": 80,
+    "ai_include_fix_drafts": True,
     "quality_gate": {
         "enabled": True,
         "threshold": "high",
@@ -54,13 +59,18 @@ def effective_sast_profile(config: dict[str, object] | None) -> dict[str, object
     profile["git_baseline_ref"] = validate_git_baseline_ref(profile.get("git_baseline_ref"))
     profile["scan_git_history_secrets"] = bool(profile.get("scan_git_history_secrets"))
     profile["changed_files_only"] = bool(profile.get("changed_files_only"))
+    profile["ai_enabled"] = bool(profile.get("ai_enabled"))
+    profile["ai_auto_scan"] = bool(profile.get("ai_auto_scan"))
+    profile["ai_include_fix_drafts"] = bool(profile.get("ai_include_fix_drafts"))
+    profile["ai_max_input_chars"] = bounded_profile_int(profile.get("ai_max_input_chars"), 60_000, 10_000, 200_000)
+    profile["ai_confidence_threshold"] = bounded_profile_int(profile.get("ai_confidence_threshold"), 80, 50, 100)
     profile["quality_gate"] = normalize_quality_gate(profile.get("quality_gate"))
     return profile
 
 
 def update_sast_profile(config: dict[str, object] | None, payload: dict[str, object]) -> dict[str, object]:
     profile = effective_sast_profile(config)
-    for key in ("semgrep_enabled", "include_local_rules", "clear_previous", "scan_git_history_secrets", "changed_files_only"):
+    for key in ("semgrep_enabled", "include_local_rules", "clear_previous", "scan_git_history_secrets", "changed_files_only", "ai_enabled", "ai_auto_scan", "ai_include_fix_drafts"):
         if key in payload:
             if not isinstance(payload[key], bool):
                 raise ValueError(f"{key} must be a boolean")
@@ -71,6 +81,10 @@ def update_sast_profile(config: dict[str, object] | None, payload: dict[str, obj
         profile["git_baseline_ref"] = validate_git_baseline_ref(payload["git_baseline_ref"])
     if "quality_gate" in payload:
         profile["quality_gate"] = normalize_quality_gate(payload["quality_gate"])
+    if "ai_max_input_chars" in payload:
+        profile["ai_max_input_chars"] = bounded_profile_int(payload["ai_max_input_chars"], 60_000, 10_000, 200_000)
+    if "ai_confidence_threshold" in payload:
+        profile["ai_confidence_threshold"] = bounded_profile_int(payload["ai_confidence_threshold"], 80, 50, 100)
     if not profile["semgrep_enabled"] and not profile["include_local_rules"]:
         raise ValueError("At least one SAST engine must be enabled")
     return profile
@@ -359,6 +373,14 @@ def validate_semgrep_config(value: object) -> str:
     if path.is_absolute() or ".." in path.parts or path.suffix.lower() not in {".yaml", ".yml", ".json"}:
         raise ValueError("semgrep_config must be the built-in offline pack or a project-relative .yml/.yaml/.json file")
     return path.as_posix()
+
+
+def bounded_profile_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value) if value not in {None, ""} else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
 
 
 def validate_git_baseline_ref(value: object) -> str:

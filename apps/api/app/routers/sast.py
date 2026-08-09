@@ -2,6 +2,7 @@ from datetime import datetime
 from fnmatch import fnmatchcase
 from html import escape
 from pathlib import Path
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,10 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import FindingRecord, ProjectModuleRecord, ProjectRecord, ScanTaskRecord
-from app.models import Finding, ModuleKey, SastScanRequest, SastScanResult, ScanStatus, ScanTask
+from app.db_models import FindingRecord, ProjectModuleRecord, ProjectRecord, SastAgentRunRecord, ScanTaskRecord
+from app.models import Finding, ModuleKey, SastScanRequest, SastScanResult, ScanStatus, ScanTask, Severity
 from app.repositories.mappers import finding_to_schema, scan_to_schema
-from app.services.sast_agent_orchestrator import run_sast_agent_pipeline
+from app.services.sast_agent_orchestrator import infer_language, run_sast_agent_pipeline
+from app.services.deepseek_client import DeepSeekClient, DeepSeekSettings, DeepSeekUnavailable, deepseek_health
+from app.services.sast_ai_orchestrator import AGENT_ROLES, SastAiPipelineResult, finding_key, redact_text, run_deepseek_sast_pipeline
 from app.services.sast_governance import (
     add_custom_rule,
     add_semgrep_rule,
@@ -29,7 +32,7 @@ from app.services.sast_governance import (
 )
 from app.services.sast_git import collect_git_context, git_history_secret_findings
 from app.services.sast_sarif import build_sast_sarif
-from app.services.sast_scanner import SastScanOutput, dedupe_findings, sast_tool_health, scan_source_tree
+from app.services.sast_scanner import ParsedFinding, SastScanOutput, dedupe_findings, sast_tool_health, scan_source_tree
 from app.services.sast_semgrep_rules import materialize_semgrep_rule_packs, semgrep_rule_preflight
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 from app.services.audit import record_audit
@@ -97,15 +100,40 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
             db.add(record)
             records.append(record)
 
+        db.flush()
+        ai_summary: dict[str, object] = {"status": "disabled", "agent_roles": AGENT_ROLES}
+        if profile.get("ai_enabled") and profile.get("ai_auto_scan"):
+            ai_summary, ai_records, ai_suppressed = execute_deepseek_agents(
+                db,
+                project_id=str(payload.project_id),
+                scan_task_id=str(scan.id),
+                source_path=source_path,
+                records=records,
+                profile=profile,
+                trigger="scan",
+            )
+            records.extend(ai_records)
+            suppressed.extend(ai_suppressed)
+
+        engine_status = dict(parsed.engine_status or {})
+        engine_status["deepseek_agents"] = {
+            "status": ai_summary.get("status", "disabled"),
+            "agent_count": len(ai_summary.get("agent_steps") or []),
+            "candidate_count": int(ai_summary.get("candidate_count") or 0),
+            "confirmed_count": int(ai_summary.get("confirmed_count") or 0),
+            "detail": ai_summary.get("error"),
+        }
+
         scan.status = ScanStatus.completed.value
         scan.finished_at = datetime.utcnow()
         scan.scan_metadata = {
             "sast_profile": profile,
-            "engine_status": parsed.engine_status or {},
+            "engine_status": engine_status,
             "suppressed_findings": suppressed,
-            "finding_snapshot": finding_snapshot(findings),
+            "finding_snapshot": finding_record_snapshot(records),
             "git_context": git_context,
             "branch": payload.branch,
+            "deepseek_agents": ai_summary,
         }
         identity = getattr(request.state, "identity", None)
         if identity is not None:
@@ -132,7 +160,7 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
         scanned_files=parsed.scanned_files,
         finding_count=len(records),
         findings=[finding_to_schema(record) for record in records],
-        engine_status=parsed.engine_status or {},
+        engine_status=engine_status,
         suppressed_count=len(suppressed),
     )
 
@@ -246,25 +274,88 @@ def list_project_sast_findings(project_id: UUID, db: Session = Depends(get_db)) 
 
 @router.post("/projects/{project_id}/agent-review", response_model=list[Finding])
 def run_project_agent_review(project_id: UUID, request: Request, db: Session = Depends(get_db)) -> list[Finding]:
-    ensure_project(db, project_id)
-    records = db.scalars(
+    project = ensure_project(db, project_id)
+    module = enabled_sast_module(db, project_id)
+    profile = effective_sast_profile(module.config)
+    latest_scan = latest_sast_scan(db, project_id)
+    query = (
         select(FindingRecord)
         .where(FindingRecord.project_id == str(project_id), FindingRecord.source == "SAST")
         .order_by(FindingRecord.created_at.desc())
-    ).all()
-    for record in records:
-        record.ai_review = run_sast_agent_pipeline(record)
-        record.updated_at = datetime.utcnow()
+    )
+    records = db.scalars(query).all()
+    review_records = [item for item in records if latest_scan is None or str(item.scan_task_id or "") == str(latest_scan.id)][:100]
+    if profile.get("ai_enabled"):
+        if not project.source_path:
+            raise HTTPException(status_code=400, detail="项目未配置 source_path，无法执行 DeepSeek 深度审计")
+        summary, new_records, _suppressed = execute_deepseek_agents(
+            db,
+            project_id=str(project_id),
+            scan_task_id=str(latest_scan.id) if latest_scan else None,
+            source_path=validate_sast_source_path(project, project.source_path),
+            records=review_records,
+            profile=profile,
+            trigger="manual_review",
+        )
+        records.extend(new_records)
+        if latest_scan is not None:
+            scan_metadata = dict(latest_scan.scan_metadata or {})
+            batch_records = db.scalars(select(FindingRecord).where(FindingRecord.scan_task_id == str(latest_scan.id), FindingRecord.source == "SAST")).all()
+            scan_metadata["finding_snapshot"] = finding_record_snapshot(batch_records)
+            scan_metadata["deepseek_agents"] = summary
+            latest_scan.scan_metadata = scan_metadata
+    else:
+        for record in review_records:
+            record.ai_review = run_sast_agent_pipeline(record)
+            record.updated_at = datetime.utcnow()
     audit_sast_mutation(db, request, str(project_id), "sast.agent_review", {"finding_count": len(records)})
     db.commit()
-    for record in records:
-        db.refresh(record)
-    return [finding_to_schema(record) for record in records]
+    refreshed = db.scalars(query).all()
+    return [finding_to_schema(record) for record in refreshed]
 
 
 @router.get("/tool-health")
 def get_sast_tool_health() -> dict[str, object]:
     return sast_tool_health()
+
+
+@router.get("/ai-health")
+def get_sast_ai_health() -> dict[str, object]:
+    return {**deepseek_health(), "agent_roles": AGENT_ROLES, "execution_mode": "seven_sequential_roles_with_local_fallback"}
+
+
+@router.post("/ai-health/test")
+def test_sast_ai_connection() -> dict[str, object]:
+    client = DeepSeekClient()
+    try:
+        call = client.complete_json(
+            role="connection_test",
+            system_prompt="你是连接测试服务。只输出合法 JSON 对象，不输出 Markdown。",
+            user_prompt='请输出 JSON：{"status":"ok","message":"DeepSeek SAST connection ready"}',
+            max_tokens=256,
+        )
+    except DeepSeekUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "status": "ok",
+        "provider": "deepseek",
+        "model": call.model,
+        "latency_ms": call.latency_ms,
+        "prompt_tokens": call.prompt_tokens,
+        "completion_tokens": call.completion_tokens,
+    }
+
+
+@router.get("/projects/{project_id}/agent-runs")
+def list_sast_agent_runs(project_id: UUID, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    ensure_project(db, project_id)
+    records = db.scalars(
+        select(SastAgentRunRecord)
+        .where(SastAgentRunRecord.project_id == str(project_id))
+        .order_by(SastAgentRunRecord.created_at.desc())
+        .limit(30)
+    ).all()
+    return [serialize_agent_run(item) for item in records]
 
 
 @router.post("/rules/validate")
@@ -654,6 +745,212 @@ def finding_snapshot(findings: list) -> list[dict[str, object]]:
         }
         for item in findings
     ]
+
+
+def execute_deepseek_agents(
+    db: Session,
+    *,
+    project_id: str,
+    scan_task_id: str | None,
+    source_path: str,
+    records: list[FindingRecord],
+    profile: dict[str, object],
+    trigger: str,
+) -> tuple[dict[str, object], list[FindingRecord], list[dict[str, object]]]:
+    try:
+        settings = DeepSeekSettings.from_env()
+    except DeepSeekUnavailable as exc:
+        return {"status": "degraded", "error": str(exc), "agent_roles": AGENT_ROLES}, [], []
+    run = SastAgentRunRecord(
+        project_id=project_id,
+        scan_task_id=scan_task_id,
+        status="running",
+        provider="deepseek",
+        model=settings.model,
+        review_model=settings.review_model,
+        trigger=trigger,
+        started_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    try:
+        history = db.scalars(
+            select(FindingRecord)
+            .where(FindingRecord.project_id == project_id, FindingRecord.source == "SAST")
+            .order_by(FindingRecord.created_at.desc())
+            .limit(160)
+        ).all()
+        current_ids = {str(item.id) for item in records if item.id}
+        historical = [item for item in history if str(item.id) not in current_ids][:80]
+        pipeline = run_deepseek_sast_pipeline(source_path, records[:100], historical, profile, DeepSeekClient(settings))
+        new_records, suppressed = apply_deepseek_pipeline_result(db, project_id, scan_task_id, records, pipeline, profile)
+        summary = pipeline.audit_summary()
+        summary["run_id"] = str(run.id)
+        summary["outputs"] = pipeline.outputs
+        summary["candidates"] = pipeline.candidates
+        summary["confirmed_findings"] = pipeline.confirmed_findings
+        summary["disagreements"] = pipeline.disagreements
+        run.status = pipeline.status
+        run.agent_steps = pipeline.agent_steps
+        run.result_summary = summary
+        run.token_usage = pipeline.token_usage
+        run.error = pipeline.error
+        run.finished_at = datetime.utcnow()
+        return summary, new_records, suppressed
+    except Exception as exc:
+        detail = redact_text(str(exc))[:500]
+        run.status = "degraded"
+        run.error = detail
+        run.result_summary = {"status": "degraded", "error": detail, "agent_roles": AGENT_ROLES, "run_id": str(run.id)}
+        run.finished_at = datetime.utcnow()
+        return run.result_summary, [], []
+
+
+def apply_deepseek_pipeline_result(
+    db: Session,
+    project_id: str,
+    scan_task_id: str | None,
+    records: list[FindingRecord],
+    pipeline: SastAiPipelineResult,
+    profile: dict[str, object],
+) -> tuple[list[FindingRecord], list[dict[str, object]]]:
+    for record in records:
+        update = pipeline.finding_updates.get(finding_key(record))
+        if not update:
+            continue
+        review = dict(record.ai_review or {})
+        review.update({key: value for key, value in update.items() if value not in {None, ""}})
+        review["agent_pipeline"] = AGENT_ROLES
+        review["ai_review_source"] = "deepseek_multi_agent"
+        record.ai_review = review
+        record.updated_at = datetime.utcnow()
+
+    new_records: list[FindingRecord] = []
+    suppressed: list[dict[str, object]] = []
+    for candidate in pipeline.confirmed_findings:
+        parsed = candidate_to_parsed_finding(candidate, bool(profile.get("ai_include_fix_drafts", True)))
+        kept, applied = apply_suppressions([parsed], profile.get("suppressions"))
+        if not kept:
+            suppressed.extend(applied)
+            continue
+        duplicate = next(
+            (
+                item for item in [*records, *new_records]
+                if str(item.file_path or "").replace("\\", "/") == parsed.file_path
+                and abs(int(item.line_start or 0) - parsed.line_start) <= 2
+                and str((item.ai_review or {}).get("category") or "") == parsed.category
+            ),
+            None,
+        )
+        if duplicate is not None:
+            review = dict(duplicate.ai_review or {})
+            discoveries = list(review.get("ai_discovery_candidates") or [])[-9:]
+            discoveries.append({"candidate_id": candidate.get("candidate_id"), "confidence": candidate.get("confidence"), "verdict": candidate.get("verdict"), "evidence": parsed.evidence})
+            review.update({"ai_discovery_candidates": discoveries, "ai_review_source": "deepseek_multi_agent", "agent_pipeline": AGENT_ROLES})
+            duplicate.ai_review = review
+            duplicate.updated_at = datetime.utcnow()
+            continue
+        record = FindingRecord(
+            project_id=project_id,
+            scan_task_id=scan_task_id,
+            source="SAST",
+            rule_id=parsed.rule_id,
+            title=parsed.title,
+            severity=parsed.severity.value,
+            file_path=parsed.file_path,
+            line_start=parsed.line_start,
+            line_end=parsed.line_end,
+            evidence=parsed.evidence,
+            ai_review={
+                "summary": parsed.description,
+                "description": parsed.description,
+                "category": parsed.category,
+                "cwe": parsed.cwe,
+                "owasp": parsed.owasp,
+                "language": parsed.language,
+                "remediation": parsed.remediation,
+                "fix_strategy": parsed.remediation,
+                "false_positive_likelihood": "low",
+                "review_verdict": "confirmed",
+                "priority": "P1" if parsed.severity in {Severity.critical, Severity.high} else "P2",
+                "ai_provider": "deepseek",
+                "ai_confidence": candidate.get("confidence"),
+                "ai_candidate_id": candidate.get("candidate_id"),
+                "ai_review_source": "deepseek_multi_agent",
+                "agent_pipeline": AGENT_ROLES,
+                "evidence_analysis": candidate.get("evidence_analysis") or {},
+                "knowledge": candidate.get("knowledge") or {},
+                "fix_draft": candidate.get("fix") or {},
+                "independent_review": candidate.get("independent_review") or {},
+            },
+        )
+        db.add(record)
+        new_records.append(record)
+    if new_records:
+        db.flush()
+    return new_records, suppressed
+
+
+def candidate_to_parsed_finding(candidate: dict[str, object], include_patch: bool) -> ParsedFinding:
+    category = str(candidate.get("category") or "security")[:120]
+    candidate_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(candidate.get("candidate_id") or "candidate"))[:80]
+    review = candidate.get("review") if isinstance(candidate.get("review"), dict) else {}
+    fix = dict(candidate.get("fix")) if isinstance(candidate.get("fix"), dict) else {}
+    if not include_patch:
+        fix.pop("patch", None)
+    remediation = redact_text(str(fix.get("recommended_change") or "请人工复核该 AI 候选，完成最小修复并增加安全回归测试。"))[:2000]
+    evidence = redact_text(str(candidate.get("evidence") or ""))[:1200]
+    return ParsedFinding(
+        rule_id=f"AI.DEEPSEEK.{re.sub(r'[^A-Za-z0-9]+', '_', category).upper()[:80]}.{candidate_id}"[:300],
+        title=str(candidate.get("title") or "DeepSeek AI candidate")[:300],
+        severity=Severity(str(candidate.get("severity") or "medium")),
+        file_path=str(candidate.get("file_path") or "").replace("\\", "/")[:800],
+        line_start=max(1, int(candidate.get("line_start") or 1)),
+        line_end=max(1, int(candidate.get("line_end") or candidate.get("line_start") or 1)),
+        evidence=evidence,
+        category=category,
+        cwe=str(review.get("cwe") or "-")[:120],
+        owasp=str(review.get("owasp") or "-")[:120],
+        description=f"DeepSeek 多 Agent 已通过独立复核，置信度 {int(candidate.get('confidence') or 0)}%。",
+        remediation=remediation,
+        language=infer_language(str(candidate.get("file_path") or "")),
+    )
+
+
+def finding_record_snapshot(records: list[FindingRecord]) -> list[dict[str, object]]:
+    return [
+        {
+            "rule_id": item.rule_id,
+            "title": item.title,
+            "severity": item.severity,
+            "file_path": item.file_path,
+            "line_start": item.line_start,
+            "line_end": item.line_end,
+            "evidence": item.evidence,
+            "category": str((item.ai_review or {}).get("category") or ""),
+        }
+        for item in records
+    ]
+
+
+def serialize_agent_run(record: SastAgentRunRecord) -> dict[str, object]:
+    return {
+        "id": str(record.id),
+        "project_id": str(record.project_id),
+        "scan_task_id": str(record.scan_task_id) if record.scan_task_id else None,
+        "status": record.status,
+        "provider": record.provider,
+        "model": record.model,
+        "review_model": record.review_model,
+        "trigger": record.trigger,
+        "agent_steps": record.agent_steps or [],
+        "result_summary": record.result_summary or {},
+        "token_usage": record.token_usage or {},
+        "error": record.error,
+        "started_at": record.started_at,
+        "finished_at": record.finished_at,
+        "created_at": record.created_at,
+    }
 
 
 def sast_scan_history_item(scan: ScanTaskRecord) -> dict[str, object]:

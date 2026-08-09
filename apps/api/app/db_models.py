@@ -130,6 +130,28 @@ class FindingRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class SastAgentRunRecord(Base):
+    """Auditable DeepSeek multi-agent execution without storing credentials or raw headers."""
+
+    __tablename__ = "sast_agent_runs"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    scan_task_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("scan_tasks.id"))
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="running")
+    provider: Mapped[str] = mapped_column(String(80), nullable=False, default="deepseek")
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    review_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(40), nullable=False, default="scan")
+    agent_steps: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    result_summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    token_usage: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class ComponentRecord(Base):
     __tablename__ = "components"
 

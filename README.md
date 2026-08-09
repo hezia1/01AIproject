@@ -4,7 +4,7 @@
 
 本文档反映 **2026-08-09** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
-## 2026-08-03 SAST 与交付更新（本节覆盖下方较早的状态描述）
+## 2026-08-09 SAST 与交付更新（本节覆盖下方较早的状态描述）
 
 - 平台当前按单机本地模式运行：前端直接进入项目控制台，不要求注册、登录、令牌、租户或成员关系。为兼容已有 PostgreSQL 数据，历史身份与租户表保留但不参与 API 访问控制。
 - SAST 默认使用仓库内置的离线 Semgrep YAML 规则包。项目可在当前 SAST 治理页面校验、发布、启停、版本化自定义 YAML 规则包；运行时仅会将已启用包 materialize 到 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\runtime-rules`，不会自动下载规则或镜像。
@@ -13,8 +13,17 @@
 - 项目 Semgrep YAML 规则包支持草稿、结构校验、已预载本地 CLI/Docker 引擎预检、审批发布、版本和启停；只有 enabled + published 包才 materialize 并参与扫描。
 - `scripts/sast_ci.py` 支持加载前端导出的项目 SAST 配置，统一使用项目自定义规则、已发布 YAML 规则包、抑制项、Git 基线和质量门禁；仓库同时提供 GitHub Actions、GitLab CI 和 Jenkins 的离线 CI 模板，会保存 JSON/SARIF 证据并执行本地门禁。
 - 扫描任务 API 提供持久化排队、并发上限、开始、进度、取消和重试事件；`scripts/sast_worker.py` 可作为常驻轮询 Worker 运行（`--once` 用于一次性处理），部署方应将它纳入自己的进程守护体系。
+- SAST 已接入可选的 DeepSeek 七角色 Sub-agent 深度审计：策略、漏洞发现、初审、证据验证、本地历史知识关联、修复草案和独立终审。它既可随 SAST 扫描自动运行，也可手动运行；调用记录、模型、各角色状态、Token、费用估算、候选数、确认数和分歧会持久化并在前端显示。
+- AI 代码上下文限定在项目 `source_path` 内，按项目配置限制文件和字符数；上传前会脱敏常见密钥并屏蔽疑似提示注入。只有“独立终审确认为 confirmed + 证据充分 + 达到项目置信度阈值”的新候选才会进入正式 Finding。服务不可用时 SAST 会明确降级，但本地规则扫描结果仍保留。
 
-仍未实现、也不应被宣称为已实现的是：真实外部模型或 Sub-agent 复核、自动提交修复补丁/PR、跨服务或动态调度的全程序污点分析、联网规则/镜像自动拉取，以及 DAST/SANDBOX 的自动攻击性执行。
+仍未实现、也不应被宣称为已实现的是：自动修改源码或提交补丁/PR、可执行工具的自治 Agent、跨服务或动态调度的全程序污点分析、外部漏洞知识库/RAG 自动学习、联网规则/镜像自动拉取，以及 DAST/SANDBOX 的自动攻击性执行。当前七角色由平台顺序编排真实模型调用，不是可自行执行命令或操作仓库的自治进程。
+
+### DeepSeek 配置
+
+- `apps/api/.env.example` 是可提交到 Git 的配置模板，只保留变量名、安全默认值和空的 Key；它不会被后端当作真实密钥文件。
+- 将真实 `DEEPSEEK_API_KEY` 填在被 Git 忽略的 `apps/api/.env`。不要把真实 Key 写入 `.env.example`、README、前端代码或提交记录。
+- 后端默认使用 `https://api.deepseek.com`，发现/分析模型和独立复核模型均可在 `.env` 中配置。结构化 Agent 默认使用非思考模式，以降低空 JSON、延迟和费用；可通过 `DEEPSEEK_THINKING_ENABLED=true` 显式开启。前端 SAST 页可测试连接，但不会显示完整 Key。
+- 项目级 DeepSeek 能力默认关闭，避免无意上传代码或消耗额度；在 SAST 页开启并保存后，可选择随扫描自动执行。AI 生成的补丁始终是人工评审草案，不会直接写入被测源码。
 
 ## 当前架构
 
@@ -86,7 +95,7 @@ npm run dev
 | 模块 | 已实现（后端 + 前端） | 当前未完成的主要能力 |
 | --- | --- | --- |
 | SCA | 多生态依赖解析、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、可配置门禁、本地 CI CLI；所有治理和高级分析入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树；语义图推理与全平台 CI 集成。 |
-| SAST | 本地规则扫描、项目自定义正则规则、内置及项目自定义 Semgrep YAML 规则包（校验/预检/发布/启停/版本）、固定版 Semgrep 离线增强、Python AST 与有限跨函数污点分析、JS/TS 保守数据流、Git 基线、规则/路径豁免、扫描历史/差异、JSON/HTML/SARIF 导出、项目策略一致的离线 CI、持久化任务队列和 Finding 统一治理；入口均已在当前 SAST 页面开放。 | 真实外部 AI/Sub-agent 复核和自动补丁/PR；跨语言、跨服务、全程序数据流；行业业务语义 Skill 与历史漏洞知识自动学习；全模块分布式调度。 |
+| SAST | 本地规则扫描、项目自定义正则规则、内置及项目自定义 Semgrep YAML 规则包（校验/预检/发布/启停/版本）、固定版 Semgrep 离线增强、Python AST 与有限跨函数污点分析、JS/TS 保守数据流、Git 基线、规则/路径豁免、扫描历史/差异、JSON/HTML/SARIF 导出、项目策略一致的离线 CI、持久化任务队列和 Finding 统一治理；另有可选 DeepSeek 七角色真实模型审计、AI 漏洞发现、证据终审、审计历史和人工修复草案；入口均已在当前 SAST 页面开放。 | 自动写入修复或提交 PR；可执行工具的自治 Agent；跨语言、跨服务、全程序数据流；外部漏洞知识库/RAG 和自动学习；全模块分布式调度。 |
 | AGENT | Agent/MCP/插件配置与说明文件静态扫描，识别危险命令、敏感路径、网络能力、密钥风险；结果和统计已在 AGENT 页面开放。 | 不运行真实 Agent、不连接 MCP Server、不执行工具调用；缺少权限矩阵、行为回放与信任评分。 |
 | DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
 | SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
@@ -144,7 +153,7 @@ Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、
 
 ## 其他模块的接口与实际边界
 
-- SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`GET/POST/PATCH /api/sast/projects/{project_id}/rules`、`POST /api/sast/rules/validate`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/projects/{project_id}/ci-config`、`GET /api/sast/tool-health`。本地扫描是规则匹配；Agent 复核是规则化编排，不宣称调用外部大模型。
+- SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET /api/sast/ai-health`、`POST /api/sast/ai-health/test`、`GET /api/sast/projects/{project_id}/agent-runs`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`GET/POST/PATCH /api/sast/projects/{project_id}/rules`、`POST /api/sast/rules/validate`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/projects/{project_id}/ci-config`、`GET /api/sast/tool-health`。基础扫描使用本地规则/静态分析；项目启用 AI 后，Agent 复核会真实调用 DeepSeek 七个角色，并按证据与置信度门槛写回结果。
 - AGENT：`POST /api/agent/scan`、`GET /api/agent/projects/{project_id}/findings`。仅分析本地配置和文本，不执行 Agent/MCP/插件。
 - DAST：`POST /api/dast/probe`、`POST /api/dast/validations`、`GET /api/dast/projects/{project_id}/validations`。基础检查只验证 HTTP/HTTPS、状态、耗时、Server Header 和基础安全响应头；不能证明 SQL 注入、鉴权绕过等业务漏洞可利用。
 - SANDBOX：`POST /api/sandbox/run`、`POST /api/sandbox/evidence`、`GET /api/sandbox/projects/{project_id}/evidence`。默认使用受限 Docker 容器；执行摘要和隔离策略不等同系统级行为取证。
@@ -161,6 +170,7 @@ Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、
 - 基础 SCA/SAST/AGENT 需要被测项目的本地源码路径。
 - Syft/Grype/Trivy 增强需要 Docker、镜像及相应漏洞库；Semgrep 增强需要本机 CLI 或 Docker 镜像。
 - SAST 默认固定 Docker 镜像为 `semgrep/semgrep:1.167.0`，也可通过 `SAST_SEMGREP_IMAGE` 显式指定另一份本地已有镜像。运行前会先执行本地镜像检查，Docker 命令固定使用 `--pull=never`；平台不会自动下载 Registry 规则或镜像。项目 YAML 规则运行副本只写入 `D:\project\PYproject\AI网安项目\artifacts\sast-offline\`，该目录已忽略。
+- DeepSeek SAST Sub-agent 需要在 `apps/api/.env` 中配置有效 Key，并由后端访问 DeepSeek API；启用前应确认被测代码允许发送给第三方服务。`.env.example` 只是模板，不能填写真实密钥。
 - DAST 需要可访问的目标 Web 地址；SANDBOX 需要 Docker Desktop 和可用镜像。
 - 当前没有登录、权限或租户隔离，不应直接暴露到公网。
 

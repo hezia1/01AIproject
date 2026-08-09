@@ -131,6 +131,15 @@ class AiReview(BaseModel):
     evidence_summary: str | None = None
     fix_strategy: str | None = None
     priority: str | None = None
+    ai_provider: str | None = None
+    ai_confidence: int | None = Field(default=None, ge=0, le=100)
+    ai_review_source: str | None = None
+    ai_candidate_id: str | None = None
+    evidence_analysis: dict[str, object] | None = None
+    knowledge: dict[str, object] | None = None
+    fix_draft: dict[str, object] | None = None
+    independent_review: dict[str, object] | None = None
+    ai_discovery_candidates: list[dict[str, object]] = Field(default_factory=list)
 
 
 class Finding(FindingCreate):
