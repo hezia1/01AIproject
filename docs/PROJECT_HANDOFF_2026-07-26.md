@@ -1,16 +1,24 @@
-# 项目交接文档（更新于 2026-08-09）
+# 项目交接文档（更新于 2026-08-10）
 
-本文件用于在新的对话窗口继续 **AI 网络安全检测、验证与治理平台**。它替代此前已过期的交接内容；项目需求应以用户重新提供的原始 `01.pptx`、`README.md` 和本文件共同判断，不能只依赖旧对话记录。
+本文件用于在新窗口继续完善 **AI 网络安全检测、验证与治理平台**。下一阶段由用户重新发送原始 `01.pptx`，并重点完善 **AGENT 供应链安全模块**。新窗口不得依赖旧对话结论，应以重新提供的 PPT、仓库根目录 `README.md`、本文件和实际代码共同判断需求与完成度。
 
-> 2026-08-09 补充：SCA 已引入组件版本解析质量、漏洞情报验证状态和扫描可信度快照；未知版本或情报不可用不再被标记为安全，默认门禁阻断未验证组件。SAST 已收紧 Git 历史密钥证据、补充开放重定向/原始 HTML/XXE 检测，并将“引擎执行完成”与“静态分析能力有边界”分开显示。DeepSeek 七角色只有全部返回必需结构时才算完成。模块现状以仓库根目录 `README.md` 的 2026-08-09 章节为准。
+用户已经明确选择 AGENT 作为下一阶段；因此 `README.md` 末尾较早写入的“下一步推荐 ASPM”不再代表当前优先级。除这一优先级外，README 中的架构、启动方式和模块边界仍是有效参考。
 
-## 1. 交接起点与协作规则
+## 1. 新窗口必须先做的事情
 
-- 正式仓库：`D:\project\PYproject\AI网安项目`
-- GitHub：`https://github.com/hezia1/01AIproject.git`
-- 分支：`main`
-- 旧目录 `C:\Users\hezia\Documents\AI网络安全项目` 不再是工作仓库，不应在其中修改代码。
-- 新窗口先读取 `README.md` 与本文档，再执行：
+正式仓库只有：
+
+```text
+D:\project\PYproject\AI网安项目
+```
+
+不要读取或修改旧目录：
+
+```text
+C:\Users\hezia\Documents\AI网络安全项目
+```
+
+收到用户重新发送的 `01.pptx` 后，先完整读取 PPT、`README.md` 和本文档，再执行：
 
 ```powershell
 Set-Location 'D:\project\PYproject\AI网安项目'
@@ -18,159 +26,181 @@ git status --short --branch
 git log -5 --oneline
 ```
 
-- 如新窗口没有原始 `01.pptx`，请用户重新上传；PPT 是功能边界和页面语义的需求来源之一。
-- 通用协作规则仍是：**每次改代码前先说明准备实现的功能，取得用户确认后再修改；每次代码更新后都要提交并推送 GitHub。** 文档、只读检查和测试不属于代码修改。
-- `artifacts/` 存放本地离线镜像与漏洞库，已被 Git 忽略，绝不能纳入提交。
+随后应重新核对：
 
-## 2. Git 快照与核验
+1. PPT 对 AGENT 模块的原始目标、页面语义和与其他模块的关系。
+2. AGENT 已有后端能力、前端可见性和实际检测准确性。
+3. PPT 要求但代码未实现的内容，以及页面上可能超前宣传的能力。
+4. 在修改代码前，先向用户列出推荐实现范围并等待确认。
 
-下列提交列表是早期交接基线，仅用于历史定位，不代表当前 HEAD。新会话必须执行本节开头的 `git status` 和 `git log` 获取真实状态；以远端 `main` 最新提交为准。
+协作规则：
+
+- 每次修改代码前，先说明本次要实现的功能和范围，等待用户确认。
+- 每次代码更新后都要提交并推送 GitHub。
+- 文档、只读检查和测试不属于代码修改；但文档更新也应提交、推送以便交接。
+- 如需下载 AGENT 规则、镜像或测试资源，只能放在 D 盘。建议统一使用 `D:\project\PYproject\AI网安项目\artifacts\agent-offline\`，并保持 Git 忽略；创建或下载前仍应说明用途。
+- 不打印、不提交 `apps/api/.env` 中的 DeepSeek Key；`.env.example` 只能保留变量名和安全示例。
+
+## 2. 当前 Git 和验证基线
+
+更新本文档前的代码基线：
 
 ```text
-53bcaab Complete SCA governance workflow
-29f2633 Add SCA exception approval panel
-546f69f Expose SCA impact path type
-14d3f5c Add SCA impact paths gates and HTML report
-f7609d9 Add SCA policy exception workflow
-f10ac63 Add SCA policy exception persistence
-314b53c Complete SCA offline scanning foundations
-0e72eb9 Persist SCA dependency snapshots and offline status
+18991cb Harden SCA and SAST scan assurance
+0933a71 Simplify SAST governance workspace
+0307fe9 Complete DeepSeek SAST sub-agent integration
+bd482d1 Complete SAST offline governance fixes
+47bbc0f Isolate module execution state and refresh
 ```
 
-最近一次更新已验证：
+本文档更新前 `main` 与 `origin/main` 一致，工作区无未提交代码。实际状态始终以新窗口执行的 Git 命令为准。
+
+最近一次完整验证：
+
+- 后端：`56 passed`。
+- 前端：TypeScript 与 Vite 生产构建成功。
+- DVNA SAST：Semgrep 与本地规则均完成，生成 28 条静态证据；Git 历史密钥证据收敛为 2 条高置信路径。
+- DVNA SCA Docker 增强：Grype、Trivy 成功；Syft 因目标缺少锁文件/安装目录而回退；19 个组件中 3 个固定版本完成漏洞覆盖，16 个版本范围保持未验证，整体正确显示 `partial`。
+
+常用验证命令：
 
 ```powershell
-$env:PYTHONPATH='apps\api'
-.\.venv\Scripts\python.exe -m compileall -q apps\api\app
-.\.venv\Scripts\python.exe -m pytest apps\api\tests -q
+Set-Location 'D:\project\PYproject\AI网安项目\apps\api'
+$env:PYTHONPATH='.'
+..\..\.venv\Scripts\python.exe -m pytest -q
 
-Set-Location apps\web
+Set-Location 'D:\project\PYproject\AI网安项目\apps\web'
 npm run build
 ```
 
-结果：后端 `15 passed`，前端生产构建成功。后续改动仍应运行与改动范围相称的验证。
-
-## 3. 当前架构与重要目录
+## 3. 当前架构与启动方式
 
 ```text
-AI网安项目/
-├─ apps/
-│  ├─ api/                         # FastAPI、服务层、Alembic 迁移、后端测试
-│  │  ├─ app/routers/              # project/module/sca/sast/agent/dast/sandbox/aspm/findings API
-│  │  ├─ app/services/             # 扫描、依赖图谱、证据关联、复测、报告等业务逻辑
-│  │  └─ app/rules/                # 本地 SCA 漏洞与许可证规则 JSON
-│  └─ web/src/                     # React + Vite 前端；主页面目前在 main.tsx
-├─ infra/docker-compose.yml        # PostgreSQL / Redis
-├─ outputs/                        # SCA、SAST、AGENT 演示输入
-├─ artifacts/sca-offline/          # 本地离线资源（忽略，不提交）
-├─ docs/PROJECT_HANDOFF_2026-07-26.md
-└─ README.md
+React + Vite 前端 → /api → FastAPI routers/services → PostgreSQL
 ```
 
-运行链路：`React 前端 → /api → FastAPI routers → services → PostgreSQL`。`routers` 负责接口和参数，`services` 负责扫描、关联、图谱、复测和导出。
-
-## 4. 平台级已完成能力
-
-- 项目创建、切换、资产配置与资产探测。
-- “安全检测”合并模块接入与任务执行：用户自主选择 SCA、SAST、AGENT、DAST、SANDBOX，并可一键按 `SCA → SAST → AGENT → DAST → SANDBOX` 执行；单模块失败不会中断后续模块。
-- PostgreSQL 持久化项目、模块、扫描批次、组件、Finding、DAST 验证、SANDBOX 证据和 SCA 例外。
-- 治理总览可在综合视图和已接入模块视图间切换；多条结果统一每页 10 条、支持翻页与筛选，并将高级内容放在按需展开区。
-- 显式证据链：SAST/SCA/AGENT Finding 可关联 DAST 验证与 SANDBOX 取证；只有用户明确选择，或高置信度推荐经执行确认的关联才进入证据图谱和攻击链。
-- SCA、SAST、AGENT 的重扫结果可对比“仍然存在、已消失、新增、发生变化”。
-- 项目安全报告预览与 JSON/HTML 导出已实现；HTML 适合演示或浏览器打印为 PDF。
-
-平台级仍缺少：登录/权限/租户、后台任务队列和 Worker、SLA/工单、完整审计日志、完整 CI/CD 集成、合规报告体系、图数据库或 AI 图推理。
-
-## 5. 各模块进度
-
-### SCA：供应链风险分析（当前完成度最高）
-
-已完成：
-
-- 解析 `package.json`、`requirements.txt`、`pom.xml`、`go.mod` 及主流 npm/Python 锁文件，生成组件、来源、依赖类型和风险字段。
-- OSV 查询可用时使用外部情报；离线或失败时明确降级为本地规则，绝不把降级结果说成完整外部情报。
-- 本地漏洞规则和许可证策略；高危/严重漏洞、许可证风险和版本缺失都会进入统一 Finding 与 ASPM 闭环。
-- CycloneDX、SPDX SBOM；扫描历史、批次差异、依赖图谱、升级杠杆与风险影响路径。
-- npm 原生依赖树；项目内 `.venv/venv` 的 Python 已安装包和依赖关系读取。扫描快照保存依赖边，历史结论不会因环境后来变化被改写。
-- Syft、Grype、Trivy 离线增强扫描；工具预检明确 Docker、镜像和离线数据库状态。
-- API：政策、组件、SBOM、依赖图、历史、差异、JSON/HTML 报告、门禁、例外审批均已实现。
-- 前端高级供应链分析已展示：工具预检、扫描历史、SBOM/报告导出、本地策略、风险例外审批、依赖图与风险影响路径。
-- 例外必须从当前风险组件中选择；可记录理由、申请人、失效日期，支持批准/拒绝/撤销。批准且未到期的例外在**下一次扫描**标为“已接受风险”，但不会删除原始漏洞证据；门禁会忽略该已接受风险。
-
-当前不需要额外下载即可继续的 SCA 核心工作已完成。暂缓/未完成项：
-
-- Maven、Go 的完整原生依赖环境与更多生态的真实包文件哈希。
-- OSV 本地镜像、组织级策略编辑/启停与多级审批权限。
-- 更深层影响分析、CI 流水线的实际调用与门禁编排。
-
-离线资源现状（均在本地、被 Git 忽略）：
+重要目录：
 
 ```text
-artifacts/sca-offline/
-├─ images/          # syft.tar、grype.tar、trivy.tar
-├─ grype-cache/     # 已导入 Grype 离线漏洞库
-└─ trivy-cache/     # trivy.db 与 trivy-java.db
+apps/api/app/routers/       API 路由
+apps/api/app/services/      扫描与治理逻辑
+apps/api/app/rules/         本地规则
+apps/api/tests/             后端测试
+apps/web/src/main.tsx       当前 React 控制台主要页面和 API 调用
+infra/docker-compose.yml    PostgreSQL / Redis
+artifacts/                  本地离线资源，Git 忽略
 ```
 
-不要删除或提交它们。若将来在新沙箱使用，需将整个 `artifacts/sca-offline` 一并带入，并先在 Docker 中加载镜像 tar。
+本地启动：
+
+```powershell
+Set-Location 'D:\project\PYproject\AI网安项目'
+docker compose -f infra\docker-compose.yml up -d
+.\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
+
+Set-Location 'D:\project\PYproject\AI网安项目\apps\api'
+..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+另开终端：
+
+```powershell
+Set-Location 'D:\project\PYproject\AI网安项目\apps\web'
+npm run dev
+```
+
+前端通常为 `http://127.0.0.1:5173`，后端健康检查为 `http://127.0.0.1:8000/api/health`。平台当前是本地单机模式，不要求登录、注册或租户初始化。
+
+## 4. SCA 与 SAST 当前状态
+
+### SCA
+
+SCA 已具备多生态依赖解析、锁文件/实际环境版本解析、SBOM、依赖图、历史差异、OSV/离线情报、Syft/Grype/Trivy、许可证策略、例外、VEX、证据、报告和 CI 门禁。当前会区分“已验证未发现”和“未验证”：版本范围、缺失版本或情报不可用不会被误报为安全，默认门禁阻断未验证组件。可信度和覆盖率已在前端显示。
+
+仍有明确边界：没有锁文件、实际安装环境或可用漏洞情报时，只能输出部分验证；实时商业情报、所有生态完整原生依赖树、真实 IAM/租户审批仍未实现。
+
+### SAST
+
+SAST 已具备本地规则、固定版离线 Semgrep、自定义正则/YAML 规则治理、Python AST 与有限跨函数数据流、JS/TS 保守数据流、Git 基线与低噪声历史密钥证据、豁免、历史差异、JSON/HTML/SARIF、CI 配置和持久化 Job/Worker。
+
+SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、漏洞复核、证据分析、历史知识、修复建议和独立复核。只有七个角色全部返回必需结构才标记完成，失败会明确降级且保留本地扫描结果。
+
+注意：**SAST 的 DeepSeek Sub-agent 与本次要完善的 AGENT 供应链安全模块不是同一个模块。** 前者用于复核源码漏洞；后者用于评估 Agent 指令、MCP、工具和插件本身的供应链与权限风险。
+
+## 5. AGENT 模块当前真实实现
 
 关键文件：
 
-- `apps/api/app/routers/sca.py`
-- `apps/api/app/services/sca_parser.py`
-- `apps/api/app/services/sca_dependency_graph.py`
-- `apps/api/app/services/sca_native_tree.py`
-- `apps/api/app/services/sca_python_environment.py`
-- `apps/api/app/services/sca_tool_scanner.py`
-- `apps/api/app/services/sca_artifacts.py`
-- `apps/api/app/rules/sca_vulnerability_rules.json`
-- `apps/api/app/rules/sca_license_policies.json`
+- `apps/api/app/routers/agent.py`
+- `apps/api/app/services/agent_scanner.py`
+- `apps/web/src/main.tsx` 中的 `AgentView`
+- 通用 Finding、DAST/SANDBOX 关联和 ASPM 展示代码
 
-### SAST：智能静态审计
+### 已实现的后端能力
 
-已完成：本地规则扫描（密钥、危险命令、动态执行、SQL 拼接、SSRF、路径穿越、弱加密、反序列化等）、Semgrep CLI/Docker 兜底、Finding 持久化、规则化复核流水线（`scanner_agent`、`review_agent`、`evidence_agent`、`fix_agent`）与前端筛选/分页/复测展示。
+- `POST /api/agent/scan`：验证项目和 AGENT 模块启用状态，同步扫描本地源码路径，创建扫描任务并持久化 AGENT Finding。
+- `GET /api/agent/projects/{project_id}/findings`：读取项目 AGENT Finding。
+- 扫描 `.md`、`.yaml`、`.yml`、`.json`、`.toml`，以及 `Dockerfile`、`AGENTS.md`、`CLAUDE.md`、`mcp.json`、`.mcp.json`、`mcp.config.json`、`claude_desktop_config.json`、`plugin.json`、`tools.json`。
+- 忽略 `.git`、`node_modules`、虚拟环境、构建产物等目录，并跳过超过 512 KiB 的文件。
+- 文本规则识别：读取环境密钥、Shell/命令执行、文件写删、外部网络访问、MCP/插件通配权限、安全指令覆盖和内联令牌。
+- MCP JSON 结构化检查：无效 JSON、危险启动命令、危险参数、内联环境密钥、敏感路径和网络能力。
+- Finding 保存规则 ID、等级、分类、文件位置、脱敏证据、说明、修复建议和信任影响。
+- AGENT Finding 可进入通用 Finding 治理，并可与 DAST、SANDBOX 和 ASPM 的证据链能力关联。
 
-重要边界：当前所谓 sub-agent 是**规则化的本地编排，不是真实外部 AI Agent**；不会调用大模型自动修复。
+### 已在前端可见
 
-待完成：已知 `Failed to fetch` 问题排查、稳定 Semgrep 配置与镜像管理、自定义规则管理、AST/数据流/污点分析、真实 AI 复核、补丁生成，以及与 DAST/SANDBOX 的自动化联动。
+- AGENT 页面可填写源码路径并单独执行扫描。
+- 显示 Finding 总数、严重/高危数、风险分类和严重等级分布。
+- 列表展示等级、分类、标题、文件/行号、证据、修复建议和信任影响，支持每页 10 条分页。
+- 单独执行 AGENT 时只锁定 AGENT 模块，不应导致其他模块置灰或触发扫描。
 
-### AGENT：Agent 供应链安全
+### 尚未完善或容易产生歧义的部分
 
-已完成：扫描 `.md/.yaml/.yml/.json/.toml`、`AGENTS.md`、`CLAUDE.md`、`mcp.json`、`plugin.json` 等配置/说明文件；识别环境变量和密钥读取、Shell、文件写删、外部请求、宽松 MCP 权限和提示词安全覆盖等风险；支持 Finding、分类、修复建议和前端结果页。
+- 当前主要是规则表达式和有限 MCP JSON 检查，不会启动真实 Agent、连接 MCP Server、调用插件工具或验证运行时行为。
+- 扫描器会检查大量通用 Markdown/JSON/YAML/TOML 文件，尚未先建立“真实 Agent 资产清单”，可能把普通项目文档或配置误判为 Agent 资产。
+- 缺少针对不同格式的完整结构化解析：Agent 指令层级、MCP transport/tool/resource/prompt、插件 manifest、Skill/Prompt 包、模型/Provider 配置和工具 Schema 尚未形成统一资产模型。
+- 缺少能力与权限矩阵：文件系统范围、命令参数、网络目的地、密钥作用域、人工审批、可写资源和跨工具数据流没有统一展示。
+- 页面文案提到“信任评分”，但当前代码只有 Finding 的 `trust_impact` 文本，没有可解释、可复算的项目/资产信任分。新窗口必须修复这种前端超前表达。
+- 缺少扫描历史快照、批次差异、仅新增风险、抑制/例外、规则版本、质量门禁、JSON/SARIF/HTML 专项报告和本地 CI CLI。
+- 当前查询可能混合展示历次 AGENT Finding；需要核查重扫时旧 Finding 的关闭、去重和“当前批次”语义。
+- 缺少来源与完整性证据：配置/插件来源、版本、包哈希、签名、发布者、锁定版本、安装方式和已知漏洞没有形成供应链结论。
+- 缺少提示注入信任边界和数据流建模：外部内容如何进入模型上下文、如何影响工具调用、是否有 sanitizer/审批/allowlist，目前没有可复核路径。
+- 缺少 AGENT 专项准确性测试和真实样例矩阵；现有后端测试主要覆盖平台通用能力，不能证明 AGENT 对实际项目稳定准确。
+- SAST 的 DeepSeek Key 和七角色流水线不会自动让 AGENT 模块获得 AI 分析能力。若 PPT 要求 AGENT 使用第三方模型，需要单独设计数据边界、提示词、审计、费用和降级策略，并再次获得用户确认。
 
-待完成：不运行真实 Agent、不连接真实 MCP、不调用插件工具；没有完整权限矩阵、行为回放或外部 AI 信任评分。
+## 6. 新窗口推荐的 AGENT 推进顺序
 
-### DAST：漏洞动态验证
+最终范围必须等用户重新发送 PPT 后再确定。建议按以下顺序评估，不要直接全部实现：
 
-已完成：围绕选定的 SAST/SCA/AGENT 风险做轻量 Web 基础验证，持久化目标、策略、范围、限制、请求响应、三色裁决和修复提示；未关联的 URL 检查会明确标为基础检查，不进入漏洞证据链。支持关联建议，但建议只有随执行确认才落库。
+1. **PPT 需求映射与事实审计**：逐条对应 PPT，列出已实现、未实现、前端可见和页面误导项。
+2. **准确扫描基础**：先识别 Agent/MCP/插件/Skill/Prompt 资产，再按格式结构化解析；增加证据脱敏、噪声排除、规则版本和测试样例。
+3. **权限与信任模型**：建立资产—能力—资源—边界矩阵，设计可解释信任评分，评分必须能追溯到具体证据，不能用虚构 AI 分数。
+4. **治理与交付**：增加扫描历史、批次差异、抑制/例外、质量门禁、报告、SARIF/JSON 和本地 CI；保证前端只展示真实能力。
+5. **可选动态验证**：只有 PPT 和用户明确要求时，才考虑在 SANDBOX 内启动受控 MCP/Agent、采集工具调用和行为证据；不得直接在宿主机执行未知 Agent 或插件。
+6. **可选真实 AI 分析**：只有用户批准代码/配置发送边界和 API 费用后，才可设计 AGENT 专用模型复核；它不能复用文案冒充已实现能力。
 
-重要边界：不是 SQL 注入、鉴权绕过等业务漏洞的真实利用证明；未实现爬虫、登录态、payload 生成、ZAP/Nuclei、自动复现与自动复测。用户此前要求 DAST 深化后置。
+每个阶段都应先给出本次具体实现范围、测试方式、前端变化和明确边界，等待用户确认后再改代码。
 
-### SANDBOX：沙箱动态证据链
+## 7. 其他模块边界
 
-已完成：Docker 隔离执行、禁网、只读挂载、CPU/内存/PID 限制、危险命令拦截、输出脱敏、执行时间线和结构化账本；可从 Finding 或 DAST 验证发起并形成显式证据关系。
+- DAST 当前是人工关联和轻量 HTTP 基础检查，不是 SQL 注入、鉴权绕过等业务漏洞的自动利用证明。
+- SANDBOX 当前提供受限 Docker 执行、资源限制、禁网/只读、输出脱敏和执行摘要；不是 eBPF/Sysmon 级完整行为取证。
+- ASPM 当前汇总 Finding、证据、攻击链和整改状态；真实 IAM、SLA/工单、完整审计和图数据库推理仍未实现。
+- 平台前端仍是 React + Vite，不是 Vue；不要再次进行未经单独确认的整体前端迁移。
 
-重要边界：当前账本主要记录隔离策略和执行摘要，并非 eBPF/Sysmon 等真实文件访问、网络连接、完整进程树或工具调用探针；不支持交互式程序、复杂多步骤编排和恶意样本级强隔离。
-
-### ASPM：治理与交付
-
-已完成：项目风险汇总、来源/等级/状态统计、Finding 负责人/备注/截止时间、证据图谱、可信攻击链、修复复测、治理闭环、模块级结果视图、安全知识中枢第一版与项目安全报告。
-
-待完成：CVSS/EPSS/资产暴露面进入风险分，SLA/工单/审批，登录权限和组织隔离，完整审计与 CI/CD，趋势报表，图数据库或语义推理。
-
-## 6. 新窗口建议的第一步
-
-1. 先按第 1 节执行只读检查，确认没有其他人新增的提交或未提交改动。
-2. 读取 README、本文档和用户提供的原始 PPT；重新列出每个模块的“已完成 / 未完成 / 前端可见性”。
-3. 当前优先级应在用户确认后重新决定。若不改变既有方向，建议转向 **SAST 的稳定性与真实扫描质量**，先定位并修复 `Failed to fetch`/工具链可解释性，再考虑真实 Agent 或更深扫描能力。
-4. 若用户要求演示优先，先用现有 SCA 离线资源跑一次完整扫描，确认高级供应链分析中的工具预检、扫描快照、例外、影响路径和 HTML 报告均可在前端看见。
-
-## 7. 新窗口可直接使用的提示词
+## 8. 新窗口可直接使用的提示词
 
 ```text
-继续完善 D:\project\PYproject\AI网安项目。请不要依赖旧对话记录，先读取 README.md 和 docs/PROJECT_HANDOFF_2026-07-26.md，再执行 git status --short --branch 和 git log -5 --oneline 确认当前状态。
+继续完善 D:\project\PYproject\AI网安项目，本窗口重点完善 AGENT 模块。
 
-我会提供原始 01.pptx。请把 PPT、README 和交接文档共同作为需求来源，重新列出每个模块已完成、未完成，以及已实现内容是否已经在前端可见。不要直接改代码；先给出最推荐推进的模块和明确实现范围，等我确认。
+请不要依赖旧对话记录。先完整读取我重新提供的原始 01.pptx、README.md、docs/PROJECT_HANDOFF_2026-07-26.md 和当前代码，再执行：
 
-规则：每次写代码前，先说明本次要实现的功能并获得我确认；每次代码更新后提交并推送 GitHub。正式仓库仅使用 D:\project\PYproject\AI网安项目，不要修改旧的 C 盘仓库。
+git status --short --branch
+git log -5 --oneline
+
+正式仓库只使用 D:\project\PYproject\AI网安项目，不要修改 C:\Users\hezia\Documents\AI网络安全项目。
+
+请先根据 PPT 和实际代码重新列出 AGENT 已完成、未完成以及前端可见性，指出页面是否存在超前或误导文案。不要直接改代码；先给出最推荐的下一步和明确实现范围，等我确认。
+
+规则：每次修改代码前先说明功能并等待确认；每次代码更新后提交并推送 GitHub。如需下载规则、镜像或测试资源，只放 D 盘并先说明用途。
 ```
