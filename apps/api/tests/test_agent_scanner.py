@@ -240,3 +240,15 @@ def test_permission_snapshot_has_an_explicit_per_asset_limit(tmp_path):
     assert len(asset.permissions) == 500
     assert asset.metadata["permission_limit"] == 500
     assert asset.metadata["permissions_truncated"] == 10
+
+
+def test_project_excluded_paths_skip_matching_agent_assets(tmp_path):
+    ignored = tmp_path / "fixtures"
+    ignored.mkdir()
+    (ignored / "mcp.json").write_text('{"permissions":["*"]}', encoding="utf-8")
+    (tmp_path / "agent.json").write_text('{"allowedTools":["Read"]}', encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path), excluded_paths=["fixtures/**"])
+
+    assert result.scanned_files == ["agent.json"]
+    assert all(finding.file_path != "fixtures/mcp.json" for finding in result.findings)

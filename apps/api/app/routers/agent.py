@@ -2,7 +2,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,7 +26,21 @@ from app.models import (
     ScanStatus,
 )
 from app.repositories.mappers import finding_to_schema
-from app.services.agent_scanner import AgentAsset, AgentPermission, scan_agent_tree
+from app.services.agent_governance import (
+    add_agent_exception,
+    build_agent_html_report,
+    build_agent_sarif,
+    decide_agent_exception,
+    effective_agent_profile,
+    evaluate_agent_quality_gate,
+    filter_agent_findings,
+    finding_governance_status,
+    finding_identity,
+    permission_identity as governance_permission_identity,
+    persist_agent_profile_config,
+    update_agent_profile,
+)
+from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree
 
 router = APIRouter()
 
@@ -47,6 +62,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         raise HTTPException(status_code=400, detail="AGENT module is not enabled for this project")
 
     source_path = validate_agent_source_path(project, payload.source_path)
+    profile = effective_agent_profile(project_module.config)
     scan = ScanTaskRecord(
         project_id=str(payload.project_id),
         scan_type="agent",
@@ -58,13 +74,34 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
     db.flush()
 
     try:
-        parsed = scan_agent_tree(source_path)
+        previous_scan = latest_completed_agent_scan(db, str(payload.project_id))
+        parsed = scan_agent_tree(source_path, list(profile.get("excluded_paths") or []))
+        governed_findings = filter_agent_findings(parsed.findings, profile)
         coverage = build_agent_coverage(parsed.assets, len(parsed.skipped_files))
+        asset_payloads = governed_asset_payloads(parsed.assets, governed_findings)
+        coverage.findings_by_asset_type = findings_by_asset_type(asset_payloads)
         if payload.clear_previous:
             supersede_active_agent_findings(db, str(payload.project_id), str(scan.id))
 
         records: list[FindingRecord] = []
-        for finding in parsed.findings:
+        finding_payloads: list[dict[str, object]] = []
+        suppressed_count = 0
+        for finding in governed_findings:
+            governance_status, exception_id, disposition = finding_governance_status(finding, profile)
+            if governance_status != "open":
+                suppressed_count += 1
+            review = {
+                "summary": finding.description,
+                "false_positive_likelihood": "not_reviewed",
+                "remediation": finding.remediation,
+                "category": finding.category,
+                "description": finding.description,
+                "trust_impact": finding.trust_impact,
+                "review_status": "not_reviewed",
+                "analysis_source": "local_rule",
+                "governance_exception_id": exception_id,
+                "governance_disposition": disposition,
+            }
             record = FindingRecord(
                 project_id=str(payload.project_id),
                 scan_task_id=scan.id,
@@ -76,19 +113,26 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
                 line_start=finding.line_start,
                 line_end=finding.line_end,
                 evidence=finding.evidence,
-                ai_review={
-                    "summary": finding.description,
-                    "false_positive_likelihood": "not_reviewed",
-                    "remediation": finding.remediation,
-                    "category": finding.category,
-                    "description": finding.description,
-                    "trust_impact": finding.trust_impact,
-                    "review_status": "not_reviewed",
-                    "analysis_source": "local_rule",
-                },
+                status=governance_status,
+                ai_review=review,
             )
             db.add(record)
             records.append(record)
+            finding_payloads.append(agent_finding_payload(finding, governance_status))
+
+        previous_finding_identities = scan_finding_identities(db, previous_scan)
+        current_finding_identities = {finding_identity(item) for item in finding_payloads}
+        previous_permissions = metadata_dict_list(previous_scan.scan_metadata or {}, "permissions") if previous_scan else []
+        previous_permission_identities = {governance_permission_identity(item) for item in previous_permissions}
+        current_permission_identities = {governance_permission_identity(item) for item in parsed.permissions}
+        quality_gate = evaluate_agent_quality_gate(
+            findings=finding_payloads,
+            permissions=parsed.permissions,
+            coverage=coverage.model_dump(),
+            profile=profile,
+            new_finding_identities=current_finding_identities - previous_finding_identities,
+            expanded_permission_identities=current_permission_identities - previous_permission_identities,
+        )
 
         scan.status = ScanStatus.completed.value
         scan.finished_at = datetime.utcnow()
@@ -98,10 +142,13 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             "source_path": source_path,
             "rule_version": parsed.rule_version,
             "finding_count": len(records),
-            "assets": [asset_to_dict(asset) for asset in parsed.assets],
+            "suppressed_count": suppressed_count,
+            "assets": asset_payloads,
             "permissions": [permission_to_dict(permission) for permission in parsed.permissions],
             "coverage": coverage.model_dump(),
             "skipped_files": parsed.skipped_files,
+            "agent_profile": profile,
+            "quality_gate": quality_gate,
         }
         db.commit()
         for record in records:
@@ -123,10 +170,12 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         scanned_files=parsed.scanned_files,
         finding_count=len(records),
         findings=[finding_to_schema(record) for record in records],
-        assets=[AgentAssetResult(**asset_to_dict(asset)) for asset in parsed.assets],
+        assets=[AgentAssetResult(**item) for item in asset_payloads],
         permissions=[AgentPermissionResult(**permission_to_dict(permission)) for permission in parsed.permissions],
         coverage=coverage,
         rule_version=parsed.rule_version,
+        suppressed_count=suppressed_count,
+        quality_gate=quality_gate,
     )
 
 
@@ -163,6 +212,72 @@ def list_project_agent_scan_history(project_id: UUID, db: Session = Depends(get_
     return [agent_scan_history_item(scan) for scan in scans]
 
 
+@router.get("/projects/{project_id}/profile")
+def get_project_agent_profile(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    return effective_agent_profile(enabled_agent_module(db, project_id).config)
+
+
+@router.patch("/projects/{project_id}/profile")
+def patch_project_agent_profile(
+    project_id: UUID,
+    payload: dict[str, object],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    module = enabled_agent_module(db, project_id)
+    actor = mutation_actor(request, payload)
+    clean_payload = {key: value for key, value in payload.items() if key != "actor"}
+    try:
+        profile = update_agent_profile(module.config, clean_payload, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    module.config = persist_agent_profile_config(module.config, profile)
+    module.updated_at = datetime.utcnow()
+    db.commit()
+    return profile
+
+
+@router.post("/projects/{project_id}/exceptions", status_code=201)
+def create_project_agent_exception(
+    project_id: UUID,
+    payload: dict[str, object],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    module = enabled_agent_module(db, project_id)
+    actor = mutation_actor(request, payload)
+    clean_payload = {key: value for key, value in payload.items() if key != "actor"}
+    try:
+        profile, item = add_agent_exception(module.config, clean_payload, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    module.config = persist_agent_profile_config(module.config, profile)
+    module.updated_at = datetime.utcnow()
+    db.commit()
+    return item
+
+
+@router.patch("/projects/{project_id}/exceptions/{exception_id}")
+def decide_project_agent_exception(
+    project_id: UUID,
+    exception_id: str,
+    payload: dict[str, object],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    module = enabled_agent_module(db, project_id)
+    actor = mutation_actor(request, payload)
+    clean_payload = {key: value for key, value in payload.items() if key != "actor"}
+    try:
+        profile, item = decide_agent_exception(module.config, exception_id, clean_payload, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    module.config = persist_agent_profile_config(module.config, profile)
+    module.updated_at = datetime.utcnow()
+    db.commit()
+    return item
+
+
 @router.get("/projects/{project_id}/snapshot", response_model=AgentScanSnapshot)
 def get_project_agent_snapshot(project_id: UUID, db: Session = Depends(get_db)) -> AgentScanSnapshot:
     if db.get(ProjectRecord, str(project_id)) is None:
@@ -196,6 +311,67 @@ def get_project_agent_scan_diff(
         .limit(1)
     )
     return build_agent_scan_diff(project_id, target, base)
+
+
+@router.get("/projects/{project_id}/gate")
+def get_project_agent_gate(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    scan = latest_completed_agent_scan(db, str(project_id))
+    if scan is None:
+        raise HTTPException(status_code=404, detail="No completed AGENT scan found")
+    metadata = scan.scan_metadata or {}
+    gate = metadata.get("quality_gate") if isinstance(metadata.get("quality_gate"), dict) else {}
+    return {"project_id": str(project_id), "scan_task_id": str(scan.id), **gate}
+
+
+@router.get("/projects/{project_id}/report")
+def get_project_agent_report(
+    project_id: UUID,
+    scan_task_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    scan = resolve_agent_scan(db, str(project_id), scan_task_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="No completed AGENT scan found")
+    return build_agent_report(project_id, scan, db)
+
+
+@router.get("/projects/{project_id}/sarif")
+def get_project_agent_sarif(
+    project_id: UUID,
+    scan_task_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    report = get_project_agent_report(project_id, scan_task_id, db)
+    payload = build_agent_sarif(report["findings"], str(report["scan_task_id"]))
+    return JSONResponse(payload, headers={"Content-Disposition": 'attachment; filename="agent-results.sarif"'})
+
+
+@router.get("/projects/{project_id}/report.html", response_class=HTMLResponse)
+def get_project_agent_report_html(
+    project_id: UUID,
+    scan_task_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    report = get_project_agent_report(project_id, scan_task_id, db)
+    return HTMLResponse(
+        build_agent_html_report(report),
+        headers={"Content-Disposition": 'attachment; filename="agent-report.html"'},
+    )
+
+
+@router.get("/projects/{project_id}/ci-config")
+def get_project_agent_ci_config(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    profile = effective_agent_profile(enabled_agent_module(db, project_id).config)
+    return {
+        "project_id": str(project_id),
+        "profile": profile,
+        "command": "python scripts/agent_ci.py --source . --profile agent-ci-config.json --json agent-result.json --sarif agent-result.sarif --html agent-report.html --fail-on-block",
+        "offline": True,
+        "exit_codes": {"0": "gate passed", "1": "gate blocked", "2": "configuration or scan error"},
+        "limitations": "The local CI scanner performs static analysis only and does not connect to or execute Agent, MCP, plugin, or tool code.",
+    }
 
 
 def validate_agent_source_path(project: ProjectRecord, requested_path: str) -> str:
@@ -258,6 +434,60 @@ def build_agent_coverage(assets: list[AgentAsset], skipped_file_count: int = 0) 
     )
 
 
+def governed_asset_payloads(assets: list[AgentAsset], findings: list[AgentFinding]) -> list[dict[str, object]]:
+    finding_counts: dict[str, int] = {}
+    for finding in findings:
+        finding_counts[finding.file_path] = finding_counts.get(finding.file_path, 0) + 1
+    payloads: list[dict[str, object]] = []
+    for asset in assets:
+        item = asset_to_dict(asset)
+        item["finding_count"] = finding_counts.get(asset.path, 0)
+        payloads.append(item)
+    return payloads
+
+
+def findings_by_asset_type(assets: list[dict[str, object]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for asset in assets:
+        asset_type = str(asset.get("asset_type") or "unknown")
+        result[asset_type] = result.get(asset_type, 0) + int(asset.get("finding_count") or 0)
+    return result
+
+
+def agent_finding_payload(finding: AgentFinding, status: str) -> dict[str, object]:
+    return {
+        "rule_id": finding.rule_id,
+        "title": finding.title,
+        "severity": finding.severity.value,
+        "file_path": finding.file_path,
+        "line_start": finding.line_start,
+        "line_end": finding.line_end,
+        "evidence": finding.evidence,
+        "category": finding.category,
+        "description": finding.description,
+        "remediation": finding.remediation,
+        "trust_impact": finding.trust_impact,
+        "status": status,
+    }
+
+
+def scan_finding_identities(db: Session, scan: ScanTaskRecord | None) -> set[str]:
+    if scan is None:
+        return set()
+    records = db.scalars(
+        select(FindingRecord).where(FindingRecord.scan_task_id == scan.id, FindingRecord.source == "AGENT")
+    ).all()
+    return {
+        finding_identity({
+            "rule_id": item.rule_id,
+            "file_path": item.file_path,
+            "line_start": item.line_start,
+            "title": item.title,
+        })
+        for item in records
+    }
+
+
 def asset_to_dict(asset: AgentAsset) -> dict[str, object]:
     return {
         "path": asset.path,
@@ -308,6 +538,7 @@ def agent_scan_history_item(scan: ScanTaskRecord) -> AgentScanHistoryItem:
         finding_count=int(metadata.get("finding_count") or 0),
         rule_version=metadata.get("rule_version"),
         coverage=AgentScanCoverage(**coverage),
+        gate_decision=(metadata.get("quality_gate") or {}).get("decision") if isinstance(metadata.get("quality_gate"), dict) else None,
     )
 
 
@@ -325,6 +556,7 @@ def agent_scan_snapshot(project_id: UUID, scan: ScanTaskRecord) -> AgentScanSnap
         assets=[AgentAssetResult(**item) for item in assets if isinstance(item, dict)],
         permissions=[AgentPermissionResult(**item) for item in permissions if isinstance(item, dict)],
         skipped_files=[item for item in skipped_files if isinstance(item, dict)],
+        quality_gate=metadata.get("quality_gate") if isinstance(metadata.get("quality_gate"), dict) else {},
     )
 
 
@@ -496,6 +728,122 @@ def permission_change_direction(previous: dict[str, object], current: dict[str, 
     if approval_rank.get(current_approval, 1) < approval_rank.get(previous_approval, 1):
         return "expanded"
     return "changed"
+
+
+def enabled_agent_module(db: Session, project_id: UUID) -> ProjectModuleRecord:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    module = db.scalar(
+        select(ProjectModuleRecord).where(
+            ProjectModuleRecord.project_id == str(project_id),
+            ProjectModuleRecord.module_key == ModuleKey.agent.value,
+            ProjectModuleRecord.enabled.is_(True),
+        )
+    )
+    if module is None:
+        raise HTTPException(status_code=400, detail="AGENT module is not enabled for this project")
+    return module
+
+
+def mutation_actor(request: Request, payload: dict[str, object]) -> str:
+    identity = getattr(request.state, "identity", None)
+    if identity is not None and getattr(identity, "username", None):
+        return str(identity.username)[:120]
+    header_actor = request.headers.get("X-Actor")
+    return str(header_actor or payload.get("actor") or "local-operator").strip()[:120] or "local-operator"
+
+
+def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> dict[str, object]:
+    if scan.project_id != str(project_id) or scan.scan_type != "agent":
+        raise HTTPException(status_code=404, detail="Matching AGENT scan not found")
+    metadata = scan.scan_metadata or {}
+    findings = db.scalars(
+        select(FindingRecord)
+        .where(FindingRecord.project_id == str(project_id), FindingRecord.source == "AGENT", FindingRecord.scan_task_id == scan.id)
+        .order_by(FindingRecord.created_at.asc())
+    ).all()
+    finding_payloads = [finding_record_report_payload(item) for item in findings]
+    assets = metadata_dict_list(metadata, "assets")
+    permissions = metadata_dict_list(metadata, "permissions")
+    severity = {key: sum(1 for item in findings if item.severity == key) for key in ("critical", "high", "medium", "low", "info")}
+    status = {}
+    for item in findings:
+        status[item.status] = status.get(item.status, 0) + 1
+    base = db.scalar(
+        select(ScanTaskRecord)
+        .where(
+            ScanTaskRecord.project_id == str(project_id),
+            ScanTaskRecord.scan_type == "agent",
+            ScanTaskRecord.status == ScanStatus.completed.value,
+            ScanTaskRecord.created_at < scan.created_at,
+        )
+        .order_by(ScanTaskRecord.created_at.desc())
+        .limit(1)
+    )
+    return {
+        "project_id": str(project_id),
+        "scan_task_id": str(scan.id),
+        "generated_at": datetime.utcnow().isoformat(),
+        "source_path": metadata.get("source_path"),
+        "rule_version": metadata.get("rule_version"),
+        "summary": {
+            "asset_count": len(assets),
+            "permission_count": len(permissions),
+            "finding_count": len(findings),
+            "suppressed_count": int(metadata.get("suppressed_count") or 0),
+            "severity": severity,
+            "status": status,
+            "coverage": metadata.get("coverage") or {},
+        },
+        "assets": assets,
+        "permissions": permissions,
+        "findings": finding_payloads,
+        "quality_gate": metadata.get("quality_gate") or {},
+        "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
+        "profile": report_profile_summary(metadata.get("agent_profile")),
+        "skipped_files": metadata.get("skipped_files") or [],
+        "capability_boundaries": [
+            "The report is generated from local static configuration and instruction analysis.",
+            "It does not connect to or execute Agent, MCP Server, plugin, or tool code.",
+            "Approved exceptions and allowlists are governance decisions and remain visible in finding status and profile audit history.",
+        ],
+    }
+
+
+def finding_record_report_payload(record: FindingRecord) -> dict[str, object]:
+    review = record.ai_review or {}
+    return {
+        "id": str(record.id),
+        "rule_id": record.rule_id,
+        "title": record.title,
+        "severity": record.severity,
+        "file_path": record.file_path,
+        "line_start": record.line_start,
+        "line_end": record.line_end,
+        "evidence": record.evidence,
+        "status": record.status,
+        "category": review.get("category"),
+        "description": review.get("description") or review.get("summary"),
+        "remediation": review.get("remediation"),
+        "trust_impact": review.get("trust_impact"),
+        "governance_exception_id": review.get("governance_exception_id"),
+        "governance_disposition": review.get("governance_disposition"),
+    }
+
+
+def report_profile_summary(value: object) -> dict[str, object]:
+    profile = value if isinstance(value, dict) else {}
+    return {
+        "profile_version": profile.get("profile_version"),
+        "rule_version": profile.get("rule_version"),
+        "disabled_rule_ids": profile.get("disabled_rule_ids") or [],
+        "excluded_paths": profile.get("excluded_paths") or [],
+        "permission_allowlist": profile.get("permission_allowlist") or [],
+        "required_approval_capabilities": profile.get("required_approval_capabilities") or [],
+        "quality_gate": profile.get("quality_gate") or {},
+        "exceptions": profile.get("exceptions") or [],
+        "audit_log": profile.get("audit_log") or [],
+    }
 
 
 def mark_agent_scan_failed(scan: ScanTaskRecord, detail: str) -> None:

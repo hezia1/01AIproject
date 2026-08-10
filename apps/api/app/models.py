@@ -494,6 +494,8 @@ class AgentScanResult(BaseModel):
     permissions: list[AgentPermissionResult] = Field(default_factory=list)
     coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
     rule_version: str
+    suppressed_count: int = 0
+    quality_gate: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentScanHistoryItem(BaseModel):
@@ -506,6 +508,7 @@ class AgentScanHistoryItem(BaseModel):
     finding_count: int = 0
     rule_version: str | None = None
     coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
+    gate_decision: str | None = None
 
 
 class AgentScanSnapshot(BaseModel):
@@ -517,6 +520,7 @@ class AgentScanSnapshot(BaseModel):
     assets: list[AgentAssetResult] = Field(default_factory=list)
     permissions: list[AgentPermissionResult] = Field(default_factory=list)
     skipped_files: list[dict[str, str]] = Field(default_factory=list)
+    quality_gate: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentAssetDiffItem(BaseModel):

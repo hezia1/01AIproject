@@ -4,7 +4,9 @@ import json
 import re
 import tomllib
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
@@ -227,7 +229,7 @@ MAX_FILE_BYTES = 512 * 1024
 MAX_PERMISSIONS_PER_ASSET = 500
 
 
-def scan_agent_tree(source_path: str) -> AgentScanOutput:
+def scan_agent_tree(source_path: str, excluded_paths: list[str] | None = None) -> AgentScanOutput:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
@@ -237,7 +239,7 @@ def scan_agent_tree(source_path: str) -> AgentScanOutput:
     assets: list[AgentAsset] = []
     permissions: list[AgentPermission] = []
     skipped_files: list[dict[str, str]] = []
-    for file_path, asset_type, skip_reason in iter_agent_files(root):
+    for file_path, asset_type, skip_reason in iter_agent_files(root, excluded_paths):
         relative_path = file_path.relative_to(root).as_posix()
         if skip_reason:
             skipped_files.append({"path": relative_path, "reason": skip_reason})
@@ -279,11 +281,14 @@ def scan_agent_tree(source_path: str) -> AgentScanOutput:
     )
 
 
-def iter_agent_files(root: Path):
+def iter_agent_files(root: Path, excluded_paths: list[str] | None = None):
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         if any(part in IGNORED_DIRS for part in path.relative_to(root).parts[:-1]):
+            continue
+        relative_path = path.relative_to(root).as_posix()
+        if any(agent_path_matches(relative_path, pattern) for pattern in excluded_paths or []):
             continue
         asset_type = classify_agent_asset(path, root)
         if asset_type is None:
@@ -296,6 +301,11 @@ def iter_agent_files(root: Path):
             yield path, asset_type, "file metadata is not readable"
             continue
         yield path, asset_type, None
+
+
+def agent_path_matches(path: str, pattern: str) -> bool:
+    normalized_pattern = str(pattern).replace("\\", "/")
+    return fnmatchcase(path, normalized_pattern) or PurePosixPath(path).match(normalized_pattern)
 
 
 def classify_agent_asset(path: Path, root: Path) -> str | None:
