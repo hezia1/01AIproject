@@ -126,6 +126,8 @@ class AiReview(BaseModel):
     language: str | None = None
     description: str | None = None
     trust_impact: str | None = None
+    review_status: str | None = None
+    analysis_source: str | None = None
     agent_pipeline: list[str] = Field(default_factory=list)
     review_verdict: str | None = None
     evidence_summary: str | None = None
@@ -439,6 +441,26 @@ class AgentScanRequest(BaseModel):
     clear_previous: bool = True
 
 
+class AgentAssetResult(BaseModel):
+    path: str
+    asset_type: str
+    format: str
+    parser: str
+    status: str
+    checks: list[str] = Field(default_factory=list)
+    finding_count: int = 0
+    detail: str | None = None
+
+
+class AgentScanCoverage(BaseModel):
+    discovered_asset_count: int = 0
+    parsed_asset_count: int = 0
+    failed_asset_count: int = 0
+    skipped_file_count: int = 0
+    findings_by_asset_type: dict[str, int] = Field(default_factory=dict)
+    asset_types: dict[str, int] = Field(default_factory=dict)
+
+
 class AgentScanResult(BaseModel):
     project_id: UUID
     scan_task_id: UUID
@@ -446,6 +468,21 @@ class AgentScanResult(BaseModel):
     scanned_files: list[str]
     finding_count: int
     findings: list[Finding]
+    assets: list[AgentAssetResult] = Field(default_factory=list)
+    coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
+    rule_version: str
+
+
+class AgentScanHistoryItem(BaseModel):
+    scan_task_id: UUID
+    status: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    source_path: str | None = None
+    finding_count: int = 0
+    rule_version: str | None = None
+    coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
 
 class DastVerdict(str, Enum):
     exploitable = "exploitable"

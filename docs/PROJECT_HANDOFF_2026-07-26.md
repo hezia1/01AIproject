@@ -133,39 +133,38 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 
 - `apps/api/app/routers/agent.py`
 - `apps/api/app/services/agent_scanner.py`
-- `apps/web/src/main.tsx` 中的 `AgentView`
+- `apps/web/src/main.tsx` 中当前实际渲染的 `FindingModuleGovernance` 与 Agent 扫描覆盖面板
 - 通用 Finding、DAST/SANDBOX 关联和 ASPM 展示代码
 
 ### 已实现的后端能力
 
-- `POST /api/agent/scan`：验证项目和 AGENT 模块启用状态，同步扫描本地源码路径，创建扫描任务并持久化 AGENT Finding。
-- `GET /api/agent/projects/{project_id}/findings`：读取项目 AGENT Finding。
-- 扫描 `.md`、`.yaml`、`.yml`、`.json`、`.toml`，以及 `Dockerfile`、`AGENTS.md`、`CLAUDE.md`、`mcp.json`、`.mcp.json`、`mcp.config.json`、`claude_desktop_config.json`、`plugin.json`、`tools.json`。
+- `POST /api/agent/scan`：验证项目和 AGENT 模块启用状态，并强制扫描路径位于项目配置的源码目录内；同步扫描、创建扫描任务并持久化 AGENT Finding。
+- `GET /api/agent/projects/{project_id}/findings`：只读取最新完成批次的 AGENT Finding；重扫时旧的活动 Finding 会关闭并标记为已被新批次替代。
+- `GET /api/agent/projects/{project_id}/scan-history`：返回最近扫描状态、资产覆盖、Finding 数量和规则版本。
+- 先识别 Agent 资产再扫描：指令文件、Prompt、Skill、MCP 配置、插件清单、工具定义和 Agent 专用配置；不再把普通 Markdown/JSON/YAML/TOML 一概当作 Agent 资产。
 - 忽略 `.git`、`node_modules`、虚拟环境、构建产物等目录，并跳过超过 512 KiB 的文件。
 - 文本规则识别：读取环境密钥、Shell/命令执行、文件写删、外部网络访问、MCP/插件通配权限、安全指令覆盖和内联令牌。
-- MCP JSON 结构化检查：无效 JSON、危险启动命令、危险参数、内联环境密钥、敏感路径和网络能力。
-- Finding 保存规则 ID、等级、分类、文件位置、脱敏证据、说明、修复建议和信任影响。
+- JSON 结构化检查：无效 JSON、通配权限、Shell/文件写入/网络能力和内联凭据；MCP 另检查危险启动命令、危险参数、敏感路径、Header/环境凭据和远程地址。
+- Finding 保存规则 ID、等级、分类、文件位置、脱敏证据、说明、修复建议和信任影响；本地规则元数据明确标记为 `local_rule / not_reviewed`。
 - AGENT Finding 可进入通用 Finding 治理，并可与 DAST、SANDBOX 和 ASPM 的证据链能力关联。
 
 ### 已在前端可见
 
 - AGENT 页面可填写源码路径并单独执行扫描。
-- 显示 Finding 总数、严重/高危数、风险分类和严重等级分布。
+- 显示最新扫描状态、资产数量、解析成功/失败/跳过数量、规则版本、Finding 总数、严重/高危数、待人工复核数、风险分类和严重等级分布。
 - 列表展示等级、分类、标题、文件/行号、证据、修复建议和信任影响，支持每页 10 条分页。
 - 单独执行 AGENT 时只锁定 AGENT 模块，不应导致其他模块置灰或触发扫描。
 
 ### 尚未完善或容易产生歧义的部分
 
-- 当前主要是规则表达式和有限 MCP JSON 检查，不会启动真实 Agent、连接 MCP Server、调用插件工具或验证运行时行为。
-- 扫描器会检查大量通用 Markdown/JSON/YAML/TOML 文件，尚未先建立“真实 Agent 资产清单”，可能把普通项目文档或配置误判为 Agent 资产。
+- 当前是本地只读规则与结构化 JSON 检查，不会启动真实 Agent、连接 MCP Server、调用插件工具或验证运行时行为。
 - 缺少针对不同格式的完整结构化解析：Agent 指令层级、MCP transport/tool/resource/prompt、插件 manifest、Skill/Prompt 包、模型/Provider 配置和工具 Schema 尚未形成统一资产模型。
 - 缺少能力与权限矩阵：文件系统范围、命令参数、网络目的地、密钥作用域、人工审批、可写资源和跨工具数据流没有统一展示。
-- 页面文案提到“信任评分”，但当前代码只有 Finding 的 `trust_impact` 文本，没有可解释、可复算的项目/资产信任分。新窗口必须修复这种前端超前表达。
-- 缺少扫描历史快照、批次差异、仅新增风险、抑制/例外、规则版本、质量门禁、JSON/SARIF/HTML 专项报告和本地 CI CLI。
-- 当前查询可能混合展示历次 AGENT Finding；需要核查重扫时旧 Finding 的关闭、去重和“当前批次”语义。
+- 尚无可解释、可复算的项目/资产信任分；页面已删除“已实现信任评分”的超前表达，仅保留每条规则的影响说明。
+- 已有扫描历史、规则版本和通用 Finding 批次差异；仍缺少仅新增视图、抑制/例外、质量门禁、JSON/SARIF/HTML 专项报告和本地 CI CLI。
 - 缺少来源与完整性证据：配置/插件来源、版本、包哈希、签名、发布者、锁定版本、安装方式和已知漏洞没有形成供应链结论。
 - 缺少提示注入信任边界和数据流建模：外部内容如何进入模型上下文、如何影响工具调用、是否有 sanitizer/审批/allowlist，目前没有可复核路径。
-- 缺少 AGENT 专项准确性测试和真实样例矩阵；现有后端测试主要覆盖平台通用能力，不能证明 AGENT 对实际项目稳定准确。
+- 已增加 AGENT 专项测试，覆盖资产识别、否定语句、正向能力、结构化权限、证据脱敏、标准 npx MCP 与无效 JSON；仍需扩充真实生态样例矩阵。
 - SAST 的 DeepSeek Key 和七角色流水线不会自动让 AGENT 模块获得 AI 分析能力。若 PPT 要求 AGENT 使用第三方模型，需要单独设计数据边界、提示词、审计、费用和降级策略，并再次获得用户确认。
 
 ## 6. 新窗口推荐的 AGENT 推进顺序

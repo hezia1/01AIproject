@@ -18,11 +18,11 @@ from app.db_models import (
 )
 from app.models import Project, ProjectAssetProbe, ProjectCreate, ProjectUpdate
 from app.repositories.mappers import project_to_schema
+from app.services.agent_scanner import classify_agent_asset
 
 router = APIRouter()
 
 SCA_MANIFESTS = {"package.json", "requirements.txt", "pom.xml", "go.mod"}
-AGENT_FILES = {"AGENTS.md", "CLAUDE.md", "mcp.json", "plugin.json"}
 SOURCE_SUFFIXES = {
     ".py",
     ".js",
@@ -116,7 +116,20 @@ def probe_project_assets(project_id: UUID, db: Session = Depends(get_db)) -> Pro
     sca_files: list[str] = []
     source_files: list[str] = []
     agent_files: list[str] = []
-    ignored_dirs = {".git", "node_modules", ".venv", "venv", "dist", "build", "__pycache__"}
+    ignored_dirs = {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        "coverage",
+        "__pycache__",
+        ".pytest_cache",
+        ".cache",
+        "artifacts",
+        "outputs",
+    }
     for path in root.rglob("*"):
         if len(sca_files) >= 20 and len(source_files) >= 20 and len(agent_files) >= 20:
             break
@@ -130,10 +143,7 @@ def probe_project_assets(project_id: UUID, db: Session = Depends(get_db)) -> Pro
             sca_files.append(relative)
         if path.suffix.lower() in SOURCE_SUFFIXES and len(source_files) < 20:
             source_files.append(relative)
-        if (
-            path.name in AGENT_FILES
-            or path.suffix.lower() in {".md", ".yaml", ".yml", ".json", ".toml"}
-        ) and len(agent_files) < 20:
+        if classify_agent_asset(path, root) is not None and len(agent_files) < 20:
             agent_files.append(relative)
 
     recommended_tasks: list[str] = []

@@ -45,20 +45,20 @@ MODULE_REGISTRY: dict[ModuleKey, SecurityModule] = {
         key=ModuleKey.agent,
         code="AGENT",
         name="Agent 供应链安全",
-        subtitle="指令文件 + 工具协议 + 插件扩展 + 信任评分",
+        subtitle="指令资产 + MCP / 工具配置 + 插件清单 + 批次对比",
         category=ModuleCategory.detection,
-        description="面向 Agent、MCP、工具协议和插件扩展执行安全检查，识别提示注入、工具滥用、敏感资源访问等 AI 时代新攻击面。",
+        description="对仓库内已识别的 Agent 指令、MCP、工具和插件配置执行只读规则检查，记录扫描覆盖并输出可复核证据。",
         capabilities=[
-            ModuleCapability(title="三类目标扫描", description="扫描指令文件、工具协议和插件扩展。"),
-            ModuleCapability(title="规则检测与 AI 审计", description="结合规则、AI 审计、覆盖矩阵和信任评分。"),
-            ModuleCapability(title="私有源接入", description="接入私有 MCP、插件源和配置解析。"),
-            ModuleCapability(title="复测报告", description="生成公开只读报告并支持复测。"),
+            ModuleCapability(title="Agent 资产识别", description="识别指令、Prompt、Skill、MCP 与插件配置。"),
+            ModuleCapability(title="结构化配置检查", description="检查权限、工具能力和内联凭据。"),
+            ModuleCapability(title="证据脱敏", description="保存发现前遮蔽凭据和值。"),
+            ModuleCapability(title="批次记录", description="保存规则版本、覆盖情况和扫描差异。"),
         ],
         default_config={
             "scan_prompts": True,
             "scan_mcp": True,
             "scan_plugins": True,
-            "trust_score": True,
+            "rule_version": "agent-rules-2026.08.10-v2",
             "sensitive_resource_policy": "strict",
         },
     ),
@@ -133,4 +133,3 @@ def list_modules() -> list[SecurityModule]:
 
 def get_module(module_key: ModuleKey) -> SecurityModule | None:
     return MODULE_REGISTRY.get(module_key)
-

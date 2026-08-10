@@ -52,7 +52,7 @@ type ScaPolicies = { scope?: string; override_count?: number; vulnerability_rule
 type ScaPolicyAudit = { id: string; event_type: string; actor: string | null; details: Record<string, unknown>; created_at: string };
 type ScaGate = { decision: "pass" | "block"; exit_code: number; reason: string; blocked_component_count: number; accepted_risk_count: number; ci_usage: string; scan_stale_or_missing?: boolean; policy?: ScaGatePolicy; blocked_components: { name: string; version: string | null; ecosystem: string; severity: Severity | null; vulnerability_ids: string[]; reasons?: string[] }[] };
 type ScaEvidence = { scan_task_id: string; artifact_hashes: Record<string, unknown>; osv_mirror: Record<string, unknown>; intelligence?: Record<string, unknown>; native_dependency_sources: Record<string, { status: string; manifest: string; tool: string; edge_count: number; detail: string }>; policy_snapshot: Record<string, unknown>; assurance?: ScanAssurance; gate: ScaGate };
-type AiReview = { summary: string; false_positive_likelihood: string; remediation: string; category?: string | null; cwe?: string | null; owasp?: string | null; language?: string | null; description?: string | null; trust_impact?: string | null; agent_pipeline?: string[]; review_verdict?: string | null; evidence_summary?: string | null; fix_strategy?: string | null; priority?: string | null; ai_provider?: string | null; ai_confidence?: number | null; ai_review_source?: string | null; fix_draft?: { recommended_change?: string; patch?: string; tests?: string[]; limitations?: string[] } };
+type AiReview = { summary: string; false_positive_likelihood: string; remediation: string; category?: string | null; cwe?: string | null; owasp?: string | null; language?: string | null; description?: string | null; trust_impact?: string | null; review_status?: string | null; analysis_source?: string | null; agent_pipeline?: string[]; review_verdict?: string | null; evidence_summary?: string | null; fix_strategy?: string | null; priority?: string | null; ai_provider?: string | null; ai_confidence?: number | null; ai_review_source?: string | null; fix_draft?: { recommended_change?: string; patch?: string; tests?: string[]; limitations?: string[] } };
 type Finding = { id: string; component_id?: string | null; source: string; rule_id: string; title: string; severity: Severity; file_path: string | null; line_start: number | null; status: FindingStatus; evidence: string | null; ai_review?: AiReview | null; remediation_owner?: string | null; remediation_note?: string | null; remediation_due_at?: string | null; updated_at?: string | null };
 type DastStrategy = { id: string; name: string; description: string; scope_summary: string; check_items: string[]; limitations: string[] };
 type DastValidation = { id: string; finding_id?: string | null; component_id?: string | null; link_source: string; link_confidence: number; target_url: string; verdict: string; validator: string | null; strategy_id: string; strategy_name?: string | null; scope_summary?: string | null; limitations?: string | null; evidence_summary: string | null; request_summary?: string | null; response_summary?: string | null; reproduction_steps?: string | null; remediation_hint?: string | null; created_at: string };
@@ -70,6 +70,8 @@ type ExecutionStep = { module: Exclude<ModuleKey, "aspm">; status: ExecutionStat
 type RetestResult = "still_present" | "resolved" | "new" | "changed";
 type FindingRetestItem = { identity: string; result: RetestResult; title: string; file_path?: string | null; previous_line_start?: number | null; current_line_start?: number | null; previous_severity?: Severity | null; current_severity?: Severity | null; previous_finding_id?: string | null; current_finding_id?: string | null };
 type FindingRetestComparison = { project_id: string; source: string; has_comparison: boolean; previous_scan_id?: string | null; current_scan_id?: string | null; previous_scan_at?: string | null; current_scan_at?: string | null; still_present_count: number; resolved_count: number; new_count: number; changed_count: number; items: FindingRetestItem[] };
+type AgentScanCoverage = { discovered_asset_count: number; parsed_asset_count: number; failed_asset_count: number; skipped_file_count: number; findings_by_asset_type: Record<string, number>; asset_types: Record<string, number> };
+type AgentScanHistoryItem = { scan_task_id: string; status: string; created_at: string; started_at: string | null; finished_at: string | null; source_path: string | null; finding_count: number; rule_version: string | null; coverage: AgentScanCoverage };
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
@@ -88,7 +90,7 @@ const FINDING_WORKFLOW_STATUSES: FindingStatus[] = ["open", "confirmed", "fixing
 const fallbackModules: SecurityModule[] = [
   { key: "sast", code: "SAST", name: "智能静态审计", subtitle: "定制化安全 Skill + 多 Sub-agent 编排 + 行业历史漏洞知识库", category: "detection", description: "面向代码仓库执行智能静态审计，将规则扫描、AI 审计、历史漏洞经验和多 Agent 复核组合为代码风险发现能力。", capabilities: [{ title: "定制化安全 Skill", description: "按行业、框架和业务场景生成审计策略。" }, { title: "多 Sub-agent 编排", description: "发现、复核、证据和修复建议分工协同。" }, { title: "行业历史漏洞知识库", description: "沉淀通用漏洞、业务漏洞和误报经验。" }], dependencies: [], default_config: {} },
   { key: "sca", code: "SCA", name: "供应链风险分析", subtitle: "SBOM + 组件漏洞匹配 + 许可证风险归一化 + 依赖影响分析", category: "detection", description: "解析多语言工程依赖，生成 SBOM，识别漏洞、许可证和直接/传递依赖风险，并给出修复优先级。", capabilities: [{ title: "SBOM 生成", description: "生成项目组件清单和依赖来源。" }, { title: "组件漏洞匹配", description: "匹配 CVE、受影响版本和修复版本。" }, { title: "许可证风险归一化", description: "识别许可证类型并归一化风险等级。" }, { title: "依赖影响分析", description: "分析直接/传递依赖、版本归一化和修复影响。" }], dependencies: [], default_config: {} },
-  { key: "agent", code: "AGENT", name: "Agent 供应链安全", subtitle: "指令文件 + 工具协议 + 插件扩展 + 信任评分", category: "detection", description: "面向 Agent、MCP、工具协议和插件扩展执行安全检查，识别提示注入、工具滥用、敏感资源访问等新攻击面。", capabilities: [{ title: "指令文件扫描", description: "扫描 Agent 指令文件和 Prompt。" }, { title: "工具协议扫描", description: "扫描 MCP Server 和工具定义。" }, { title: "插件扩展扫描", description: "扫描插件清单和权限边界。" }, { title: "信任评分", description: "生成覆盖矩阵与信任评分。" }], dependencies: [], default_config: {} },
+  { key: "agent", code: "AGENT", name: "Agent 供应链安全", subtitle: "指令资产 + MCP / 工具配置 + 插件清单 + 批次对比", category: "detection", description: "对仓库内已识别的 Agent 指令、MCP、工具和插件配置执行只读规则检查，记录扫描覆盖并输出可复核证据。", capabilities: [{ title: "Agent 资产识别", description: "识别指令、Prompt、Skill、MCP 与插件配置。" }, { title: "结构化配置检查", description: "检查权限、工具能力和内联凭据。" }, { title: "证据脱敏", description: "保存发现前遮蔽凭据和值。" }, { title: "批次记录", description: "保存规则版本、覆盖情况和扫描差异。" }], dependencies: [], default_config: {} },
   { key: "dast", code: "DAST", name: "漏洞动态验证", subtitle: "Web 业务验证 + 静态发现联动验证 + 三色裁决", category: "validation", description: "将静态发现、供应链风险和运行时目标联动验证，输出可利用、不确定、不可利用三态裁决和完整验证证据。", capabilities: [{ title: "Web 业务验证", description: "对目标 Web 应用执行业务化安全验证。" }, { title: "静态发现联动验证", description: "将 SAST/SCA/Agent 发现转为验证策略。" }, { title: "三色裁决", description: "输出可利用、不确定、不可利用的验证结论。" }, { title: "证据归档", description: "保留执行日志、请求响应、截图和验证过程。" }], dependencies: ["sast"], default_config: {} },
   { key: "sandbox", code: "SANDBOX", name: "沙箱动态证据链", subtitle: "隔离环境 + 行为监控 + 调用账本 + AI 驱动动态验证", category: "evidence", description: "在隔离环境中运行目标程序、插件或 Agent，采集文件、网络、进程、工具调用和运行时行为证据。", capabilities: [{ title: "隔离环境", description: "以容器或受控运行时隔离目标执行。" }, { title: "行为监控", description: "监控文件访问、网络连接、进程启动和环境变量读取。" }, { title: "调用账本", description: "结构化采集 Agent 工具调用和运行时覆盖。" }, { title: "策略化探测", description: "适配多类 Agent 运行时并支持 AI 驱动验证。" }], dependencies: ["agent"], default_config: {} },
   { key: "aspm", code: "ASPM", name: "平台治理与交付", subtitle: "项目组 + 攻击链 + 风险趋势 + 整改闭环 + 安全门禁", category: "governance", description: "聚合各模块结果，提供跨项目关联、攻击链、风险趋势、整改闭环、开放接口、流水线门禁和合规报告。", capabilities: [{ title: "风险治理", description: "管理项目组、跨项目关联、攻击链、风险趋势和整改闭环。" }, { title: "开放接口", description: "提供开放工具接口、批量任务和研发流水线安全门禁。" }, { title: "权限与配额", description: "管理模块权限、授权配额和审计日志。" }, { title: "交付报告", description: "输出诊断导出、合规报告和治理看板。" }], dependencies: [], default_config: {} },
@@ -111,6 +113,7 @@ function App() {
   const [enabledModules, setEnabledModules] = useState<Set<ModuleKey>>(() => new Set(DEFAULT_ENABLED_MODULES));
   const [components, setComponents] = useState<Component[]>([]);
   const [scaScanHistory, setScaScanHistory] = useState<ScaScanHistoryItem[]>([]);
+  const [agentScanHistory, setAgentScanHistory] = useState<AgentScanHistoryItem[]>([]);
   const [selectedScaScanId, setSelectedScaScanId] = useState<string | null>(null);
   const [scaScanDiff, setScaScanDiff] = useState<ScaScanDiff | null>(null);
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null);
@@ -244,6 +247,7 @@ function App() {
     setEnabledModules(new Set(["aspm"]));
     setComponents([]);
     setScaScanHistory([]);
+    setAgentScanHistory([]);
     setSelectedScaScanId(null);
     setScaScanDiff(null);
     setDependencyGraph(null);
@@ -315,7 +319,10 @@ function App() {
 
   async function refreshProjectData(projectId = project?.id, scaScanId: string | null = selectedScaScanId) {
     if (!projectId) return;
-    const historyData = await request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`).catch(() => []);
+    const [historyData, agentHistoryData] = await Promise.all([
+      request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`).catch(() => []),
+      request<AgentScanHistoryItem[]>(`/agent/projects/${projectId}/scan-history`).catch(() => []),
+    ]);
     const effectiveScaScanId = scaScanId ?? historyData[0]?.scan_task_id ?? null;
     const scaQuery = effectiveScaScanId ? `?scan_task_id=${effectiveScaScanId}` : "";
     const diffQuery = effectiveScaScanId ? `?target_scan_id=${effectiveScaScanId}` : "";
@@ -331,6 +338,7 @@ function App() {
       request<EvidenceGraph>(`/aspm/projects/${projectId}/evidence-graph`),
     ]);
     setScaScanHistory(historyData);
+    setAgentScanHistory(agentHistoryData);
     setSelectedScaScanId(effectiveScaScanId);
     setComponents(componentData);
     setDependencyGraph(graphData);
@@ -384,12 +392,14 @@ function App() {
 
     if (moduleKey === "sast" || moduleKey === "agent") {
       const source = moduleKey.toUpperCase();
-      const [findingData, retestData] = await Promise.all([
+      const [findingData, retestData, agentHistoryData] = await Promise.all([
         request<Finding[]>(`/findings?project_id=${projectId}`),
         request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=${source}`).catch(() => null),
+        moduleKey === "agent" ? request<AgentScanHistoryItem[]>(`/agent/projects/${projectId}/scan-history`).catch(() => []) : Promise.resolve([]),
       ]);
       setFindings((current) => [...current.filter((item) => item.source !== source), ...findingData.filter((item) => item.source === source)]);
       setRetestComparisons((current) => ({ ...current, [moduleKey]: retestData }));
+      if (moduleKey === "agent") setAgentScanHistory(agentHistoryData);
       await refreshGovernanceOverview(projectId);
       return;
     }
@@ -532,12 +542,12 @@ function App() {
         body: JSON.stringify({
           project_id: project.id,
           source_path: configuredSource,
-          ...(moduleKey === "sast" ? {} : { clear_previous: false, enable_tool_scan: moduleKey === "sca" ? scaToolScanEnabled : false }),
+          ...(moduleKey === "sast" ? {} : moduleKey === "sca" ? { clear_previous: false, enable_tool_scan: scaToolScanEnabled } : { clear_previous: true }),
         }),
       });
       return {
         status: "completed",
-        detail: "扫描完成，已生成复测对比",
+        detail: moduleKey === "agent" ? "扫描完成，批次结果与覆盖信息已保存" : "扫描完成，已更新批次对比",
         scanId: moduleKey === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId,
       };
     }
@@ -655,7 +665,7 @@ function App() {
     if (loading || unifiedLoadingRef.current || moduleLoadingRef.current[kind]) return setStatus(`${kind.toUpperCase()} 已有任务正在执行`);
     setModuleBusy(kind, true);
     try {
-      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, ...(kind === "sast" ? {} : { clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) }) });
+      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, ...(kind === "sast" ? {} : kind === "sca" ? { clear_previous: false, enable_tool_scan: scaToolScanEnabled } : { clear_previous: true }) }) });
       const nextScaScanId = kind === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId;
       if (kind === "sca") setSelectedScaScanId(nextScaScanId);
       await refreshSingleModuleData(kind, project.id, nextScaScanId);
@@ -672,7 +682,7 @@ function App() {
     try {
       let nextScaScanId = selectedScaScanId;
       for (const kind of runnable) {
-        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, ...(kind === "sast" ? {} : { clear_previous: false, enable_tool_scan: kind === "sca" ? scaToolScanEnabled : false }) }) });
+        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, ...(kind === "sast" ? {} : kind === "sca" ? { clear_previous: false, enable_tool_scan: scaToolScanEnabled } : { clear_previous: true }) }) });
         if (kind === "sca") nextScaScanId = (result as ScaScanResult).scan_task_id;
       }
       setSelectedScaScanId(nextScaScanId);
@@ -894,7 +904,7 @@ function App() {
         {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={projectControlsLoading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
         {activeView === "assets" && <><ProjectAssetConfig project={project} loading={projectControlsLoading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
         {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading || unifiedLoading} runBlocked={anyModuleLoading} moduleLoading={moduleLoading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
-    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
+    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} agentScanHistory={agentScanHistory} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
         {activeView === "knowledge" && <KnowledgeHubView project={project} findings={findings} validations={validations} evidence={evidence} summary={summary} />}
       </section>
     </main>
@@ -942,10 +952,51 @@ function AssetFileList({ title, files }: { title: string; files: string[] }) {
 const MODULE_DISPLAY: Record<Exclude<ModuleKey, "aspm">, { name: string; purpose: string }> = {
   sca: { name: "SCA 供应链风险", purpose: "检查第三方组件、已知漏洞和许可证风险" },
   sast: { name: "SAST 代码安全", purpose: "检查源代码中的高风险实现和安全缺陷" },
-  agent: { name: "AGENT 智能体安全", purpose: "检查 Agent、MCP、工具和插件配置风险" },
+  agent: { name: "AGENT 智能体安全", purpose: "检查已识别的 Agent 指令、MCP、工具与插件配置风险" },
   dast: { name: "DAST 动态验证", purpose: "访问运行中的系统，验证风险是否能够触发" },
   sandbox: { name: "SANDBOX 沙箱证据", purpose: "隔离运行程序并采集进程、输出和策略证据" },
 };
+
+const AGENT_RULE_TITLES: Record<string, string> = {
+  "AGENT.SECRET.READ_ENV": "指令允许读取环境变量或密钥",
+  "AGENT.TOOL.SHELL_EXEC": "Agent 暴露 Shell 或命令执行能力",
+  "AGENT.FS.WRITE_ACCESS": "Agent 可写入或删除文件",
+  "AGENT.NET.EXTERNAL_REQUEST": "Agent 可发起外部网络请求",
+  "AGENT.MCP.WILDCARD_PERMISSION": "Agent 或插件权限范围过宽",
+  "AGENT.PROMPT.INSTRUCTION_OVERRIDE": "指令包含覆盖上级约束的行为",
+  "AGENT.SECRET.INLINE_TOKEN": "Agent 配置包含内联凭据",
+  "AGENT.CONFIG.INVALID_JSON": "Agent 配置不是有效 JSON",
+  "AGENT.MCP.INVALID_JSON": "MCP 配置不是有效 JSON",
+  "AGENT.MCP.DANGEROUS_COMMAND": "MCP Server 使用高风险启动命令",
+  "AGENT.MCP.DANGEROUS_ARGS": "MCP Server 参数可能启动子进程或 Shell",
+  "AGENT.MCP.SECRET_ENV": "MCP 配置包含明文凭据",
+  "AGENT.MCP.SENSITIVE_PATH": "MCP Server 可访问敏感路径",
+  "AGENT.MCP.NETWORK_CAPABILITY": "MCP Server 具备外部网络能力",
+};
+
+const AGENT_CATEGORY_LABELS: Record<string, string> = {
+  "secret-exposure": "凭据暴露",
+  "tool-abuse": "工具滥用",
+  "permission-overreach": "权限过宽",
+  "network-egress": "网络外联",
+  "prompt-injection": "指令覆盖",
+  "configuration-integrity": "配置完整性",
+  "unknown": "未分类",
+};
+
+const AGENT_ASSET_TYPE_LABELS: Record<string, string> = {
+  "instruction": "指令文件",
+  "prompt": "Prompt",
+  "skill": "Skill",
+  "mcp-config": "MCP 配置",
+  "plugin-manifest": "插件清单",
+  "tool-schema": "工具定义",
+  "agent-config": "Agent 配置",
+};
+
+function agentCategoryLabel(value: string) { return AGENT_CATEGORY_LABELS[value] ?? value; }
+function agentAssetTypeLabel(value: string) { return AGENT_ASSET_TYPE_LABELS[value] ?? value; }
+function findingTitle(finding: Finding) { return finding.source === "AGENT" ? AGENT_RULE_TITLES[finding.rule_id] ?? finding.title : finding.title; }
 
 function SecurityDetectionCenter({
   modules,
@@ -1058,6 +1109,7 @@ function GovernanceCenter({
   graph,
   retestComparisons,
   scaScanHistory,
+  agentScanHistory,
   selectedScaScanId,
   scaScanDiff,
   dependencyGraph,
@@ -1100,6 +1152,7 @@ function GovernanceCenter({
   graph: EvidenceGraph | null;
   retestComparisons: Record<"sca" | "sast" | "agent", FindingRetestComparison | null>;
   scaScanHistory: ScaScanHistoryItem[];
+  agentScanHistory: AgentScanHistoryItem[];
   selectedScaScanId: string | null;
   scaScanDiff: ScaScanDiff | null;
   dependencyGraph: DependencyGraph | null;
@@ -1146,7 +1199,7 @@ function GovernanceCenter({
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={scopeLoading("sca")} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
     {scope === "sast" ? <SastGovernanceWorkspace project={project} findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={scopeLoading("sast")} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} loading={scopeLoading("agent")} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} scanHistory={agentScanHistory} loading={scopeLoading("agent")} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={scopeLoading("dast")} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
     {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={scopeLoading("sandbox")} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
@@ -1994,12 +2047,26 @@ function ImpactPathTable({ paths, nodes }: { paths: NonNullable<DependencyGraph[
   return <section className="impact-paths"><div className="panel-header"><h4>风险影响路径</h4><span>从风险组件向上追溯到项目</span></div>{paths.length === 0 ? <div className="empty-project">暂无可追溯的风险依赖路径。</div> : <><table className="compact-table"><thead><tr><th>风险组件</th><th>等级 / 状态</th><th>影响路径</th></tr></thead><tbody>{pagination.items.map((item) => <tr key={`${item.component}-${item.risk_status}`}><td>{item.component}</td><td>{severityLabel(item.severity)}<span className="cell-subtext">{riskStatusLabel(item.risk_status)}</span></td><td>{item.paths.length ? <details><summary>查看 {item.paths.length} 条路径</summary>{item.paths.map((path, index) => <span className="cell-subtext" key={`${item.component}-${index}`}>{path.map((id) => labels.get(id) ?? id).join(" → ")}</span>)}</details> : "未找到从项目到该组件的依赖关系"}</td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={paths.length} onPageChange={setPage} /></>}</section>;
 }
 
-function FindingModuleGovernance({ moduleKey, findings, validations, evidence, graph, comparison, loading, onRunReview, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRunReview?: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function AgentScanCoveragePanel({ history }: { history: AgentScanHistoryItem[] }) {
+  const latest = history[0];
+  if (!latest) return <section className="retest-panel"><div className="panel-header"><h3>扫描覆盖</h3><span>尚无批次</span></div><p>执行一次 AGENT 扫描后，这里会显示识别到的资产类型、解析结果和规则版本。</p></section>;
+  const coverage = latest.coverage;
+  return <section className="retest-panel">
+    <div className="panel-header"><h3>最近扫描覆盖</h3><span>{formatDateTime(latest.finished_at ?? latest.created_at)}</span></div>
+    <div className="retest-summary"><Metric label="识别资产" value={coverage.discovered_asset_count} /><Metric label="解析成功" value={coverage.parsed_asset_count} /><Metric label="解析失败" value={coverage.failed_asset_count} /><Metric label="跳过文件" value={coverage.skipped_file_count} /></div>
+    <p className="retest-note">规则版本：{latest.rule_version ?? "旧批次未记录"}。资产类型：{Object.entries(coverage.asset_types).length ? Object.entries(coverage.asset_types).map(([key, value]) => `${agentAssetTypeLabel(key)} ${value}`).join("、") : "未识别到受支持的 Agent 资产"}。</p>
+    {history.length > 1 ? <details className="advanced-details"><summary>查看最近 {Math.min(history.length, 10)} 个扫描批次</summary><table className="compact-table"><thead><tr><th>时间</th><th>状态</th><th>资产</th><th>问题</th><th>规则版本</th></tr></thead><tbody>{history.slice(0, 10).map((item) => <tr key={item.scan_task_id}><td>{formatDateTime(item.finished_at ?? item.created_at)}</td><td>{scanStatusLabel(item.status)}</td><td>{item.coverage.discovered_asset_count}</td><td>{item.finding_count}</td><td>{item.rule_version ?? "旧批次未记录"}</td></tr>)}</tbody></table></details> : null}
+  </section>;
+}
+
+function FindingModuleGovernance({ moduleKey, findings, validations, evidence, graph, comparison, scanHistory = [], loading, onRunReview, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; scanHistory?: AgentScanHistoryItem[]; loading: boolean; onRunReview?: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", severity: "all", status: "all", category: "all" });
   const [page, setPage] = useState(1);
   const high = findings.filter((item) => item.severity === "critical" || item.severity === "high").length;
   const open = findings.filter((item) => ["open", "pending", "confirmed"].includes(item.status)).length;
-  const reviewed = findings.filter((item) => item.ai_review).length;
+  const latestAgentScan = moduleKey === "agent" ? scanHistory[0] : null;
+  const reviewed = findings.filter((item) => moduleKey === "agent" ? item.ai_review?.review_status === "reviewed" : Boolean(item.ai_review)).length;
+  const pendingReview = moduleKey === "agent" ? findings.length - reviewed : reviewed;
   const filtered = findings.filter((item) => {
     const keyword = filters.keyword.trim().toLowerCase();
     const category = item.ai_review?.category ?? "unknown";
@@ -2010,12 +2077,13 @@ function FindingModuleGovernance({ moduleKey, findings, validations, evidence, g
   });
   const pagination = paginate(filtered, page);
   useEffect(() => { setPage(1); }, [filters.keyword, filters.severity, filters.status, filters.category]);
-  return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={findings.length ? "completed" : null} metrics={[["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : "当前没有检测结果，请先在安全检测中执行该模块。"} loading={loading} onRun={onRun}>
-    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
+  return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={moduleKey === "agent" ? latestAgentScan?.status ?? null : findings.length ? "completed" : null} metrics={moduleKey === "agent" ? [["已识别资产", latestAgentScan?.coverage.discovered_asset_count ?? 0], ["问题总数", findings.length], ["严重 / 高危", high], ["待人工复核", pendingReview]] : [["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : latestAgentScan?.status === "completed" ? "本批次已完成，已识别资产中未命中当前规则；可查看覆盖情况确认扫描边界。" : "当前没有检测结果，请先在安全检测中执行该模块。"} loading={loading} onRun={onRun}>
+    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} format={moduleKey === "agent" ? agentCategoryLabel : (value) => value} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
     <ConciseFindingTable findings={pagination.items} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} />
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
+    {moduleKey === "agent" ? <AgentScanCoveragePanel history={scanHistory} /> : null}
     <RetestComparisonPanel comparison={comparison} />
-    <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>SAST Agent 复核</strong><span>启用 DeepSeek 后执行真实七角色审计；未启用时使用本地规则化复核。修复内容始终只保存为人工评审草案，不会直接修改源码。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>当前检查配置与说明文件中的权限风险，不会连接或真实执行 Agent、MCP Server 或插件。</span></div></section>}</div></details>
+    <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} formatKey={moduleKey === "agent" ? agentCategoryLabel : (value) => value} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>SAST Agent 复核</strong><span>启用 DeepSeek 后执行真实七角色审计；未启用时使用本地规则化复核。修复内容始终只保存为人工评审草案，不会直接修改源码。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>当前仅执行本地只读规则检查；不会连接或执行 Agent、MCP Server 或插件，也不代表已经完成人工或 AI 复核。</span></div></section>}</div></details>
   </ModuleGovernanceShell>;
 }
 
@@ -2105,7 +2173,7 @@ function SandboxGovernanceView({ findings, validations, evidence, graph, templat
 
 function ModuleGovernanceShell({ moduleKey, lastStatus, metrics, action, loading, runDisabled = false, runLabel, hideRunButton = false, onRun, children }: { moduleKey: Exclude<ModuleKey, "aspm">; lastStatus: string | null; metrics: Array<[string, string | number]>; action: string; loading: boolean; runDisabled?: boolean; runLabel?: string; hideRunButton?: boolean; onRun: () => Promise<void>; children: React.ReactNode }) {
   return <div className="governance-view module-governance-view">
-    <section className="module-governance-heading"><div className="module-icon">{moduleIcons[moduleKey]}</div><div><h2>{MODULE_DISPLAY[moduleKey].name}</h2><p>{MODULE_DISPLAY[moduleKey].purpose}</p></div><div className="module-run-actions"><span>{lastStatus ? scanStatusLabel(lastStatus) : "尚未执行"}</span>{hideRunButton ? null : <button className="primary-action" disabled={loading || runDisabled} onClick={() => void onRun()}>{loading ? "执行中" : runLabel ?? (moduleKey === "dast" || moduleKey === "sandbox" ? "再次执行" : "重新扫描并复测")}</button>}</div></section>
+    <section className="module-governance-heading"><div className="module-icon">{moduleIcons[moduleKey]}</div><div><h2>{MODULE_DISPLAY[moduleKey].name}</h2><p>{MODULE_DISPLAY[moduleKey].purpose}</p></div><div className="module-run-actions"><span>{lastStatus ? scanStatusLabel(lastStatus) : "尚未执行"}</span>{hideRunButton ? null : <button className="primary-action" disabled={loading || runDisabled} onClick={() => void onRun()}>{loading ? "执行中" : runLabel ?? (moduleKey === "dast" || moduleKey === "sandbox" ? "再次执行" : moduleKey === "agent" ? "重新扫描并对比" : "重新扫描并复测")}</button>}</div></section>
     <section className="governance-metrics">{metrics.map(([label, value]) => <Metric key={label} label={label} value={value} />)}</section>
     <section className="panel"><div className="panel-header"><h2>主要结果</h2><span>完整结果 · 每页 10 条</span></div>{children}</section>
     <section className="next-action-panel"><strong>建议动作</strong><span>{action}</span></section>
@@ -2132,7 +2200,7 @@ function sandboxExecutionPlan(finding?: Finding, validation?: DastValidation): S
 
 function ConciseFindingTable({ findings, validations, evidence, graph, onUpdateFinding }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph?: EvidenceGraph | null; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
-  return <><table className="concise-table"><thead><tr><th>风险问题</th><th>等级</th><th>位置</th><th>处理状态</th><th>验证证据</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={5} className="empty-cell">当前没有需要展示的风险问题。</td></tr> : findings.map((finding) => { const description = finding.ai_review?.description ?? finding.evidence ?? "暂无影响说明"; const evidenceNodes = findingEvidenceNodes(finding.id, graph); const validationCount = validations.filter((item) => item.finding_id === finding.id).length; const evidenceCount = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validations.some((validation) => validation.id === item.validation_id && validation.finding_id === finding.id))).length; return <tr key={finding.id}><td><strong title={finding.title}>{truncateText(finding.title, 100)}</strong><span className="cell-subtext" title={description}>{truncateText(description, 140)}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span></td><td>{finding.file_path ?? "项目级问题"}<span className="cell-subtext">{finding.line_start ? `第 ${finding.line_start} 行` : finding.source}</span></td><td><select value={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></td><td><button className="secondary-action" onClick={() => setSelectedFinding(finding)}>{validationCount || evidenceCount ? `查看证据（${validationCount + evidenceCount}）` : evidenceNodes.length ? `查看关系（${evidenceNodes.length}）` : "尚未验证"}</button></td></tr>; })}</tbody></table>{selectedFinding ? <FindingEvidenceDetail finding={selectedFinding} validations={validations} evidence={evidence} graph={graph ?? null} onClose={() => setSelectedFinding(null)} /> : null}</>;
+  return <><table className="concise-table"><thead><tr><th>风险问题</th><th>等级</th><th>位置</th><th>处理状态</th><th>验证证据</th></tr></thead><tbody>{findings.length === 0 ? <tr><td colSpan={5} className="empty-cell">当前没有需要展示的风险问题。</td></tr> : findings.map((finding) => { const displayTitle = findingTitle(finding); const description = finding.ai_review?.description ?? finding.evidence ?? "暂无影响说明"; const evidenceNodes = findingEvidenceNodes(finding.id, graph); const validationCount = validations.filter((item) => item.finding_id === finding.id).length; const evidenceCount = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validations.some((validation) => validation.id === item.validation_id && validation.finding_id === finding.id))).length; return <tr key={finding.id}><td><strong title={displayTitle}>{truncateText(displayTitle, 100)}</strong><span className="cell-subtext" title={description}>{truncateText(description, 140)}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span></td><td>{finding.file_path ?? "项目级问题"}<span className="cell-subtext">{finding.line_start ? `第 ${finding.line_start} 行` : finding.source}</span></td><td><select value={normalizeFindingStatus(finding.status)} onChange={(event) => void onUpdateFinding(finding.id, { status: event.target.value as FindingStatus })}>{FINDING_WORKFLOW_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></td><td><button className="secondary-action" onClick={() => setSelectedFinding(finding)}>{validationCount || evidenceCount ? `查看证据（${validationCount + evidenceCount}）` : evidenceNodes.length ? `查看关系（${evidenceNodes.length}）` : "尚未验证"}</button></td></tr>; })}</tbody></table>{selectedFinding ? <FindingEvidenceDetail finding={selectedFinding} validations={validations} evidence={evidence} graph={graph ?? null} onClose={() => setSelectedFinding(null)} /> : null}</>;
 }
 
 function ModuleFilterBar({ children }: { children: React.ReactNode }) {
@@ -2150,11 +2218,11 @@ function Pagination({ page, pageCount, total, onPageChange }: { page: number; pa
 function RetestComparisonPanel({ comparison }: { comparison: FindingRetestComparison | null }) {
   const [resultFilter, setResultFilter] = useState("all");
   const [page, setPage] = useState(1);
-  if (!comparison?.has_comparison) return <section className="retest-panel"><div className="panel-header"><h3>风险记录复测</h3><span>等待第二次扫描</span></div><p>完成修改后点击“重新扫描并复测”。系统需要至少两个扫描批次才能判断风险记录是否仍然存在。</p></section>;
+  if (!comparison?.has_comparison) return <section className="retest-panel"><div className="panel-header"><h3>扫描批次对比</h3><span>等待第二次扫描</span></div><p>再次扫描后，系统会比较最近两个批次，显示风险记录仍存在、消失、新增或变化；首次扫描不会被表述为已经完成复测。</p></section>;
   const filtered = comparison.items.filter((item) => resultFilter === "all" || item.result === resultFilter);
   const pagination = paginate(filtered, page);
   return <section className="retest-panel">
-    <div className="panel-header"><h3>最近一次风险记录复测</h3><span>{formatDateTime(comparison.previous_scan_at)} → {formatDateTime(comparison.current_scan_at)}</span></div>
+    <div className="panel-header"><h3>最近两个扫描批次对比</h3><span>{formatDateTime(comparison.previous_scan_at)} → {formatDateTime(comparison.current_scan_at)}</span></div>
     <div className="retest-summary"><Metric label="仍然存在的风险记录" value={comparison.still_present_count} /><Metric label="已消失的风险记录" value={comparison.resolved_count} /><Metric label="新增风险记录" value={comparison.new_count} /><Metric label="内容发生变化" value={comparison.changed_count} /></div>
     <p className="retest-note">这里统计的是风险记录，不是组件数量。SCA 中一个组件可能同时对应多个漏洞、许可证或版本风险，因此风险记录数可能大于组件数。“已消失”表示本次未再次发现；“仍然存在”表示需要继续整改。</p>
     <details className="retest-details">
