@@ -1,0 +1,79 @@
+from datetime import datetime, timedelta
+from uuid import uuid4
+
+from app.db_models import ScanTaskRecord
+from app.routers.agent import build_agent_scan_diff
+
+
+def scan(metadata: dict, created_at: datetime) -> ScanTaskRecord:
+    return ScanTaskRecord(
+        id=str(uuid4()),
+        project_id=str(uuid4()),
+        scan_type="agent",
+        status="completed",
+        scan_metadata=metadata,
+        created_at=created_at,
+        started_at=created_at,
+        finished_at=created_at,
+    )
+
+
+def permission(scope: str, approval: str = "unknown") -> dict[str, str]:
+    return {
+        "asset_path": "mcp.json",
+        "subject": "mcpservers:filesystem",
+        "capability": "filesystem-access",
+        "access": "read-write",
+        "resource_type": "filesystem",
+        "scope": scope,
+        "approval": approval,
+        "risk_level": "high",
+        "source": "mcpServers.filesystem.roots",
+    }
+
+
+def test_agent_scan_diff_reports_asset_and_permission_semantics() -> None:
+    now = datetime(2026, 8, 10, 12, 0, 0)
+    base = scan(
+        {
+            "assets": [
+                {"path": "mcp.json", "asset_type": "mcp-config", "format": "json", "parser": "structured-json", "status": "parsed", "checks": [], "version": "1", "permission_count": 1},
+                {"path": "plugins/old/plugin.json", "asset_type": "plugin-manifest", "format": "json", "parser": "structured-json", "status": "parsed", "checks": []},
+            ],
+            "permissions": [permission("D:/workspace/old"), permission("D:/workspace/shared")],
+        },
+        now,
+    )
+    target = scan(
+        {
+            "assets": [
+                {"path": "mcp.json", "asset_type": "mcp-config", "format": "json", "parser": "structured-json", "status": "parsed", "checks": [], "version": "2", "permission_count": 1},
+                {"path": "skills/new/SKILL.md", "asset_type": "skill", "format": "md", "parser": "markdown+yaml-frontmatter", "status": "parsed", "checks": []},
+            ],
+            "permissions": [permission("D:/workspace/new", "required"), permission("D:/workspace/shared", "required")],
+        },
+        now + timedelta(minutes=5),
+    )
+
+    result = build_agent_scan_diff(uuid4(), target, base)
+
+    assert result.has_comparison is True
+    assert result.summary.assets_added == 1
+    assert result.summary.assets_removed == 1
+    assert result.summary.assets_changed == 1
+    assert result.summary.permissions_added == 1
+    assert result.summary.permissions_removed == 1
+    assert result.summary.permissions_changed == 1
+    assert {item.direction for item in result.permissions} == {"expanded", "reduced"}
+    assert any(item.change_type == "changed" and item.direction == "reduced" for item in result.permissions)
+
+
+def test_first_agent_scan_has_no_fabricated_comparison() -> None:
+    target = scan({"assets": [], "permissions": []}, datetime(2026, 8, 10, 12, 0, 0))
+
+    result = build_agent_scan_diff(uuid4(), target, None)
+
+    assert result.has_comparison is False
+    assert result.base_scan_id is None
+    assert result.assets == []
+    assert result.permissions == []

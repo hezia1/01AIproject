@@ -441,6 +441,18 @@ class AgentScanRequest(BaseModel):
     clear_previous: bool = True
 
 
+class AgentPermissionResult(BaseModel):
+    asset_path: str
+    subject: str
+    capability: str
+    access: str
+    resource_type: str
+    scope: str
+    approval: str = "unknown"
+    risk_level: str = "info"
+    source: str
+
+
 class AgentAssetResult(BaseModel):
     path: str
     asset_type: str
@@ -450,6 +462,16 @@ class AgentAssetResult(BaseModel):
     checks: list[str] = Field(default_factory=list)
     finding_count: int = 0
     detail: str | None = None
+    name: str | None = None
+    version: str | None = None
+    publisher: str | None = None
+    transport: str | None = None
+    entrypoint: str | None = None
+    declared_tools: list[str] = Field(default_factory=list)
+    declared_resources: list[str] = Field(default_factory=list)
+    declared_prompts: list[str] = Field(default_factory=list)
+    permission_count: int = 0
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentScanCoverage(BaseModel):
@@ -469,6 +491,7 @@ class AgentScanResult(BaseModel):
     finding_count: int
     findings: list[Finding]
     assets: list[AgentAssetResult] = Field(default_factory=list)
+    permissions: list[AgentPermissionResult] = Field(default_factory=list)
     coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
     rule_version: str
 
@@ -483,6 +506,51 @@ class AgentScanHistoryItem(BaseModel):
     finding_count: int = 0
     rule_version: str | None = None
     coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
+
+
+class AgentScanSnapshot(BaseModel):
+    project_id: UUID
+    scan_task_id: UUID
+    created_at: datetime
+    source_path: str | None = None
+    rule_version: str | None = None
+    assets: list[AgentAssetResult] = Field(default_factory=list)
+    permissions: list[AgentPermissionResult] = Field(default_factory=list)
+    skipped_files: list[dict[str, str]] = Field(default_factory=list)
+
+
+class AgentAssetDiffItem(BaseModel):
+    identity: str
+    change_type: str
+    path: str
+    asset_type: str
+    changes: list[str] = Field(default_factory=list)
+
+
+class AgentPermissionDiffItem(BaseModel):
+    identity: str
+    change_type: str
+    direction: str
+    permission: AgentPermissionResult
+
+
+class AgentScanDiffSummary(BaseModel):
+    assets_added: int = 0
+    assets_removed: int = 0
+    assets_changed: int = 0
+    permissions_added: int = 0
+    permissions_removed: int = 0
+    permissions_changed: int = 0
+
+
+class AgentScanDiff(BaseModel):
+    project_id: UUID
+    target_scan_id: UUID
+    base_scan_id: UUID | None = None
+    has_comparison: bool = False
+    summary: AgentScanDiffSummary = Field(default_factory=AgentScanDiffSummary)
+    assets: list[AgentAssetDiffItem] = Field(default_factory=list)
+    permissions: list[AgentPermissionDiffItem] = Field(default_factory=list)
 
 class DastVerdict(str, Enum):
     exploitable = "exploitable"

@@ -72,6 +72,12 @@ type FindingRetestItem = { identity: string; result: RetestResult; title: string
 type FindingRetestComparison = { project_id: string; source: string; has_comparison: boolean; previous_scan_id?: string | null; current_scan_id?: string | null; previous_scan_at?: string | null; current_scan_at?: string | null; still_present_count: number; resolved_count: number; new_count: number; changed_count: number; items: FindingRetestItem[] };
 type AgentScanCoverage = { discovered_asset_count: number; parsed_asset_count: number; failed_asset_count: number; skipped_file_count: number; findings_by_asset_type: Record<string, number>; asset_types: Record<string, number> };
 type AgentScanHistoryItem = { scan_task_id: string; status: string; created_at: string; started_at: string | null; finished_at: string | null; source_path: string | null; finding_count: number; rule_version: string | null; coverage: AgentScanCoverage };
+type AgentPermission = { asset_path: string; subject: string; capability: string; access: string; resource_type: string; scope: string; approval: string; risk_level: string; source: string };
+type AgentAsset = { path: string; asset_type: string; format: string; parser: string; status: string; checks: string[]; finding_count: number; detail: string | null; name: string | null; version: string | null; publisher: string | null; transport: string | null; entrypoint: string | null; declared_tools: string[]; declared_resources: string[]; declared_prompts: string[]; permission_count: number; metadata: Record<string, unknown> };
+type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[] };
+type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
+type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
+type AgentScanDiff = { project_id: string; target_scan_id: string; base_scan_id: string | null; has_comparison: boolean; summary: { assets_added: number; assets_removed: number; assets_changed: number; permissions_added: number; permissions_removed: number; permissions_changed: number }; assets: AgentAssetDiffItem[]; permissions: AgentPermissionDiffItem[] };
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
@@ -90,7 +96,7 @@ const FINDING_WORKFLOW_STATUSES: FindingStatus[] = ["open", "confirmed", "fixing
 const fallbackModules: SecurityModule[] = [
   { key: "sast", code: "SAST", name: "智能静态审计", subtitle: "定制化安全 Skill + 多 Sub-agent 编排 + 行业历史漏洞知识库", category: "detection", description: "面向代码仓库执行智能静态审计，将规则扫描、AI 审计、历史漏洞经验和多 Agent 复核组合为代码风险发现能力。", capabilities: [{ title: "定制化安全 Skill", description: "按行业、框架和业务场景生成审计策略。" }, { title: "多 Sub-agent 编排", description: "发现、复核、证据和修复建议分工协同。" }, { title: "行业历史漏洞知识库", description: "沉淀通用漏洞、业务漏洞和误报经验。" }], dependencies: [], default_config: {} },
   { key: "sca", code: "SCA", name: "供应链风险分析", subtitle: "SBOM + 组件漏洞匹配 + 许可证风险归一化 + 依赖影响分析", category: "detection", description: "解析多语言工程依赖，生成 SBOM，识别漏洞、许可证和直接/传递依赖风险，并给出修复优先级。", capabilities: [{ title: "SBOM 生成", description: "生成项目组件清单和依赖来源。" }, { title: "组件漏洞匹配", description: "匹配 CVE、受影响版本和修复版本。" }, { title: "许可证风险归一化", description: "识别许可证类型并归一化风险等级。" }, { title: "依赖影响分析", description: "分析直接/传递依赖、版本归一化和修复影响。" }], dependencies: [], default_config: {} },
-  { key: "agent", code: "AGENT", name: "Agent 供应链安全", subtitle: "指令资产 + MCP / 工具配置 + 插件清单 + 批次对比", category: "detection", description: "对仓库内已识别的 Agent 指令、MCP、工具和插件配置执行只读规则检查，记录扫描覆盖并输出可复核证据。", capabilities: [{ title: "Agent 资产识别", description: "识别指令、Prompt、Skill、MCP 与插件配置。" }, { title: "结构化配置检查", description: "检查权限、工具能力和内联凭据。" }, { title: "证据脱敏", description: "保存发现前遮蔽凭据和值。" }, { title: "批次记录", description: "保存规则版本、覆盖情况和扫描差异。" }], dependencies: [], default_config: {} },
+  { key: "agent", code: "AGENT", name: "Agent 供应链安全", subtitle: "统一资产模型 + 能力权限矩阵 + 语义差异", category: "detection", description: "结构化解析 Agent 指令、MCP、工具和插件配置，形成资产、能力、资源范围、审批边界和批次变化。", capabilities: [{ title: "多格式资产解析", description: "解析 Markdown Frontmatter、JSON、YAML 与 TOML。" }, { title: "能力权限矩阵", description: "归一化工具、文件、网络、命令、凭据和审批边界。" }, { title: "证据脱敏", description: "保存发现和快照前遮蔽凭据和值。" }, { title: "语义差异", description: "比较资产新增/移除、配置变化与权限扩大/收缩。" }], dependencies: [], default_config: {} },
   { key: "dast", code: "DAST", name: "漏洞动态验证", subtitle: "Web 业务验证 + 静态发现联动验证 + 三色裁决", category: "validation", description: "将静态发现、供应链风险和运行时目标联动验证，输出可利用、不确定、不可利用三态裁决和完整验证证据。", capabilities: [{ title: "Web 业务验证", description: "对目标 Web 应用执行业务化安全验证。" }, { title: "静态发现联动验证", description: "将 SAST/SCA/Agent 发现转为验证策略。" }, { title: "三色裁决", description: "输出可利用、不确定、不可利用的验证结论。" }, { title: "证据归档", description: "保留执行日志、请求响应、截图和验证过程。" }], dependencies: ["sast"], default_config: {} },
   { key: "sandbox", code: "SANDBOX", name: "沙箱动态证据链", subtitle: "隔离环境 + 行为监控 + 调用账本 + AI 驱动动态验证", category: "evidence", description: "在隔离环境中运行目标程序、插件或 Agent，采集文件、网络、进程、工具调用和运行时行为证据。", capabilities: [{ title: "隔离环境", description: "以容器或受控运行时隔离目标执行。" }, { title: "行为监控", description: "监控文件访问、网络连接、进程启动和环境变量读取。" }, { title: "调用账本", description: "结构化采集 Agent 工具调用和运行时覆盖。" }, { title: "策略化探测", description: "适配多类 Agent 运行时并支持 AI 驱动验证。" }], dependencies: ["agent"], default_config: {} },
   { key: "aspm", code: "ASPM", name: "平台治理与交付", subtitle: "项目组 + 攻击链 + 风险趋势 + 整改闭环 + 安全门禁", category: "governance", description: "聚合各模块结果，提供跨项目关联、攻击链、风险趋势、整改闭环、开放接口、流水线门禁和合规报告。", capabilities: [{ title: "风险治理", description: "管理项目组、跨项目关联、攻击链、风险趋势和整改闭环。" }, { title: "开放接口", description: "提供开放工具接口、批量任务和研发流水线安全门禁。" }, { title: "权限与配额", description: "管理模块权限、授权配额和审计日志。" }, { title: "交付报告", description: "输出诊断导出、合规报告和治理看板。" }], dependencies: [], default_config: {} },
@@ -114,6 +120,8 @@ function App() {
   const [components, setComponents] = useState<Component[]>([]);
   const [scaScanHistory, setScaScanHistory] = useState<ScaScanHistoryItem[]>([]);
   const [agentScanHistory, setAgentScanHistory] = useState<AgentScanHistoryItem[]>([]);
+  const [agentSnapshot, setAgentSnapshot] = useState<AgentScanSnapshot | null>(null);
+  const [agentScanDiff, setAgentScanDiff] = useState<AgentScanDiff | null>(null);
   const [selectedScaScanId, setSelectedScaScanId] = useState<string | null>(null);
   const [scaScanDiff, setScaScanDiff] = useState<ScaScanDiff | null>(null);
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null);
@@ -248,6 +256,8 @@ function App() {
     setComponents([]);
     setScaScanHistory([]);
     setAgentScanHistory([]);
+    setAgentSnapshot(null);
+    setAgentScanDiff(null);
     setSelectedScaScanId(null);
     setScaScanDiff(null);
     setDependencyGraph(null);
@@ -319,9 +329,11 @@ function App() {
 
   async function refreshProjectData(projectId = project?.id, scaScanId: string | null = selectedScaScanId) {
     if (!projectId) return;
-    const [historyData, agentHistoryData] = await Promise.all([
+    const [historyData, agentHistoryData, agentSnapshotData, agentDiffData] = await Promise.all([
       request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`).catch(() => []),
       request<AgentScanHistoryItem[]>(`/agent/projects/${projectId}/scan-history`).catch(() => []),
+      request<AgentScanSnapshot>(`/agent/projects/${projectId}/snapshot`).catch(() => null),
+      request<AgentScanDiff>(`/agent/projects/${projectId}/scan-diff`).catch(() => null),
     ]);
     const effectiveScaScanId = scaScanId ?? historyData[0]?.scan_task_id ?? null;
     const scaQuery = effectiveScaScanId ? `?scan_task_id=${effectiveScaScanId}` : "";
@@ -339,6 +351,8 @@ function App() {
     ]);
     setScaScanHistory(historyData);
     setAgentScanHistory(agentHistoryData);
+    setAgentSnapshot(agentSnapshotData);
+    setAgentScanDiff(agentDiffData);
     setSelectedScaScanId(effectiveScaScanId);
     setComponents(componentData);
     setDependencyGraph(graphData);
@@ -392,14 +406,20 @@ function App() {
 
     if (moduleKey === "sast" || moduleKey === "agent") {
       const source = moduleKey.toUpperCase();
-      const [findingData, retestData, agentHistoryData] = await Promise.all([
+      const [findingData, retestData, agentHistoryData, agentSnapshotData, agentDiffData] = await Promise.all([
         request<Finding[]>(`/findings?project_id=${projectId}`),
         request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=${source}`).catch(() => null),
         moduleKey === "agent" ? request<AgentScanHistoryItem[]>(`/agent/projects/${projectId}/scan-history`).catch(() => []) : Promise.resolve([]),
+        moduleKey === "agent" ? request<AgentScanSnapshot>(`/agent/projects/${projectId}/snapshot`).catch(() => null) : Promise.resolve(null),
+        moduleKey === "agent" ? request<AgentScanDiff>(`/agent/projects/${projectId}/scan-diff`).catch(() => null) : Promise.resolve(null),
       ]);
       setFindings((current) => [...current.filter((item) => item.source !== source), ...findingData.filter((item) => item.source === source)]);
       setRetestComparisons((current) => ({ ...current, [moduleKey]: retestData }));
-      if (moduleKey === "agent") setAgentScanHistory(agentHistoryData);
+      if (moduleKey === "agent") {
+        setAgentScanHistory(agentHistoryData);
+        setAgentSnapshot(agentSnapshotData);
+        setAgentScanDiff(agentDiffData);
+      }
       await refreshGovernanceOverview(projectId);
       return;
     }
@@ -904,7 +924,7 @@ function App() {
         {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={projectControlsLoading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
         {activeView === "assets" && <><ProjectAssetConfig project={project} loading={projectControlsLoading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
         {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading || unifiedLoading} runBlocked={anyModuleLoading} moduleLoading={moduleLoading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
-    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} agentScanHistory={agentScanHistory} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
+    {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} agentScanHistory={agentScanHistory} agentSnapshot={agentSnapshot} agentScanDiff={agentScanDiff} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
         {activeView === "knowledge" && <KnowledgeHubView project={project} findings={findings} validations={validations} evidence={evidence} summary={summary} />}
       </section>
     </main>
@@ -966,6 +986,10 @@ const AGENT_RULE_TITLES: Record<string, string> = {
   "AGENT.PROMPT.INSTRUCTION_OVERRIDE": "指令包含覆盖上级约束的行为",
   "AGENT.SECRET.INLINE_TOKEN": "Agent 配置包含内联凭据",
   "AGENT.CONFIG.INVALID_JSON": "Agent 配置不是有效 JSON",
+  "AGENT.CONFIG.INVALID_YAML": "Agent 配置不是有效 YAML",
+  "AGENT.CONFIG.INVALID_YML": "Agent 配置不是有效 YAML",
+  "AGENT.CONFIG.INVALID_TOML": "Agent 配置不是有效 TOML",
+  "AGENT.CONFIG.INVALID_YAML_FRONTMATTER": "Markdown Frontmatter 不是有效 YAML",
   "AGENT.MCP.INVALID_JSON": "MCP 配置不是有效 JSON",
   "AGENT.MCP.DANGEROUS_COMMAND": "MCP Server 使用高风险启动命令",
   "AGENT.MCP.DANGEROUS_ARGS": "MCP Server 参数可能启动子进程或 Shell",
@@ -994,8 +1018,49 @@ const AGENT_ASSET_TYPE_LABELS: Record<string, string> = {
   "agent-config": "Agent 配置",
 };
 
+const AGENT_CAPABILITY_LABELS: Record<string, string> = {
+  "all-capabilities": "全部能力",
+  "shell-execution": "Shell 执行",
+  "server-process": "服务进程启动",
+  "filesystem-access": "文件系统访问",
+  "filesystem-read": "文件读取",
+  "filesystem-write": "文件写入",
+  "network-egress": "网络外联",
+  "secret-access": "凭据访问",
+  "tool-invocation": "工具调用",
+};
+
+const AGENT_ACCESS_LABELS: Record<string, string> = {
+  "admin": "完全控制",
+  "execute": "执行",
+  "read": "只读",
+  "write": "写入",
+  "read-write": "读写",
+  "connect": "连接",
+  "inject": "注入",
+  "use": "调用",
+};
+
+const AGENT_DIFF_FIELD_LABELS: Record<string, string> = {
+  "asset-added": "新增资产",
+  "asset-removed": "移除资产",
+  "status": "解析状态",
+  "parser": "解析器",
+  "version": "版本",
+  "publisher": "发布者",
+  "transport": "传输方式",
+  "entrypoint": "启动入口",
+  "declared_tools": "工具声明",
+  "declared_resources": "资源范围",
+  "declared_prompts": "Prompt 声明",
+  "permission_count": "权限数量",
+};
+
 function agentCategoryLabel(value: string) { return AGENT_CATEGORY_LABELS[value] ?? value; }
 function agentAssetTypeLabel(value: string) { return AGENT_ASSET_TYPE_LABELS[value] ?? value; }
+function agentCapabilityLabel(value: string) { return AGENT_CAPABILITY_LABELS[value] ?? value; }
+function agentAccessLabel(value: string) { return AGENT_ACCESS_LABELS[value] ?? value; }
+function agentApprovalLabel(value: string) { return value === "required" ? "需要审批" : value === "not-required" ? "无需审批" : "审批未知"; }
 function findingTitle(finding: Finding) { return finding.source === "AGENT" ? AGENT_RULE_TITLES[finding.rule_id] ?? finding.title : finding.title; }
 
 function SecurityDetectionCenter({
@@ -1110,6 +1175,8 @@ function GovernanceCenter({
   retestComparisons,
   scaScanHistory,
   agentScanHistory,
+  agentSnapshot,
+  agentScanDiff,
   selectedScaScanId,
   scaScanDiff,
   dependencyGraph,
@@ -1153,6 +1220,8 @@ function GovernanceCenter({
   retestComparisons: Record<"sca" | "sast" | "agent", FindingRetestComparison | null>;
   scaScanHistory: ScaScanHistoryItem[];
   agentScanHistory: AgentScanHistoryItem[];
+  agentSnapshot: AgentScanSnapshot | null;
+  agentScanDiff: AgentScanDiff | null;
   selectedScaScanId: string | null;
   scaScanDiff: ScaScanDiff | null;
   dependencyGraph: DependencyGraph | null;
@@ -1199,7 +1268,7 @@ function GovernanceCenter({
     {scope === "overview" ? <GovernanceOverview summary={summary} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} graph={graph} onOpenDast={(findingId) => { onSelectDastRisk(findingId); setScope("dast"); }} onOpenSandbox={(findingId) => { onSelectSandboxRisk(findingId); setScope("sandbox"); }} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "sca" ? <ScaGovernanceView project={project} components={components} summary={summary} comparison={retestComparisons.sca} scanHistory={scaScanHistory} selectedScanId={selectedScaScanId} scanDiff={scaScanDiff} dependencyGraph={dependencyGraph} toolScanEnabled={scaToolScanEnabled} loading={scopeLoading("sca")} onToolScanChange={onScaToolScanChange} onSelectScan={onSelectScaScan} onExportSbom={onExportScaSbom} onExportReport={onExportScaReport} onRun={() => onRunModule("sca")} /> : null}
     {scope === "sast" ? <SastGovernanceWorkspace project={project} findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={scopeLoading("sast")} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
-    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} scanHistory={agentScanHistory} loading={scopeLoading("agent")} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
+    {scope === "agent" ? <FindingModuleGovernance moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} scanHistory={agentScanHistory} agentSnapshot={agentSnapshot} agentScanDiff={agentScanDiff} loading={scopeLoading("agent")} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} selectedFindingId={selectedFindingId} loading={scopeLoading("dast")} onTargetUrlChange={onTargetUrlChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} /> : null}
     {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={scopeLoading("sandbox")} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
   </section>;
@@ -2059,7 +2128,67 @@ function AgentScanCoveragePanel({ history }: { history: AgentScanHistoryItem[] }
   </section>;
 }
 
-function FindingModuleGovernance({ moduleKey, findings, validations, evidence, graph, comparison, scanHistory = [], loading, onRunReview, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; scanHistory?: AgentScanHistoryItem[]; loading: boolean; onRunReview?: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function AgentAssetInventoryPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
+  const [keyword, setKeyword] = useState("");
+  const [assetType, setAssetType] = useState("all");
+  const [page, setPage] = useState(1);
+  const assets = snapshot?.assets ?? [];
+  const filtered = assets.filter((asset) => {
+    const haystack = `${asset.name ?? ""} ${asset.path} ${asset.publisher ?? ""} ${asset.transport ?? ""}`.toLowerCase();
+    return (!keyword.trim() || haystack.includes(keyword.trim().toLowerCase())) && (assetType === "all" || asset.asset_type === assetType);
+  });
+  const pagination = paginate(filtered, page);
+  useEffect(() => { setPage(1); }, [keyword, assetType]);
+  return <section className="retest-panel">
+    <div className="panel-header"><h3>Agent 资产清单</h3><span>{assets.length} 个已识别资产</span></div>
+    {!snapshot ? <p>完成一次 AGENT 扫描后显示逐资产解析结果。</p> : <>
+      <ModuleFilterBar><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索资产、路径、发布者或传输方式" /><SimpleFilter value={assetType} label="全部资产类型" options={uniqueValues(assets.map((item) => item.asset_type))} format={agentAssetTypeLabel} onChange={setAssetType} /></ModuleFilterBar>
+      <table className="concise-table"><thead><tr><th>资产</th><th>类型 / 解析</th><th>声明边界</th><th>结果</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td className="empty-cell" colSpan={4}>没有符合筛选条件的 Agent 资产。</td></tr> : pagination.items.map((asset) => <tr key={`${asset.asset_type}-${asset.path}`}><td><strong>{asset.name ?? asset.path}</strong><span className="cell-subtext">{asset.path}</span><span className="cell-subtext">{asset.version ? `版本 ${asset.version}` : "未声明版本"}{asset.publisher ? ` · ${asset.publisher}` : ""}</span></td><td><strong>{agentAssetTypeLabel(asset.asset_type)}</strong><span className="cell-subtext">{asset.parser} · {asset.status === "parsed" ? "解析成功" : "解析失败"}</span><span className="cell-subtext">{asset.transport ? `传输：${asset.transport}` : "无传输声明"}</span></td><td><details className="record-evidence"><summary>工具 {asset.declared_tools.length} · 资源 {asset.declared_resources.length} · Prompt {asset.declared_prompts.length}</summary><dl><div><dt>启动入口</dt><dd>{asset.entrypoint ?? "未声明"}</dd></div><div><dt>工具</dt><dd>{asset.declared_tools.join("、") || "未声明"}</dd></div><div><dt>资源范围</dt><dd>{asset.declared_resources.join("、") || "未声明"}</dd></div><div><dt>Prompt</dt><dd>{asset.declared_prompts.join("、") || "未声明"}</dd></div><div><dt>解析检查</dt><dd>{asset.checks.join("、") || "未记录"}</dd></div></dl></details></td><td><span className={`severity ${asset.finding_count ? "high" : "info"}`}>{asset.finding_count} 个问题</span><span className="cell-subtext">{asset.permission_count} 条权限</span>{Number(asset.metadata.permissions_truncated ?? 0) > 0 ? <span className="cell-subtext">另有 {Number(asset.metadata.permissions_truncated)} 条权限因单资产上限未保存</span> : null}{asset.detail ? <span className="cell-subtext">{asset.detail}</span> : null}</td></tr>)}</tbody></table>
+      <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
+      {snapshot.skipped_files.length ? <details className="advanced-details"><summary>查看跳过的 {snapshot.skipped_files.length} 个文件</summary><table className="compact-table"><thead><tr><th>文件</th><th>原因</th></tr></thead><tbody>{snapshot.skipped_files.map((item) => <tr key={`${item.path}-${item.reason}`}><td>{item.path}</td><td>{item.reason}</td></tr>)}</tbody></table></details> : null}
+    </>}
+  </section>;
+}
+
+function AgentPermissionMatrixPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
+  const [filters, setFilters] = useState({ keyword: "", capability: "all", risk: "all", approval: "all" });
+  const [page, setPage] = useState(1);
+  const permissions = snapshot?.permissions ?? [];
+  const filtered = permissions.filter((permission) => {
+    const keyword = filters.keyword.trim().toLowerCase();
+    const haystack = `${permission.asset_path} ${permission.subject} ${permission.capability} ${permission.scope} ${permission.source}`.toLowerCase();
+    return (!keyword || haystack.includes(keyword))
+      && (filters.capability === "all" || permission.capability === filters.capability)
+      && (filters.risk === "all" || permission.risk_level === filters.risk)
+      && (filters.approval === "all" || permission.approval === filters.approval);
+  });
+  const pagination = paginate(filtered, page);
+  const unknownApproval = permissions.filter((item) => item.approval === "unknown").length;
+  const elevated = permissions.filter((item) => ["critical", "high"].includes(item.risk_level)).length;
+  useEffect(() => { setPage(1); }, [filters.keyword, filters.capability, filters.risk, filters.approval]);
+  return <section className="retest-panel">
+    <div className="panel-header"><h3>能力与权限矩阵</h3><span>{permissions.length} 条声明边界</span></div>
+    <div className="retest-summary"><Metric label="权限总数" value={permissions.length} /><Metric label="严重 / 高风险" value={elevated} /><Metric label="审批未知" value={unknownApproval} /><Metric label="涉及资产" value={new Set(permissions.map((item) => item.asset_path)).size} /></div>
+    <p className="retest-note">矩阵来自静态配置声明，表示潜在权限边界；没有真实连接或执行对应 Agent、MCP Server、插件与工具。</p>
+    <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索主体、能力、资源范围或配置路径" /><SimpleFilter value={filters.capability} label="全部能力" options={uniqueValues(permissions.map((item) => item.capability))} format={agentCapabilityLabel} onChange={(value) => setFilters({ ...filters, capability: value })} /><SimpleFilter value={filters.risk} label="全部风险" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, risk: value })} /><SimpleFilter value={filters.approval} label="全部审批状态" options={["required", "not-required", "unknown"]} format={agentApprovalLabel} onChange={(value) => setFilters({ ...filters, approval: value })} /></ModuleFilterBar>
+    <table className="concise-table"><thead><tr><th>资产 / 主体</th><th>能力</th><th>资源范围</th><th>审批 / 风险</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td className="empty-cell" colSpan={4}>当前资产没有可展示的权限声明。</td></tr> : pagination.items.map((permission) => <tr key={`${permission.asset_path}-${permission.subject}-${permission.source}-${permission.capability}-${permission.scope}`}><td><strong>{permission.subject}</strong><span className="cell-subtext">{permission.asset_path}</span><span className="cell-subtext">配置：{permission.source}</span></td><td><strong>{agentCapabilityLabel(permission.capability)}</strong><span className="cell-subtext">{agentAccessLabel(permission.access)}</span></td><td><strong>{permission.scope}</strong><span className="cell-subtext">{permission.resource_type}</span></td><td><span className={`severity ${permission.risk_level}`}>{severityLabel(permission.risk_level as Severity)}</span><span className="cell-subtext">{agentApprovalLabel(permission.approval)}</span></td></tr>)}</tbody></table>
+    <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
+  </section>;
+}
+
+function AgentSemanticDiffPanel({ diff }: { diff: AgentScanDiff | null }) {
+  if (!diff?.has_comparison) return <section className="retest-panel"><div className="panel-header"><h3>资产与权限变更</h3><span>等待第二次扫描</span></div><p>至少完成两个 AGENT 扫描批次后，系统才会显示资产新增/移除、配置变化和权限扩大/收缩。</p></section>;
+  const changes = diff.summary;
+  return <section className="retest-panel">
+    <div className="panel-header"><h3>最近资产与权限语义差异</h3><span>{diff.base_scan_id?.slice(0, 8)} → {diff.target_scan_id.slice(0, 8)}</span></div>
+    <div className="retest-summary"><Metric label="新增资产" value={changes.assets_added} /><Metric label="移除资产" value={changes.assets_removed} /><Metric label="变化资产" value={changes.assets_changed} /><Metric label="权限扩大 / 收缩 / 变化" value={`${changes.permissions_added} / ${changes.permissions_removed} / ${changes.permissions_changed}`} /></div>
+    {diff.assets.length ? <details className="advanced-details"><summary>查看 {diff.assets.length} 条资产变化</summary><table className="compact-table"><thead><tr><th>变化</th><th>资产</th><th>变化字段</th></tr></thead><tbody>{diff.assets.map((item) => <tr key={item.identity}><td>{item.change_type === "added" ? "新增" : item.change_type === "removed" ? "移除" : "配置变化"}</td><td>{item.path}<span className="cell-subtext">{agentAssetTypeLabel(item.asset_type)}</span></td><td>{item.changes.map((field) => AGENT_DIFF_FIELD_LABELS[field] ?? field).join("、")}</td></tr>)}</tbody></table></details> : null}
+    {diff.permissions.length ? <details className="advanced-details"><summary>查看 {diff.permissions.length} 条权限变化</summary><table className="compact-table"><thead><tr><th>方向</th><th>主体 / 能力</th><th>资源范围</th><th>审批</th></tr></thead><tbody>{diff.permissions.map((item) => <tr key={item.identity}><td><span className={`severity ${item.direction === "expanded" ? "high" : item.direction === "reduced" ? "low" : "info"}`}>{item.direction === "expanded" ? "权限扩大" : item.direction === "reduced" ? "权限收缩" : "边界变化"}</span></td><td>{item.permission.subject}<span className="cell-subtext">{agentCapabilityLabel(item.permission.capability)} · {agentAccessLabel(item.permission.access)}</span></td><td>{item.permission.scope}<span className="cell-subtext">{item.permission.asset_path}</span></td><td>{agentApprovalLabel(item.permission.approval)}</td></tr>)}</tbody></table></details> : null}
+    {!diff.assets.length && !diff.permissions.length ? <p>最近两个批次的资产和权限边界没有变化。</p> : null}
+  </section>;
+}
+
+function FindingModuleGovernance({ moduleKey, findings, validations, evidence, graph, comparison, scanHistory = [], agentSnapshot = null, agentScanDiff = null, loading, onRunReview, onRun, onUpdateFinding }: { moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; scanHistory?: AgentScanHistoryItem[]; agentSnapshot?: AgentScanSnapshot | null; agentScanDiff?: AgentScanDiff | null; loading: boolean; onRunReview?: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", severity: "all", status: "all", category: "all" });
   const [page, setPage] = useState(1);
   const high = findings.filter((item) => item.severity === "critical" || item.severity === "high").length;
@@ -2081,7 +2210,7 @@ function FindingModuleGovernance({ moduleKey, findings, validations, evidence, g
     <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} format={moduleKey === "agent" ? agentCategoryLabel : (value) => value} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
     <ConciseFindingTable findings={pagination.items} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} />
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
-    {moduleKey === "agent" ? <AgentScanCoveragePanel history={scanHistory} /> : null}
+    {moduleKey === "agent" ? <><AgentScanCoveragePanel history={scanHistory} /><AgentAssetInventoryPanel snapshot={agentSnapshot} /><AgentPermissionMatrixPanel snapshot={agentSnapshot} /><AgentSemanticDiffPanel diff={agentScanDiff} /></> : null}
     <RetestComparisonPanel comparison={comparison} />
     <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} formatKey={moduleKey === "agent" ? agentCategoryLabel : (value) => value} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>SAST Agent 复核</strong><span>启用 DeepSeek 后执行真实七角色审计；未启用时使用本地规则化复核。修复内容始终只保存为人工评审草案，不会直接修改源码。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>当前仅执行本地只读规则检查；不会连接或执行 Agent、MCP Server 或插件，也不代表已经完成人工或 AI 复核。</span></div></section>}</div></details>
   </ModuleGovernanceShell>;

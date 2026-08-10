@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from app.models import Severity
 
@@ -37,10 +40,24 @@ class AgentFinding:
 
 
 @dataclass(frozen=True)
+class AgentPermission:
+    asset_path: str
+    subject: str
+    capability: str
+    access: str
+    resource_type: str
+    scope: str
+    approval: str
+    risk_level: str
+    source: str
+
+
+@dataclass(frozen=True)
 class AgentScanOutput:
     findings: list[AgentFinding]
     scanned_files: list[str]
     assets: list[AgentAsset]
+    permissions: list[AgentPermission]
     skipped_files: list[dict[str, str]]
     rule_version: str
 
@@ -55,6 +72,30 @@ class AgentAsset:
     checks: list[str]
     finding_count: int = 0
     detail: str | None = None
+    name: str | None = None
+    version: str | None = None
+    publisher: str | None = None
+    transport: str | None = None
+    entrypoint: str | None = None
+    declared_tools: list[str] = field(default_factory=list)
+    declared_resources: list[str] = field(default_factory=list)
+    declared_prompts: list[str] = field(default_factory=list)
+    permissions: list[AgentPermission] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AgentAssetDetails:
+    name: str | None = None
+    version: str | None = None
+    publisher: str | None = None
+    transport: str | None = None
+    entrypoint: str | None = None
+    declared_tools: list[str] = field(default_factory=list)
+    declared_resources: list[str] = field(default_factory=list)
+    declared_prompts: list[str] = field(default_factory=list)
+    permissions: list[AgentPermission] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 AGENT_RULES = [
@@ -137,7 +178,7 @@ AGENT_RULES = [
     ),
 ]
 
-AGENT_RULE_VERSION = "agent-rules-2026.08.10-v2"
+AGENT_RULE_VERSION = "agent-rules-2026.08.10-v3"
 INSTRUCTION_FILE_NAMES = {
     "agents.md",
     "claude.md",
@@ -149,17 +190,23 @@ AGENT_CONFIG_NAMES = {
     "agent.yaml",
     "agent.yml",
     "agent.toml",
-    "prompt.yaml",
-    "prompt.yml",
 }
+PROMPT_CONFIG_NAMES = {"prompt.yaml", "prompt.yml", "prompt.toml", "prompt.json"}
 MCP_CONFIG_NAMES = {
     "mcp.json",
+    "mcp.yaml",
+    "mcp.yml",
+    "mcp.toml",
     ".mcp.json",
+    ".mcp.yaml",
+    ".mcp.yml",
     "mcp.config.json",
+    "mcp.config.yaml",
+    "mcp.config.yml",
     "claude_desktop_config.json",
 }
-PLUGIN_CONFIG_NAMES = {"plugin.json"}
-TOOL_CONFIG_NAMES = {"tools.json"}
+PLUGIN_CONFIG_NAMES = {"plugin.json", "plugin.yaml", "plugin.yml", "plugin.toml"}
+TOOL_CONFIG_NAMES = {"tools.json", "tools.yaml", "tools.yml", "tools.toml"}
 AGENT_DIR_MARKERS = {".agents", ".agent", ".claude", ".codex", ".cursor", "agents", "skills", "prompts", "plugins", "mcp"}
 IGNORED_DIRS = {
     ".git",
@@ -177,6 +224,7 @@ IGNORED_DIRS = {
     "outputs",
 }
 MAX_FILE_BYTES = 512 * 1024
+MAX_PERMISSIONS_PER_ASSET = 500
 
 
 def scan_agent_tree(source_path: str) -> AgentScanOutput:
@@ -187,6 +235,7 @@ def scan_agent_tree(source_path: str) -> AgentScanOutput:
     findings: list[AgentFinding] = []
     scanned_files: list[str] = []
     assets: list[AgentAsset] = []
+    permissions: list[AgentPermission] = []
     skipped_files: list[dict[str, str]] = []
     for file_path, asset_type, skip_reason in iter_agent_files(root):
         relative_path = file_path.relative_to(root).as_posix()
@@ -206,13 +255,25 @@ def scan_agent_tree(source_path: str) -> AgentScanOutput:
                 checks=asset.checks,
                 finding_count=len(file_findings),
                 detail=asset.detail,
+                name=asset.name,
+                version=asset.version,
+                publisher=asset.publisher,
+                transport=asset.transport,
+                entrypoint=asset.entrypoint,
+                declared_tools=asset.declared_tools,
+                declared_resources=asset.declared_resources,
+                declared_prompts=asset.declared_prompts,
+                permissions=asset.permissions,
+                metadata=asset.metadata,
             )
         )
+        permissions.extend(asset.permissions)
 
     return AgentScanOutput(
         findings=dedupe_findings(findings),
         scanned_files=scanned_files,
         assets=assets,
+        permissions=dedupe_permissions(permissions),
         skipped_files=skipped_files,
         rule_version=AGENT_RULE_VERSION,
     )
@@ -249,6 +310,8 @@ def classify_agent_asset(path: Path, root: Path) -> str | None:
         return "plugin-manifest"
     if name in TOOL_CONFIG_NAMES:
         return "tool-schema"
+    if name in PROMPT_CONFIG_NAMES:
+        return "prompt"
     if name == "skill.md" and in_agent_directory:
         return "skill"
     if name.endswith(".prompt.md") or (in_agent_directory and "prompts" in relative_parts and path.suffix.lower() == ".md"):
@@ -278,22 +341,45 @@ def scan_agent_file(file_path: Path, relative_path: str, asset_type: str | None 
     parser = "instruction-text"
     status = "parsed"
     detail = None
-    is_json = file_path.suffix.lower() == ".json" or file_path.name.lower() in MCP_CONFIG_NAMES | PLUGIN_CONFIG_NAMES | TOOL_CONFIG_NAMES
-    parsed_ok = False
-    if resolved_type in {"instruction", "skill", "prompt"} or (resolved_type == "agent-config" and not is_json):
+    structured_data: Any = None
+    suffix = file_path.suffix.lower()
+    structured_format = suffix.lstrip(".") if suffix in {".json", ".yaml", ".yml", ".toml"} else None
+
+    if resolved_type in {"instruction", "skill", "prompt"} and suffix == ".md":
         checks.append("instruction-text-rules")
         findings.extend(scan_text_rules(content, relative_path))
-    if is_json:
-        parser = "structured-json"
-        checks.append("json-permission-and-secret-rules")
-        json_findings, parsed_ok = scan_json_security(content, relative_path)
-        findings.extend(json_findings)
-        if not parsed_ok:
+        frontmatter, frontmatter_error = parse_markdown_frontmatter(content)
+        if frontmatter is not None:
+            structured_data = frontmatter
+            parser = "markdown+yaml-frontmatter"
+            checks.append("frontmatter-permission-rules")
+            findings.extend(scan_structured_security(frontmatter, content, relative_path))
+        elif frontmatter_error:
             status = "failed"
-            detail = "invalid JSON; structured checks were not completed"
-    if resolved_type == "mcp-config" and parsed_ok:
+            detail = frontmatter_error
+            findings.append(invalid_config_finding(relative_path, "YAML frontmatter", frontmatter_error))
+    elif structured_format:
+        parser = f"structured-{structured_format}"
+        checks.append("structured-permission-and-secret-rules")
+        structured_data, parse_error = parse_structured_config(content, structured_format)
+        if parse_error:
+            status = "failed"
+            detail = parse_error
+            findings.append(invalid_config_finding(relative_path, structured_format.upper(), parse_error))
+        else:
+            findings.extend(scan_structured_security(structured_data, content, relative_path))
+            if resolved_type in {"instruction", "skill", "prompt", "agent-config"}:
+                checks.append("structured-instruction-rules")
+                findings.extend(scan_structured_instruction_rules(structured_data, relative_path))
+    else:
+        checks.append("instruction-text-rules")
+        findings.extend(scan_text_rules(content, relative_path))
+
+    if resolved_type == "mcp-config" and structured_data is not None:
         checks.append("mcp-server-rules")
-        findings.extend(scan_mcp_config(content, relative_path))
+        findings.extend(scan_mcp_data(structured_data, content, relative_path))
+
+    asset_details = extract_agent_asset_details(structured_data, relative_path, resolved_type, file_path.name)
     return dedupe_findings(findings), AgentAsset(
         path=relative_path,
         asset_type=resolved_type,
@@ -302,7 +388,481 @@ def scan_agent_file(file_path: Path, relative_path: str, asset_type: str | None 
         status=status,
         checks=checks,
         detail=detail,
+        name=asset_details.name,
+        version=asset_details.version,
+        publisher=asset_details.publisher,
+        transport=asset_details.transport,
+        entrypoint=asset_details.entrypoint,
+        declared_tools=asset_details.declared_tools,
+        declared_resources=asset_details.declared_resources,
+        declared_prompts=asset_details.declared_prompts,
+        permissions=asset_details.permissions,
+        metadata=asset_details.metadata,
     )
+
+
+def parse_structured_config(content: str, structured_format: str) -> tuple[Any, str | None]:
+    try:
+        if structured_format == "json":
+            return json.loads(content), None
+        if structured_format in {"yaml", "yml"}:
+            return yaml.safe_load(content) or {}, None
+        if structured_format == "toml":
+            return tomllib.loads(content), None
+    except (json.JSONDecodeError, yaml.YAMLError, tomllib.TOMLDecodeError) as exc:
+        return None, f"invalid {structured_format.upper()}: {str(exc).splitlines()[0][:180]}"
+    return None, f"unsupported structured format: {structured_format}"
+
+
+def parse_markdown_frontmatter(content: str) -> tuple[dict[str, Any] | None, str | None]:
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, None
+    try:
+        closing_index = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration:
+        return None, "YAML frontmatter is not closed"
+    try:
+        parsed = yaml.safe_load("\n".join(lines[1:closing_index])) or {}
+    except yaml.YAMLError as exc:
+        return None, f"invalid YAML frontmatter: {str(exc).splitlines()[0][:180]}"
+    if not isinstance(parsed, dict):
+        return None, "YAML frontmatter must be an object"
+    return parsed, None
+
+
+def invalid_config_finding(relative_path: str, format_name: str, detail: str) -> AgentFinding:
+    return build_finding(
+        f"AGENT.CONFIG.INVALID_{format_name.upper().replace(' ', '_')}",
+        f"Agent configuration is invalid {format_name}",
+        Severity.medium,
+        "configuration-integrity",
+        relative_path,
+        1,
+        f"{format_name} parse failed; structured permission checks were skipped",
+        f"The configuration cannot be parsed reliably: {detail}",
+        f"Fix the {format_name} syntax and rerun the AGENT scan.",
+        "Trust cannot be evaluated until the asset is parsed successfully.",
+    )
+
+
+def scan_structured_instruction_rules(data: Any, relative_path: str) -> list[AgentFinding]:
+    findings: list[AgentFinding] = []
+    instruction_keys = {"instruction", "instructions", "prompt", "systemprompt", "system_prompt", "systemmessage", "system_message"}
+    for path, key, value in walk_json(data):
+        normalized_key = normalize_key(str(key))
+        is_message_content = normalized_key == "content" and any(normalize_key(item) in {"messages", "prompts"} for item in path[:-1])
+        if not isinstance(value, str) or (normalized_key not in instruction_keys and not is_message_content):
+            continue
+        line_number = find_line_number_in_values(relative_path, value)
+        for finding in scan_text_rules(value, relative_path):
+            findings.append(AgentFinding(
+                rule_id=finding.rule_id,
+                title=finding.title,
+                severity=finding.severity,
+                file_path=finding.file_path,
+                line_start=line_number,
+                line_end=line_number,
+                evidence=finding.evidence,
+                category=finding.category,
+                description=finding.description,
+                remediation=finding.remediation,
+                trust_impact=finding.trust_impact,
+            ))
+    return findings
+
+
+def find_line_number_in_values(relative_path: str, value: str) -> int:
+    # Structured parser callers do not retain a source map. A stable line 1 fallback is
+    # more honest than fabricating a location; the config path remains in evidence.
+    del relative_path, value
+    return 1
+
+
+def scan_structured_security(data: Any, content: str, relative_path: str) -> list[AgentFinding]:
+    findings: list[AgentFinding] = []
+    for path, key, value in walk_json(data):
+        key_text = str(key)
+        path_text = ".".join(path)
+        line_number = find_line_number(content, key_text)
+        if looks_like_secret_key(key_text) and isinstance(value, (str, int, float)) and looks_like_secret_value(str(value)):
+            findings.append(build_finding(
+                "AGENT.SECRET.INLINE_TOKEN",
+                "Agent configuration contains an inline secret",
+                Severity.high,
+                "secret-exposure",
+                relative_path,
+                line_number,
+                f"path={path_text}; key={key_text}; value=***REDACTED***",
+                "A credential-like field contains an inline value rather than an environment or secret-manager reference.",
+                "Rotate the exposed value and replace it with scoped secret injection.",
+                "Trust is reduced because a reusable credential may be exposed through configuration or logs.",
+            ))
+        if normalize_key(key_text) in {"permissions", "allowedtools", "tools", "capabilities"}:
+            values = flatten_scalar_values(value)
+            lowered = {item.lower() for item in values}
+            if lowered & {"*", "*:*", "all", "all_tools", "allow_all", "full_access", "admin"}:
+                findings.append(build_finding(
+                    "AGENT.MCP.WILDCARD_PERMISSION",
+                    "Agent or plugin permissions are too broad",
+                    Severity.high,
+                    "permission-overreach",
+                    relative_path,
+                    line_number,
+                    f"path={path_text}; permission=<wildcard-or-all>",
+                    "The configuration grants wildcard or all-capability access.",
+                    "Replace broad permissions with an explicit task-scoped allowlist.",
+                    "Trust is reduced because broad permissions amplify prompt-injection impact.",
+                ))
+            findings.extend(capability_findings(relative_path, line_number, path_text, values))
+    return dedupe_findings(findings)
+
+
+def extract_agent_asset_details(data: Any, relative_path: str, asset_type: str, fallback_name: str) -> AgentAssetDetails:
+    if not isinstance(data, (dict, list)):
+        return AgentAssetDetails(name=Path(fallback_name).stem)
+
+    name = first_known_scalar(data, {"name", "displayname", "title"}) or Path(fallback_name).stem
+    version = first_known_scalar(data, {"version"})
+    publisher = first_known_scalar(data, {"publisher", "author", "vendor", "owner"})
+    transports = extract_mcp_transports(data) if asset_type == "mcp-config" else []
+    commands = [safe_command(item) for item in collect_known_scalars(data, {"command"})]
+    tools = collect_declared_names(data, {"tools", "allowedtools", "allowed_tools", "functions"})
+    resources = collect_declared_names(data, {"resources", "roots", "directories", "paths", "allowedpaths", "allowed_paths"})
+    prompts = collect_declared_names(data, {"prompts", "prompttemplates", "prompt_templates"})
+    extracted_permissions = extract_permissions(data, relative_path, str(name), asset_type)
+    permissions = extracted_permissions[:MAX_PERMISSIONS_PER_ASSET]
+    resources = sorted(set(resources + [item.scope for item in permissions if item.resource_type in {"filesystem", "network"}]))
+    metadata: dict[str, object] = {
+        "top_level_keys": sorted(str(key) for key in data.keys())[:30] if isinstance(data, dict) else [],
+        "subject_count": len({permission.subject for permission in permissions}),
+        "permission_limit": MAX_PERMISSIONS_PER_ASSET,
+        "permissions_truncated": max(0, len(extracted_permissions) - len(permissions)),
+    }
+    return AgentAssetDetails(
+        name=safe_metadata_value(name),
+        version=safe_metadata_value(version),
+        publisher=safe_metadata_value(publisher),
+        transport=", ".join(sorted(set(transports)))[:200] or None,
+        entrypoint=", ".join(sorted(set(commands)))[:240] or None,
+        declared_tools=sorted(set(tools))[:100],
+        declared_resources=resources[:100],
+        declared_prompts=sorted(set(prompts))[:100],
+        permissions=permissions,
+        metadata=metadata,
+    )
+
+
+def extract_permissions(data: Any, relative_path: str, default_subject: str, asset_type: str) -> list[AgentPermission]:
+    permissions: list[AgentPermission] = []
+    for path, key, value in walk_json(data):
+        key_text = str(key)
+        normalized_key = normalize_key(key_text)
+        source = ".".join(path)
+        subject = permission_subject(path, default_subject)
+        approval = approval_for_path(data, path)
+
+        if normalized_key in {"permissions", "capabilities", "allowedtools", "allowed_tools"}:
+            for token in flatten_permission_values(value):
+                permissions.append(permission_from_token(relative_path, subject, token, approval, source))
+        elif normalized_key in {"tools", "functions"}:
+            for tool_name in collect_names_from_value(value):
+                permissions.append(make_permission(
+                    relative_path, subject, "tool-invocation", "use", "tool", tool_name, approval, "low", source
+                ))
+        elif normalized_key in {"roots", "directories", "paths", "allowedpaths", "allowed_paths", "filesystem"}:
+            for scope in flatten_resource_values(value):
+                permissions.append(make_permission(
+                    relative_path, subject, "filesystem-access", infer_filesystem_access(path, data), "filesystem",
+                    scope, approval, "high" if infer_filesystem_access(path, data) != "read" else "medium", source
+                ))
+        elif normalized_key in {"url", "endpoint", "baseurl", "base_url", "alloweddomains", "allowed_domains", "domains"}:
+            for scope in flatten_resource_values(value):
+                permissions.append(make_permission(
+                    relative_path, subject, "network-egress", "connect", "network", redact_url(scope), approval, "medium", source
+                ))
+        elif normalized_key in {"env", "environment", "headers"} and isinstance(value, dict):
+            secret_keys = sorted(str(item) for item in value if looks_like_secret_key(str(item)))
+            if secret_keys:
+                permissions.append(make_permission(
+                    relative_path, subject, "secret-access", "inject", "environment" if normalized_key != "headers" else "header",
+                    ", ".join(secret_keys[:30]), approval, "high", source
+                ))
+        elif normalized_key == "command" and isinstance(value, str):
+            permissions.append(make_permission(
+                relative_path, subject, "server-process", "execute", "command", safe_command(value), approval,
+                "high" if is_dangerous_command(value, []) else "medium", source
+            ))
+        elif normalized_key == "args" and isinstance(value, list):
+            argument_flags = safe_argument_flags(value)
+            if argument_flags:
+                permissions.append(make_permission(
+                    relative_path, subject, "server-process", "execute", "command-arguments",
+                    ", ".join(argument_flags), approval, "medium", source
+                ))
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                if looks_like_resource_path(item):
+                    permissions.append(make_permission(
+                        relative_path, subject, "filesystem-access", "read-write", "filesystem", item,
+                        approval, "high", source
+                    ))
+                elif item.startswith(("http://", "https://")):
+                    permissions.append(make_permission(
+                        relative_path, subject, "network-egress", "connect", "network", redact_url(item),
+                        approval, "medium", source
+                    ))
+
+    if asset_type in {"instruction", "skill", "prompt"} and not permissions:
+        return []
+    return dedupe_permissions(permissions)
+
+
+def permission_from_token(asset_path: str, subject: str, token: str, approval: str, source: str) -> AgentPermission:
+    normalized = token.strip().lower().replace(" ", "_")
+    if normalized in {"*", "*:*", "all", "all_tools", "allow_all", "full_access", "admin"}:
+        return make_permission(asset_path, subject, "all-capabilities", "admin", "wildcard", "*", approval, "critical", source)
+    if re.search(r"shell|terminal|bash|powershell|cmd(?:\.exe)?|command[_-]?(?:exec|execution)|\bbash\b", normalized):
+        return make_permission(asset_path, subject, "shell-execution", "execute", "command", token, approval, "critical", source)
+    if re.search(r"filesystem[._-]?(?:write|delete)|write[_-]?file|delete[_-]?file|^(?:write|edit)$", normalized):
+        return make_permission(asset_path, subject, "filesystem-write", "write", "filesystem", token, approval, "high", source)
+    if re.search(r"filesystem[._-]?read|read[_-]?file|^read$|grep|glob", normalized):
+        return make_permission(asset_path, subject, "filesystem-read", "read", "filesystem", token, approval, "medium", source)
+    if re.search(r"http|network|internet|browser|fetch|web[_-]?(?:request|fetch|search)", normalized):
+        return make_permission(asset_path, subject, "network-egress", "connect", "network", token, approval, "medium", source)
+    if re.search(r"secret|token|credential|environment|\benv\b", normalized):
+        return make_permission(asset_path, subject, "secret-access", "read", "secret", token, approval, "high", source)
+    return make_permission(asset_path, subject, "tool-invocation", "use", "tool", token, approval, "low", source)
+
+
+def make_permission(
+    asset_path: str,
+    subject: str,
+    capability: str,
+    access: str,
+    resource_type: str,
+    scope: str,
+    approval: str,
+    risk_level: str,
+    source: str,
+) -> AgentPermission:
+    return AgentPermission(
+        asset_path=asset_path,
+        subject=safe_metadata_value(subject) or "asset",
+        capability=capability,
+        access=access,
+        resource_type=resource_type,
+        scope=safe_scope(scope),
+        approval=approval,
+        risk_level=risk_level,
+        source=source[:300],
+    )
+
+
+def permission_subject(path: tuple[str, ...], fallback: str) -> str:
+    normalized = [normalize_key(item) for item in path]
+    for marker in ("mcpservers", "mcp_servers", "servers", "plugins", "tools"):
+        if marker in normalized:
+            index = normalized.index(marker)
+            if len(path) > index + 1:
+                return f"{marker}:{path[index + 1]}"
+    return fallback
+
+
+def extract_approval_requirement(data: Any) -> str:
+    if not isinstance(data, dict):
+        return "unknown"
+    for key, value in data.items():
+        if normalize_key(str(key)) not in {"approval", "requireapproval", "requiresapproval", "humanapproval", "confirm"}:
+            continue
+        if value is True or str(value).lower() in {"required", "always", "true", "manual"}:
+            return "required"
+        if value is False or str(value).lower() in {"none", "never", "false", "disabled"}:
+            return "not-required"
+    return "unknown"
+
+
+def approval_for_path(data: Any, path: tuple[str, ...]) -> str:
+    for length in range(len(path) - 1, -1, -1):
+        node = value_at_path(data, path[:length])
+        approval = extract_approval_requirement(node)
+        if approval != "unknown":
+            return approval
+    return "unknown"
+
+
+def value_at_path(data: Any, path: tuple[str, ...]) -> Any:
+    node = data
+    for part in path:
+        if isinstance(node, dict):
+            node = node.get(part)
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            return None
+    return node
+
+
+def infer_filesystem_access(path: tuple[str, ...], data: Any) -> str:
+    normalized_path = ".".join(normalize_key(item) for item in path)
+    if "readonly" in normalized_path or has_boolean_key(data, {"readonly", "read_only"}, True):
+        return "read"
+    if "write" in normalized_path or "delete" in normalized_path:
+        return "write"
+    return "read-write"
+
+
+def has_boolean_key(data: Any, keys: set[str], expected: bool) -> bool:
+    normalized_keys = {normalize_key(item) for item in keys}
+    return any(normalize_key(str(key)) in normalized_keys and value is expected for _, key, value in walk_json(data))
+
+
+def first_known_scalar(data: Any, keys: set[str]) -> str | None:
+    normalized_keys = {normalize_key(item) for item in keys}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if normalize_key(str(key)) in normalized_keys and isinstance(value, (str, int, float)):
+                return str(value)
+    return None
+
+
+def collect_known_scalars(data: Any, keys: set[str]) -> list[str]:
+    normalized_keys = {normalize_key(item) for item in keys}
+    values: list[str] = []
+    for _, key, value in walk_json(data):
+        if normalize_key(str(key)) in normalized_keys and isinstance(value, (str, int, float)):
+            values.append(safe_scope(str(value)))
+    return values
+
+
+def extract_mcp_transports(data: Any) -> list[str]:
+    transports: list[str] = []
+    for _, server in extract_mcp_servers(data):
+        explicit = server.get("transport") or server.get("type")
+        if isinstance(explicit, str):
+            transports.append(safe_scope(explicit))
+        elif server.get("url") or server.get("endpoint"):
+            transports.append("http")
+        elif server.get("command"):
+            transports.append("stdio")
+    return transports
+
+
+def collect_declared_names(data: Any, keys: set[str]) -> list[str]:
+    normalized_keys = {normalize_key(item) for item in keys}
+    names: list[str] = []
+    for _, key, value in walk_json(data):
+        if normalize_key(str(key)) in normalized_keys:
+            names.extend(collect_names_from_value(value))
+    return [safe_scope(name) for name in names if name]
+
+
+def collect_names_from_value(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return split_compound_values(value)
+    if isinstance(value, list):
+        names: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                name = first_known_scalar(item, {"name", "id", "title"})
+                if name:
+                    names.append(name)
+            elif isinstance(item, (str, int, float)):
+                names.append(str(item))
+        return names
+    if isinstance(value, dict):
+        return [str(key) for key in value]
+    return []
+
+
+def flatten_permission_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return split_compound_values(value)
+    if isinstance(value, list):
+        return [str(item) for item in value if isinstance(item, (str, int, float))]
+    if isinstance(value, dict):
+        return [str(key) for key, enabled in value.items() if enabled is True or isinstance(enabled, dict)]
+    return []
+
+
+def flatten_resource_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return split_compound_values(value)
+    if isinstance(value, list):
+        return [safe_scope(str(item)) for item in value if isinstance(item, (str, int, float))]
+    if isinstance(value, dict):
+        return [safe_scope(str(key)) for key in value]
+    return []
+
+
+def split_compound_values(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"\s*,\s*|\s+", value.strip()) if item.strip()]
+
+
+def normalize_key(value: str) -> str:
+    return re.sub(r"[-_\s]", "", value).lower()
+
+
+def safe_metadata_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = redact_evidence(str(value).strip())
+    return text[:240] or None
+
+
+def safe_scope(value: str) -> str:
+    text = redact_evidence(str(value).strip())
+    if text.startswith(("http://", "https://")):
+        text = redact_url(text)
+    return text[:300] or "unspecified"
+
+
+def safe_command(value: str) -> str:
+    executable = re.split(r"\s+", value.strip(), maxsplit=1)[0].strip("\"'")
+    command_name = Path(executable).name
+    return redact_evidence(command_name)[:160] or "unknown"
+
+
+def looks_like_resource_path(value: str) -> bool:
+    normalized = value.strip().replace("\\", "/")
+    if not normalized or normalized.startswith("-") or normalized.startswith(("http://", "https://")):
+        return False
+    return bool(re.match(r"^(?:[A-Za-z]:/|/|\.{1,2}/)", normalized))
+
+
+def safe_argument_flags(value: list[Any]) -> list[str]:
+    flags: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.startswith("-"):
+            continue
+        flag = item.split("=", maxsplit=1)[0]
+        if re.search(r"(?i)(token|secret|password|credential|api[_-]?key)", flag):
+            flags.append(f"{flag}=***REDACTED***")
+        else:
+            flags.append(flag[:120])
+    return flags[:50]
+
+
+def dedupe_permissions(permissions: list[AgentPermission]) -> list[AgentPermission]:
+    seen: set[tuple[str, str, str, str, str, str, str, str]] = set()
+    result: list[AgentPermission] = []
+    for permission in permissions:
+        key = (
+            permission.asset_path,
+            permission.subject,
+            permission.capability,
+            permission.access,
+            permission.resource_type,
+            permission.scope,
+            permission.approval,
+            permission.source,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(permission)
+    return result
 
 
 def scan_text_rules(content: str, relative_path: str) -> list[AgentFinding]:
@@ -341,57 +901,9 @@ def scan_json_security(content: str, relative_path: str) -> tuple[list[AgentFind
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
-        return [
-            build_finding(
-                "AGENT.CONFIG.INVALID_JSON",
-                "Agent configuration is invalid JSON",
-                Severity.medium,
-                "configuration-integrity",
-                relative_path,
-                1,
-                "Invalid JSON; structured permission and secret checks were skipped",
-                "The configuration cannot be parsed reliably, so its security boundary is unknown.",
-                "Fix the JSON syntax and rerun the AGENT scan.",
-                "Trust cannot be evaluated until the asset is parsed successfully.",
-            )
-        ], False
+        return [invalid_config_finding(relative_path, "JSON", "invalid JSON")], False
 
-    findings: list[AgentFinding] = []
-    for path, key, value in walk_json(data):
-        key_text = str(key)
-        path_text = ".".join(path)
-        line_number = find_line_number(content, key_text)
-        if looks_like_secret_key(key_text) and isinstance(value, (str, int, float)) and looks_like_secret_value(str(value)):
-            findings.append(build_finding(
-                "AGENT.SECRET.INLINE_TOKEN",
-                "Agent configuration contains an inline secret",
-                Severity.high,
-                "secret-exposure",
-                relative_path,
-                line_number,
-                f"path={path_text}; key={key_text}; value=***REDACTED***",
-                "A credential-like field contains an inline value rather than an environment or secret-manager reference.",
-                "Rotate the exposed value and replace it with scoped secret injection.",
-                "Trust is reduced because a reusable credential may be exposed through configuration or logs.",
-            ))
-        if key_text.lower() in {"permissions", "allowedtools", "allowed_tools", "tools", "capabilities"}:
-            values = flatten_scalar_values(value)
-            lowered = {item.lower() for item in values}
-            if lowered & {"*", "*:*", "all", "all_tools", "allow_all", "full_access", "admin"}:
-                findings.append(build_finding(
-                    "AGENT.MCP.WILDCARD_PERMISSION",
-                    "Agent or plugin permissions are too broad",
-                    Severity.high,
-                    "permission-overreach",
-                    relative_path,
-                    line_number,
-                    f"path={path_text}; permission=<wildcard-or-all>",
-                    "The configuration grants wildcard or all-capability access.",
-                    "Replace broad permissions with an explicit task-scoped allowlist.",
-                    "Trust is reduced because broad permissions amplify prompt-injection impact.",
-                ))
-            findings.extend(capability_findings(relative_path, line_number, path_text, values))
-    return dedupe_findings(findings), True
+    return scan_structured_security(data, content, relative_path), True
 
 
 def walk_json(value: Any, path: tuple[str, ...] = ()):
@@ -464,6 +976,10 @@ def scan_mcp_config(content: str, relative_path: str) -> list[AgentFinding]:
             )
         ]
 
+    return scan_mcp_data(data, content, relative_path)
+
+
+def scan_mcp_data(data: Any, content: str, relative_path: str) -> list[AgentFinding]:
     findings: list[AgentFinding] = []
     for server_name, server in extract_mcp_servers(data):
         if not isinstance(server, dict):
@@ -698,6 +1214,12 @@ def redact_evidence(line: str) -> str:
         r"\1\2***REDACTED***",
         line,
     )
+    redacted = re.sub(
+        r"(?i)(--(?:api[_-]?key|token|password|secret|credential)(?:=|\s+))[^\s,]+",
+        r"\1***REDACTED***",
+        redacted,
+    )
+    redacted = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1***REDACTED***@", redacted)
     redacted = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", "Bearer ***REDACTED***", redacted)
     redacted = re.sub(r"\b(?:sk|ghp|glpat|xox[baprs])[-_][A-Za-z0-9._-]{12,}\b", "***REDACTED***", redacted)
     return redacted[:500]

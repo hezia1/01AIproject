@@ -117,3 +117,126 @@ def test_ignored_directory_name_does_not_hide_the_scan_root(tmp_path):
 
     assert result.scanned_files == ["AGENTS.md"]
     assert "AGENT.TOOL.SHELL_EXEC" in rule_ids(result)
+
+
+def test_skill_frontmatter_builds_tool_permissions_and_metadata(tmp_path):
+    skill_dir = tmp_path / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: secure-reviewer\n"
+        "version: 1.2.0\n"
+        "allowed-tools:\n"
+        "  - Read\n"
+        "  - Bash\n"
+        "require-approval: true\n"
+        "---\n"
+        "Review the selected files.\n",
+        encoding="utf-8",
+    )
+
+    result = scan_agent_tree(str(tmp_path))
+    asset = result.assets[0]
+
+    assert asset.asset_type == "skill"
+    assert asset.parser == "markdown+yaml-frontmatter"
+    assert asset.name == "secure-reviewer"
+    assert asset.version == "1.2.0"
+    assert asset.declared_tools == ["Bash", "Read"]
+    assert {permission.capability for permission in asset.permissions} == {"filesystem-read", "shell-execution"}
+    assert all(permission.approval == "required" for permission in asset.permissions)
+
+
+def test_mcp_snapshot_extracts_subjects_resources_and_boundaries(tmp_path):
+    config = {
+        "mcpServers": {
+            "files": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+                "transport": "stdio",
+                "roots": ["D:/workspace/repository"],
+                "env": {"API_TOKEN": "${MCP_API_TOKEN}"},
+                "requireApproval": True,
+            },
+            "remote": {
+                "url": "https://user:password@example.invalid/mcp",
+                "transport": "streamable-http",
+            },
+        }
+    }
+    (tmp_path / "mcp.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+    asset = result.assets[0]
+
+    assert asset.transport == "stdio, streamable-http"
+    assert asset.entrypoint == "npx"
+    assert "D:/workspace/repository" in asset.declared_resources
+    assert {permission.subject for permission in asset.permissions} == {"mcpservers:files", "mcpservers:remote"}
+    assert {permission.capability for permission in asset.permissions} >= {"server-process", "filesystem-access", "secret-access", "network-egress"}
+    assert {permission.approval for permission in asset.permissions if permission.subject == "mcpservers:files"} == {"required"}
+    assert {permission.approval for permission in asset.permissions if permission.subject == "mcpservers:remote"} == {"unknown"}
+    assert all("password" not in permission.scope for permission in result.permissions)
+
+
+def test_yaml_plugin_and_toml_agent_config_are_structurally_parsed(tmp_path):
+    plugin_dir = tmp_path / "plugins" / "sample"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.yaml").write_text(
+        "name: audit-plugin\n"
+        "version: 2.0.0\n"
+        "publisher: internal-security\n"
+        "permissions:\n"
+        "  - filesystem.read\n"
+        "  - web_request\n",
+        encoding="utf-8",
+    )
+    agent_dir = tmp_path / ".agent"
+    agent_dir.mkdir()
+    (agent_dir / "runtime.toml").write_text(
+        'name = "local-agent"\n'
+        'permissions = ["filesystem.write", "custom_tool"]\n'
+        'allowed_domains = ["api.example.invalid"]\n',
+        encoding="utf-8",
+    )
+
+    result = scan_agent_tree(str(tmp_path))
+    assets = {asset.path: asset for asset in result.assets}
+
+    assert assets["plugins/sample/plugin.yaml"].parser == "structured-yaml"
+    assert assets["plugins/sample/plugin.yaml"].publisher == "internal-security"
+    assert assets[".agent/runtime.toml"].parser == "structured-toml"
+    assert {permission.capability for permission in assets[".agent/runtime.toml"].permissions} >= {"filesystem-write", "tool-invocation", "network-egress"}
+
+
+def test_mcp_cli_secret_is_redacted_from_findings_and_snapshot(tmp_path):
+    secret = "dummy-command-token-123456789"
+    config = {
+        "mcpServers": {
+            "remote": {
+                "command": "node",
+                "args": ["server.js", "--no-sandbox", "--token", secret, "https://user:password@example.invalid/mcp"],
+            }
+        }
+    }
+    (tmp_path / "mcp.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+
+    assert result.findings
+    assert all(secret not in finding.evidence for finding in result.findings)
+    assert all(secret not in permission.scope for permission in result.permissions)
+    assert all("password" not in permission.scope for permission in result.permissions)
+    assert result.assets[0].entrypoint == "node"
+
+
+def test_permission_snapshot_has_an_explicit_per_asset_limit(tmp_path):
+    config = {"name": "large-toolset", "allowedTools": [f"tool_{index}" for index in range(510)]}
+    (tmp_path / "agent.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+    asset = result.assets[0]
+
+    assert len(asset.permissions) == 500
+    assert asset.metadata["permission_limit"] == 500
+    assert asset.metadata["permissions_truncated"] == 10
