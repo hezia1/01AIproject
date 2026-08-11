@@ -35,6 +35,12 @@ DEFAULT_AGENT_PROFILE: dict[str, object] = {
         "block_skipped_files": False,
         "block_permission_expansion": True,
         "require_approval_for_high_risk": True,
+        "block_unpinned_sources": True,
+        "block_insecure_sources": True,
+        "block_unknown_sources": False,
+        "block_partial_integrity": True,
+        "block_integrity_changes": True,
+        "block_source_changes": True,
     },
 }
 
@@ -196,13 +202,17 @@ def evaluate_agent_quality_gate(
     profile: dict[str, object],
     new_finding_identities: set[str] | None = None,
     expanded_permission_identities: set[str] | None = None,
+    assets: list[dict[str, object]] | None = None,
+    changed_integrity_identities: set[str] | None = None,
+    changed_source_identities: set[str] | None = None,
 ) -> dict[str, object]:
     gate = profile.get("quality_gate") if isinstance(profile.get("quality_gate"), dict) else normalize_quality_gate(None)
     if not gate.get("enabled"):
         return gate_result("pass", [], [], [], gate)
     threshold = str(gate.get("threshold") or "high")
     threshold_rank = SEVERITY_RANK.get(threshold, SEVERITY_RANK["high"])
-    active_findings = [item for item in findings if str(item.get("status") or "open") not in {"accepted_risk", "false_positive", "fixed", "closed"}]
+    governed_active_findings = [item for item in findings if str(item.get("status") or "open") not in {"accepted_risk", "false_positive", "fixed", "closed"}]
+    active_findings = list(governed_active_findings)
     if gate.get("block_new_only"):
         identities = new_finding_identities or set()
         active_findings = [item for item in active_findings if finding_identity(item) in identities]
@@ -242,8 +252,76 @@ def evaluate_agent_quality_gate(
         reasons.append(f"{len(expanded_permissions)} new or expanded permission boundaries are not allowlisted")
     if unapproved_permissions:
         reasons.append(f"{len(unapproved_permissions)} high-risk permissions do not require approval")
+
+    blocked_assets: list[dict[str, object]] = []
+    integrity_changed = changed_integrity_identities or set()
+    source_changed = changed_source_identities or set()
+    unpinned_count = 0
+    insecure_count = 0
+    unknown_count = 0
+    partial_count = 0
+    integrity_change_count = 0
+    source_change_count = 0
+    for asset in assets or []:
+        identity = asset_governance_identity(asset)
+        provenance = asset.get("provenance") if isinstance(asset.get("provenance"), list) else []
+        issue_names = {
+            str(issue)
+            for item in provenance if isinstance(item, dict)
+            for issue in (item.get("issues") if isinstance(item.get("issues"), list) else [])
+        }
+        asset_reasons: list[str] = []
+        if gate.get("block_unpinned_sources") and "version-unpinned" in issue_names and asset_has_active_rules(
+            asset, governed_active_findings, {"AGENT.SUPPLY.UNPINNED_VERSION"}
+        ):
+            unpinned_count += 1
+            asset_reasons.append("version-unpinned")
+        if gate.get("block_insecure_sources") and issue_names & {
+            "insecure-http-source", "embedded-source-credentials", "local-path-escape",
+        } and asset_has_active_rules(asset, governed_active_findings, {
+            "AGENT.SUPPLY.INSECURE_SOURCE", "AGENT.SUPPLY.SOURCE_CREDENTIALS", "AGENT.SUPPLY.LOCAL_PATH_ESCAPE",
+        }):
+            insecure_count += 1
+            asset_reasons.append("insecure-source")
+        if gate.get("block_unknown_sources") and "source-unknown" in issue_names and asset_has_active_rules(
+            asset, governed_active_findings, {"AGENT.SUPPLY.SOURCE_UNKNOWN"}
+        ):
+            unknown_count += 1
+            asset_reasons.append("source-unknown")
+        if gate.get("block_partial_integrity") and str(asset.get("integrity_status")) == "partial" and asset_has_active_rules(
+            asset, governed_active_findings, {"AGENT.SUPPLY.INTEGRITY_PARTIAL"}
+        ):
+            partial_count += 1
+            asset_reasons.append("integrity-partial")
+        if gate.get("block_integrity_changes") and identity in integrity_changed:
+            integrity_change_count += 1
+            asset_reasons.append("integrity-changed")
+        if gate.get("block_source_changes") and identity in source_changed:
+            source_change_count += 1
+            asset_reasons.append("source-changed")
+        if asset_reasons:
+            blocked_assets.append({
+                "identity": identity,
+                "path": asset.get("path"),
+                "asset_type": asset.get("asset_type"),
+                "reasons": asset_reasons,
+            })
+    if unpinned_count:
+        reasons.append(f"{unpinned_count} Agent assets use missing or floating dependency versions")
+    if insecure_count:
+        reasons.append(f"{insecure_count} Agent assets use insecure or out-of-project sources")
+    if unknown_count:
+        reasons.append(f"{unknown_count} Agent assets do not declare an implementation source")
+    if partial_count:
+        reasons.append(f"{partial_count} Agent assets have partial directory integrity evidence")
+    if integrity_change_count:
+        reasons.append(f"{integrity_change_count} Agent asset integrity digests changed from the previous scan")
+    if source_change_count:
+        reasons.append(f"{source_change_count} Agent asset source declarations changed from the previous scan")
     decision = "block" if reasons else "pass"
-    return gate_result(decision, reasons, blocking_findings, [*expanded_permissions, *unapproved_permissions], gate)
+    return gate_result(
+        decision, reasons, blocking_findings, [*expanded_permissions, *unapproved_permissions], gate, blocked_assets
+    )
 
 
 def gate_result(
@@ -252,6 +330,7 @@ def gate_result(
     findings: list[dict[str, object]],
     permissions: list[dict[str, object]],
     policy: dict[str, object],
+    assets: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     deduped_permissions = {permission_identity(item): item for item in permissions}
     return {
@@ -260,8 +339,10 @@ def gate_result(
         "reasons": reasons,
         "blocking_finding_count": len(findings),
         "blocking_permission_count": len(deduped_permissions),
+        "blocking_asset_count": len(assets or []),
         "blocked_findings": findings[:100],
         "blocked_permissions": list(deduped_permissions.values())[:100],
+        "blocked_assets": (assets or [])[:100],
         "policy": policy,
         "limitations": [
             "The gate evaluates static declarations and findings; it does not execute Agent, MCP, plugin, or tool code.",
@@ -310,8 +391,14 @@ def build_agent_html_report(report: dict[str, object]) -> str:
     assets = report.get("assets") if isinstance(report.get("assets"), list) else []
     findings = report.get("findings") if isinstance(report.get("findings"), list) else []
     asset_rows = "".join(
-        f"<tr><td>{escape(str(item.get('path') or '-'))}</td><td>{escape(str(item.get('asset_type') or '-'))}</td><td>{int(item.get('permission_count') or 0)}</td><td>{int(item.get('finding_count') or 0)}</td></tr>"
+        f"<tr><td>{escape(str(item.get('path') or '-'))}</td><td>{escape(str(item.get('asset_type') or '-'))}</td><td>{escape(str(item.get('integrity_status') or '-'))}<br><small>{escape(str(item.get('directory_sha256') or item.get('file_sha256') or '-'))[:20]}</small></td><td>{len(item.get('provenance') or [])}</td><td>{int(item.get('permission_count') or 0)}</td><td>{int(item.get('finding_count') or 0)}</td></tr>"
         for item in assets if isinstance(item, dict)
+    )
+    provenance_rows = "".join(
+        f"<tr><td>{escape(str(asset.get('path') or '-'))}</td><td>{escape(str(source.get('subject') or '-'))}</td><td>{escape(str(source.get('package_name') or '-'))}<br><small>{escape(str(source.get('package_version') or '-'))} · {escape(str(source.get('version_status') or '-'))}</small></td><td>{escape(str(source.get('source_type') or '-'))}<br><small>{escape(str(source.get('source_ref') or '-'))}</small></td><td>{escape(str(source.get('installation_method') or '-'))}</td><td>{escape(str(source.get('publisher_claim') or '-'))}<br><small>{escape(str(source.get('publisher_status') or '-'))}</small></td><td>{escape(', '.join(str(issue) for issue in (source.get('issues') if isinstance(source.get('issues'), list) else [])))}</td></tr>"
+        for asset in assets if isinstance(asset, dict)
+        for source in (asset.get("provenance") if isinstance(asset.get("provenance"), list) else [])
+        if isinstance(source, dict)
     )
     finding_rows = "".join(
         f"<tr><td>{escape(str(item.get('severity') or '-'))}</td><td>{escape(str(item.get('rule_id') or '-'))}</td><td>{escape(str(item.get('title') or '-'))}</td><td>{escape(str(item.get('file_path') or '-'))}</td><td>{escape(str(item.get('status') or '-'))}</td></tr>"
@@ -320,7 +407,7 @@ def build_agent_html_report(report: dict[str, object]) -> str:
     gate_reasons = "".join(
         f"<li>{escape(str(reason))}</li>" for reason in gate.get("reasons", [])
     ) if isinstance(gate.get("reasons"), list) else ""
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产清单</h2><table><thead><tr><th>路径</th><th>类型</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策和已脱敏证据，不代表运行时安全证明。</p></body></html>"""
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；来源：{int(summary.get('provenance_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产完整性</h2><table><thead><tr><th>路径</th><th>类型</th><th>完整性 / SHA-256</th><th>来源</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>来源与安装声明</h2><table><thead><tr><th>资产</th><th>主体</th><th>包 / 版本</th><th>来源</th><th>安装方式</th><th>发布者声明</th><th>问题</th></tr></thead><tbody>{provenance_rows}</tbody></table><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。</p></body></html>"""
 
 
 def finding_identity(finding: AgentFinding | dict[str, object]) -> str:
@@ -333,6 +420,22 @@ def permission_identity(permission: AgentPermission | dict[str, object]) -> str:
     data = permission_to_mapping(permission)
     fields = ("asset_path", "subject", "capability", "access", "resource_type", "scope")
     return "::".join(str(data.get(field) or "") for field in fields)
+
+
+def asset_governance_identity(asset: dict[str, object]) -> str:
+    return f"{asset.get('asset_type') or 'unknown'}::{asset.get('path') or ''}"
+
+
+def asset_has_active_rules(
+    asset: dict[str, object],
+    findings: list[dict[str, object]],
+    rule_ids: set[str],
+) -> bool:
+    asset_path = str(asset.get("path") or "")
+    return any(
+        str(item.get("file_path") or "") == asset_path and str(item.get("rule_id") or "") in rule_ids
+        for item in findings
+    )
 
 
 def permission_to_mapping(permission: AgentPermission | dict[str, object]) -> dict[str, object]:
@@ -477,6 +580,12 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
         "block_skipped_files",
         "block_permission_expansion",
         "require_approval_for_high_risk",
+        "block_unpinned_sources",
+        "block_insecure_sources",
+        "block_unknown_sources",
+        "block_partial_integrity",
+        "block_integrity_changes",
+        "block_source_changes",
     ):
         if strict and not isinstance(gate[key], bool):
             raise ValueError(f"quality_gate.{key} must be a boolean")

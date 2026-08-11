@@ -252,3 +252,76 @@ def test_project_excluded_paths_skip_matching_agent_assets(tmp_path):
 
     assert result.scanned_files == ["agent.json"]
     assert all(finding.file_path != "fixtures/mcp.json" for finding in result.findings)
+
+
+def test_mcp_npx_package_provenance_and_file_hash_are_recorded(tmp_path):
+    config = {
+        "publisher": "example-team",
+        "mcpServers": {
+            "files": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem@1.2.3", "D:/workspace"],
+            }
+        },
+    }
+    (tmp_path / "mcp.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+    asset = result.assets[0]
+    provenance = asset.provenance[0]
+
+    assert len(asset.file_sha256 or "") == 64
+    assert asset.integrity_status == "recorded"
+    assert provenance.package_name == "@modelcontextprotocol/server-filesystem"
+    assert provenance.package_version == "1.2.3"
+    assert provenance.source_type == "registry"
+    assert provenance.version_status == "locked"
+    assert provenance.publisher_status == "claim-only"
+    assert "AGENT.SUPPLY.UNPINNED_VERSION" not in rule_ids(result)
+
+
+def test_unpinned_and_insecure_sources_are_reported_without_credentials(tmp_path):
+    config = {
+        "mcpServers": {
+            "floating": {"command": "npx", "args": ["-y", "example-mcp@latest"]},
+            "remote": {"url": "http://user:password@example.invalid/mcp"},
+        }
+    }
+    (tmp_path / "mcp.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+    rules = rule_ids(result)
+    remote = next(item for item in result.assets[0].provenance if item.subject == "mcp:remote")
+
+    assert "AGENT.SUPPLY.UNPINNED_VERSION" in rules
+    assert "AGENT.SUPPLY.INSECURE_SOURCE" in rules
+    assert "AGENT.SUPPLY.SOURCE_CREDENTIALS" in rules
+    assert remote.source_ref == "http://***REDACTED***@example.invalid/mcp"
+    assert all("password" not in finding.evidence for finding in result.findings)
+
+
+def test_plugin_directory_hash_changes_with_local_implementation(tmp_path):
+    plugin = tmp_path / "plugins" / "reviewer"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.json").write_text(json.dumps({"name": "reviewer", "version": "1.0.0", "repository": "https://example.invalid/reviewer.git#main"}), encoding="utf-8")
+    implementation = plugin / "index.js"
+    implementation.write_text("export const version = 1;", encoding="utf-8")
+
+    first = scan_agent_tree(str(tmp_path)).assets[0]
+    implementation.write_text("export const version = 2;", encoding="utf-8")
+    second = scan_agent_tree(str(tmp_path)).assets[0]
+
+    assert len(first.directory_sha256 or "") == 64
+    assert first.directory_sha256 != second.directory_sha256
+    assert first.metadata["integrity_scope"] == "directory"
+    assert first.provenance[0].version_status == "floating"
+
+
+def test_local_dependency_path_escape_is_reported(tmp_path):
+    config = {"mcpServers": {"local": {"command": "node", "args": ["../../outside/server.js"]}}}
+    (tmp_path / "mcp.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+
+    assert "AGENT.SUPPLY.LOCAL_PATH_ESCAPE" in rule_ids(result)
+    assert "local-path-escape" in result.assets[0].provenance[0].issues

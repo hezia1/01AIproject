@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -55,6 +56,20 @@ class AgentPermission:
 
 
 @dataclass(frozen=True)
+class AgentProvenance:
+    subject: str
+    package_name: str | None
+    package_version: str | None
+    source_type: str
+    source_ref: str | None
+    installation_method: str
+    version_status: str
+    publisher_claim: str | None
+    publisher_status: str
+    issues: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class AgentScanOutput:
     findings: list[AgentFinding]
     scanned_files: list[str]
@@ -83,6 +98,11 @@ class AgentAsset:
     declared_resources: list[str] = field(default_factory=list)
     declared_prompts: list[str] = field(default_factory=list)
     permissions: list[AgentPermission] = field(default_factory=list)
+    provenance: list[AgentProvenance] = field(default_factory=list)
+    file_sha256: str | None = None
+    directory_sha256: str | None = None
+    integrity_status: str = "unavailable"
+    integrity_issues: list[str] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
 
 
@@ -180,7 +200,7 @@ AGENT_RULES = [
     ),
 ]
 
-AGENT_RULE_VERSION = "agent-rules-2026.08.10-v3"
+AGENT_RULE_VERSION = "agent-rules-2026.08.11-v4"
 INSTRUCTION_FILE_NAMES = {
     "agents.md",
     "claude.md",
@@ -227,6 +247,8 @@ IGNORED_DIRS = {
 }
 MAX_FILE_BYTES = 512 * 1024
 MAX_PERMISSIONS_PER_ASSET = 500
+MAX_INTEGRITY_FILES = 2_000
+MAX_INTEGRITY_BYTES = 32 * 1024 * 1024
 
 
 def scan_agent_tree(source_path: str, excluded_paths: list[str] | None = None) -> AgentScanOutput:
@@ -244,7 +266,7 @@ def scan_agent_tree(source_path: str, excluded_paths: list[str] | None = None) -
         if skip_reason:
             skipped_files.append({"path": relative_path, "reason": skip_reason})
             continue
-        file_findings, asset = scan_agent_file(file_path, relative_path, asset_type)
+        file_findings, asset = scan_agent_file(file_path, relative_path, asset_type, root)
         scanned_files.append(relative_path)
         findings.extend(file_findings)
         assets.append(
@@ -266,6 +288,11 @@ def scan_agent_tree(source_path: str, excluded_paths: list[str] | None = None) -
                 declared_resources=asset.declared_resources,
                 declared_prompts=asset.declared_prompts,
                 permissions=asset.permissions,
+                provenance=asset.provenance,
+                file_sha256=asset.file_sha256,
+                directory_sha256=asset.directory_sha256,
+                integrity_status=asset.integrity_status,
+                integrity_issues=asset.integrity_issues,
                 metadata=asset.metadata,
             )
         )
@@ -292,6 +319,14 @@ def iter_agent_files(root: Path, excluded_paths: list[str] | None = None):
             continue
         asset_type = classify_agent_asset(path, root)
         if asset_type is None:
+            continue
+        try:
+            resolved_path = path.resolve(strict=True)
+        except OSError:
+            yield path, asset_type, "file target is not readable"
+            continue
+        if path.is_symlink() or (resolved_path != root and root not in resolved_path.parents):
+            yield path, asset_type, "symbolic links and paths outside the project are not scanned"
             continue
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
@@ -331,10 +366,16 @@ def classify_agent_asset(path: Path, root: Path) -> str | None:
     return None
 
 
-def scan_agent_file(file_path: Path, relative_path: str, asset_type: str | None = None) -> tuple[list[AgentFinding], AgentAsset]:
+def scan_agent_file(
+    file_path: Path,
+    relative_path: str,
+    asset_type: str | None = None,
+    project_root: Path | None = None,
+) -> tuple[list[AgentFinding], AgentAsset]:
     resolved_type = asset_type or classify_agent_asset(file_path, file_path.parent) or "unknown"
     try:
-        content = file_path.read_text(encoding="utf-8-sig", errors="ignore")
+        raw_content = file_path.read_bytes()
+        content = raw_content.decode("utf-8-sig", errors="ignore")
     except OSError:
         return [], AgentAsset(
             path=relative_path,
@@ -390,6 +431,30 @@ def scan_agent_file(file_path: Path, relative_path: str, asset_type: str | None 
         findings.extend(scan_mcp_data(structured_data, content, relative_path))
 
     asset_details = extract_agent_asset_details(structured_data, relative_path, resolved_type, file_path.name)
+    root = (project_root or file_path.parent).resolve()
+    provenance = [] if status == "failed" else extract_agent_provenance(
+        structured_data,
+        relative_path=relative_path,
+        asset_type=resolved_type,
+        publisher=asset_details.publisher,
+        file_path=file_path,
+        project_root=root,
+    )
+    file_sha256 = hashlib.sha256(raw_content).hexdigest()
+    directory_sha256, integrity_status, integrity_issues, integrity_file_count = hash_asset_directory(
+        file_path,
+        root,
+        resolved_type,
+    )
+    checks.append("source-integrity")
+    findings.extend(provenance_findings(relative_path, provenance, integrity_status, integrity_issues))
+    metadata = dict(asset_details.metadata)
+    metadata.update({
+        "integrity_algorithm": "sha256",
+        "integrity_scope": "directory" if directory_sha256 else "file",
+        "integrity_file_count": integrity_file_count,
+        "publisher_verification": "claim-only" if asset_details.publisher else "not-declared",
+    })
     return dedupe_findings(findings), AgentAsset(
         path=relative_path,
         asset_type=resolved_type,
@@ -407,7 +472,12 @@ def scan_agent_file(file_path: Path, relative_path: str, asset_type: str | None 
         declared_resources=asset_details.declared_resources,
         declared_prompts=asset_details.declared_prompts,
         permissions=asset_details.permissions,
-        metadata=asset_details.metadata,
+        provenance=provenance,
+        file_sha256=file_sha256,
+        directory_sha256=directory_sha256,
+        integrity_status=integrity_status,
+        integrity_issues=integrity_issues,
+        metadata=metadata,
     )
 
 
@@ -561,6 +631,424 @@ def extract_agent_asset_details(data: Any, relative_path: str, asset_type: str, 
         permissions=permissions,
         metadata=metadata,
     )
+
+
+def extract_agent_provenance(
+    data: Any,
+    *,
+    relative_path: str,
+    asset_type: str,
+    publisher: str | None,
+    file_path: Path,
+    project_root: Path,
+) -> list[AgentProvenance]:
+    records: list[AgentProvenance] = []
+    if asset_type == "mcp-config" and isinstance(data, dict):
+        servers = extract_mcp_servers(data)
+        for subject, node in servers:
+            records.append(provenance_from_node(
+                subject=f"mcp:{subject}", node=node, publisher=publisher,
+                file_path=file_path, project_root=project_root,
+            ))
+        if not servers:
+            records.append(provenance_from_node(
+                subject=f"mcp:{Path(relative_path).stem}", node=data, publisher=publisher,
+                file_path=file_path, project_root=project_root,
+            ))
+    elif asset_type in {"plugin-manifest", "skill", "agent-config"}:
+        node = data if isinstance(data, dict) else {}
+        records.append(provenance_from_node(
+            subject=f"{asset_type}:{Path(relative_path).stem}", node=node, publisher=publisher,
+            file_path=file_path, project_root=project_root,
+        ))
+    return dedupe_provenance(records)
+
+
+def provenance_from_node(
+    *,
+    subject: str,
+    node: dict[str, Any],
+    publisher: str | None,
+    file_path: Path,
+    project_root: Path,
+) -> AgentProvenance:
+    command = direct_scalar(node, {"command", "executable"})
+    args = direct_string_list(node, {"args", "arguments"})
+    image = direct_scalar(node, {"image", "containerimage", "container_image"})
+    repository = direct_reference(node, {"repository", "source", "sourceurl", "source_url", "git", "giturl", "git_url"})
+    endpoint = direct_reference(node, {"url", "endpoint"})
+    declared_package = direct_scalar(node, {"package", "packagename", "package_name", "distribution"})
+    declared_version = direct_scalar(node, {"version", "packageversion", "package_version"})
+    installation_method = "configuration"
+    source_type = "unknown"
+    source_ref: str | None = None
+    package_name: str | None = safe_metadata_value(declared_package)
+    package_version: str | None = safe_metadata_value(declared_version)
+    raw_source: str | None = None
+
+    command_name = Path(str(command or "").strip('"\'')).name.lower()
+    if command_name in {"npx", "npm", "pnpm", "pnpx", "yarn", "bunx"}:
+        installation_method = command_name
+        source_type = "registry"
+        spec = first_package_argument(args)
+        parsed_name, parsed_version = split_npm_spec(spec)
+        package_name = safe_metadata_value(parsed_name) or package_name
+        package_version = safe_metadata_value(parsed_version) or package_version
+        source_ref = f"npm:{package_name}" if package_name else None
+    elif command_name in {"uvx", "pipx", "pip", "python", "python.exe"}:
+        installation_method = command_name
+        spec = first_package_argument(args)
+        if command_name in {"uvx", "pipx", "pip"} and spec:
+            source_type = "registry"
+            parsed_name, parsed_version = split_python_spec(spec)
+            package_name = safe_metadata_value(parsed_name) or package_name
+            package_version = safe_metadata_value(parsed_version) or package_version
+            source_ref = f"pypi:{package_name}" if package_name else None
+        else:
+            source_type = "local"
+            source_ref = safe_local_reference(first_non_flag_argument(args))
+    elif command_name in {"docker", "podman"} or image:
+        container_ref = image or first_container_image(args)
+        installation_method = command_name if command_name in {"docker", "podman"} else "container"
+        source_type = "container"
+        raw_source = container_ref
+        source_ref = safe_scope(container_ref) if container_ref else None
+        package_name, package_version = split_container_ref(container_ref) if container_ref else (package_name, package_version)
+    elif repository:
+        installation_method = "git"
+        source_type = "git"
+        raw_source = repository
+        source_ref = safe_scope(repository)
+        package_name = package_name or repository_name(repository)
+        package_version = package_version or git_reference(repository)
+    elif endpoint:
+        installation_method = "remote-endpoint"
+        source_type = "remote-url"
+        raw_source = endpoint
+        source_ref = safe_scope(endpoint)
+    elif command:
+        installation_method = safe_command(command)
+        source_type = "local"
+        source_ref = safe_local_reference(first_non_flag_argument(args) or command)
+    elif declared_package:
+        installation_method = "declared-package"
+        source_type = "registry"
+        source_ref = f"registry:{safe_metadata_value(declared_package)}"
+
+    if repository and source_type not in {"git", "container"}:
+        raw_source = repository
+    if endpoint and raw_source is None and source_type == "remote-url":
+        raw_source = endpoint
+    version_status = provenance_version_status(source_type, package_version, source_ref)
+    issues: list[str] = []
+    source_candidate = str(raw_source or source_ref or "")
+    if re.match(r"(?i)^http://", source_candidate):
+        issues.append("insecure-http-source")
+    if re.match(r"(?i)^https?://[^/\s@]+@", source_candidate):
+        issues.append("embedded-source-credentials")
+    if version_status in {"missing", "floating"} and source_type in {"registry", "git", "container"}:
+        issues.append("version-unpinned")
+    if source_type == "unknown":
+        issues.append("source-unknown")
+    local_candidates = [item for item in [source_ref, *args] if isinstance(item, str)]
+    if source_type == "local" and any(local_reference_escapes(item, file_path.parent, project_root) for item in local_candidates):
+        issues.append("local-path-escape")
+    return AgentProvenance(
+        subject=redact_evidence(subject)[:240],
+        package_name=package_name,
+        package_version=package_version,
+        source_type=source_type,
+        source_ref=source_ref,
+        installation_method=installation_method,
+        version_status=version_status,
+        publisher_claim=safe_metadata_value(publisher),
+        publisher_status="claim-only" if publisher else "not-declared",
+        issues=sorted(set(issues)),
+    )
+
+
+def provenance_findings(
+    relative_path: str,
+    provenance: list[AgentProvenance],
+    integrity_status: str,
+    integrity_issues: list[str],
+) -> list[AgentFinding]:
+    findings: list[AgentFinding] = []
+    for item in provenance:
+        evidence = (
+            f"subject={item.subject}; package={item.package_name or 'unknown'}; "
+            f"source_type={item.source_type}; version_status={item.version_status}"
+        )
+        if "version-unpinned" in item.issues:
+            findings.append(build_finding(
+                "AGENT.SUPPLY.UNPINNED_VERSION", "Agent dependency version is not immutable", Severity.medium,
+                "supply-chain-integrity", relative_path, 1, evidence,
+                "The Agent, MCP, or plugin dependency uses a missing or floating version reference.",
+                "Pin an exact package version, immutable Git commit, or container digest and record the expected hash.",
+                "Trust is reduced because the installed implementation can change without a configuration review.",
+            ))
+        if "insecure-http-source" in item.issues:
+            findings.append(build_finding(
+                "AGENT.SUPPLY.INSECURE_SOURCE", "Agent dependency uses an insecure source", Severity.high,
+                "supply-chain-integrity", relative_path, 1, evidence,
+                "The declared source uses unencrypted HTTP transport.",
+                "Use HTTPS or an authenticated internal registry and verify the downloaded artifact hash or signature.",
+                "Trust is reduced because the dependency can be modified in transit.",
+            ))
+        if "embedded-source-credentials" in item.issues:
+            findings.append(build_finding(
+                "AGENT.SUPPLY.SOURCE_CREDENTIALS", "Agent source URL embeds credentials", Severity.high,
+                "supply-chain-integrity", relative_path, 1, evidence,
+                "The dependency source URL contains embedded credentials; the credential value was not retained.",
+                "Rotate the credential and use scoped secret injection instead of URL user information.",
+                "Trust is reduced because source credentials can leak through configuration and logs.",
+            ))
+        if "local-path-escape" in item.issues:
+            findings.append(build_finding(
+                "AGENT.SUPPLY.LOCAL_PATH_ESCAPE", "Agent dependency resolves outside the project", Severity.high,
+                "supply-chain-integrity", relative_path, 1, evidence,
+                "A local dependency reference can resolve outside the configured project root.",
+                "Move the dependency under the project root or declare a separately governed immutable package source.",
+                "Trust is reduced because the scanned configuration does not cover the referenced implementation.",
+            ))
+        if "source-unknown" in item.issues:
+            findings.append(build_finding(
+                "AGENT.SUPPLY.SOURCE_UNKNOWN", "Agent dependency source is not declared", Severity.low,
+                "supply-chain-integrity", relative_path, 1, evidence,
+                "The asset does not declare a registry, repository, container, endpoint, or governed local source.",
+                "Declare the installation source, package identity, locked version, and expected integrity value.",
+                "Trust remains incomplete because the implementation origin cannot be reconstructed from the asset.",
+            ))
+    if integrity_status == "partial":
+        findings.append(build_finding(
+            "AGENT.SUPPLY.INTEGRITY_PARTIAL", "Agent directory integrity evidence is incomplete", Severity.medium,
+            "supply-chain-integrity", relative_path, 1,
+            f"integrity_status=partial; issues={','.join(integrity_issues) or 'unknown'}",
+            "The local asset directory exceeded a safety limit or contained an unreadable or linked file.",
+            "Reduce the governed directory scope or remove unsupported links, then regenerate complete SHA-256 evidence.",
+            "Trust remains incomplete because not every local implementation file contributed to the directory digest.",
+        ))
+    return findings
+
+
+def hash_asset_directory(
+    file_path: Path,
+    project_root: Path,
+    asset_type: str,
+) -> tuple[str | None, str, list[str], int]:
+    if asset_type not in {"plugin-manifest", "skill"} or file_path.parent.resolve() == project_root:
+        return None, "recorded", [], 1
+    asset_root = file_path.parent.resolve()
+    if asset_root != project_root and project_root not in asset_root.parents:
+        return None, "partial", ["directory-outside-project"], 0
+    digest = hashlib.sha256()
+    issues: list[str] = []
+    file_count = 0
+    total_bytes = 0
+    for candidate in sorted(asset_root.rglob("*"), key=lambda item: (item.as_posix().lower(), item.as_posix())):
+        if not candidate.is_file() or any(part in IGNORED_DIRS for part in candidate.relative_to(asset_root).parts[:-1]):
+            continue
+        if candidate.is_symlink():
+            issues.append("symbolic-link-skipped")
+            continue
+        try:
+            resolved = candidate.resolve(strict=True)
+            if resolved != project_root and project_root not in resolved.parents:
+                issues.append("outside-project-file-skipped")
+                continue
+            size = candidate.stat().st_size
+            if file_count >= MAX_INTEGRITY_FILES or total_bytes + size > MAX_INTEGRITY_BYTES:
+                issues.append("directory-hash-limit-reached")
+                break
+            content = candidate.read_bytes()
+        except OSError:
+            issues.append("unreadable-file-skipped")
+            continue
+        relative = candidate.relative_to(asset_root).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(content).digest())
+        file_count += 1
+        total_bytes += len(content)
+    if file_count == 0:
+        return None, "partial", sorted(set(issues + ["no-directory-files-hashed"])), 0
+    return digest.hexdigest(), "partial" if issues else "recorded", sorted(set(issues)), file_count
+
+
+def direct_scalar(data: dict[str, Any], keys: set[str]) -> str | None:
+    normalized = {normalize_key(item) for item in keys}
+    for key, value in data.items():
+        if normalize_key(str(key)) in normalized and isinstance(value, (str, int, float)):
+            return str(value)
+    return None
+
+
+def direct_string_list(data: dict[str, Any], keys: set[str]) -> list[str]:
+    normalized = {normalize_key(item) for item in keys}
+    for key, value in data.items():
+        if normalize_key(str(key)) not in normalized:
+            continue
+        if isinstance(value, list):
+            return [str(item) for item in value if isinstance(item, (str, int, float))]
+        if isinstance(value, str):
+            return [value]
+    return []
+
+
+def direct_reference(data: dict[str, Any], keys: set[str]) -> str | None:
+    normalized = {normalize_key(item) for item in keys}
+    for key, value in data.items():
+        if normalize_key(str(key)) not in normalized:
+            continue
+        if isinstance(value, (str, int, float)):
+            return str(value)
+        if isinstance(value, dict):
+            nested = direct_scalar(value, {"url", "href", "path"})
+            if nested:
+                return nested
+    return None
+
+
+def first_package_argument(args: list[str]) -> str | None:
+    value_options = {"--index-url", "--extra-index-url", "--registry", "--cache-dir", "--python"}
+    skip_next = False
+    for item in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if item in {"--package", "-p"}:
+            continue
+        if item.startswith(("--package=", "-p=")):
+            return item.split("=", 1)[1]
+        if item in value_options:
+            skip_next = True
+            continue
+        if item.lower() in {"install", "add", "exec", "run", "dlx"}:
+            continue
+        if item.startswith("-"):
+            continue
+        return item
+    return None
+
+
+def first_non_flag_argument(args: list[str]) -> str | None:
+    return next((item for item in args if item and not item.startswith("-")), None)
+
+
+def first_container_image(args: list[str]) -> str | None:
+    value_options = {"--name", "--network", "--volume", "-v", "--env", "-e", "--workdir", "-w", "--user", "-u"}
+    skip_next = False
+    for item in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if item in {"run", "create", "pull"}:
+            continue
+        if item in value_options:
+            skip_next = True
+            continue
+        if item.startswith("-"):
+            continue
+        return item
+    return None
+
+
+def split_npm_spec(spec: str | None) -> tuple[str | None, str | None]:
+    if not spec:
+        return None, None
+    value = spec.strip()
+    if value.startswith("@"):
+        separator = value.rfind("@")
+        return (value[:separator], value[separator + 1:] or None) if separator > 0 else (value, None)
+    if "@" in value:
+        name, version = value.rsplit("@", 1)
+        return name or None, version or None
+    return value, None
+
+
+def split_python_spec(spec: str | None) -> tuple[str | None, str | None]:
+    if not spec:
+        return None, None
+    for separator in ("===", "==", "@"):
+        if separator in spec:
+            name, version = spec.split(separator, 1)
+            return name.strip() or None, version.strip() or None
+    match = re.match(r"^([A-Za-z0-9_.-]+)\s*([<>=!~].+)$", spec)
+    return (match.group(1), match.group(2)) if match else (spec, None)
+
+
+def split_container_ref(value: str) -> tuple[str | None, str | None]:
+    clean = value.strip()
+    if "@sha256:" in clean:
+        name, digest = clean.split("@", 1)
+        return safe_metadata_value(name), safe_metadata_value(digest)
+    last_segment = clean.rsplit("/", 1)[-1]
+    if ":" in last_segment:
+        name, tag = clean.rsplit(":", 1)
+        return safe_metadata_value(name), safe_metadata_value(tag)
+    return safe_metadata_value(clean), None
+
+
+def provenance_version_status(source_type: str, version: str | None, source_ref: str | None) -> str:
+    if source_type in {"local", "remote-url", "unknown"}:
+        return "not-applicable" if source_type != "unknown" else "missing"
+    candidate = str(version or "").strip()
+    if not candidate:
+        return "missing"
+    if source_type == "git":
+        return "locked" if (
+            re.fullmatch(r"[0-9a-fA-F]{12,64}", candidate)
+            or (source_ref is not None and re.search(r"#[0-9a-fA-F]{12,64}$", source_ref))
+        ) else "floating"
+    if candidate.startswith("sha256:") or re.fullmatch(r"[0-9a-fA-F]{12,64}", candidate):
+        return "locked"
+    if re.fullmatch(r"v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?", candidate):
+        return "locked"
+    if source_type == "container" and candidate.lower() not in {"latest", "main", "master", "stable", "edge"}:
+        return "tagged"
+    return "floating"
+
+
+def repository_name(value: str) -> str | None:
+    clean = value.split("#", 1)[0].rstrip("/")
+    name = clean.rsplit("/", 1)[-1]
+    return safe_metadata_value(name[:-4] if name.endswith(".git") else name)
+
+
+def git_reference(value: str) -> str | None:
+    return safe_metadata_value(value.split("#", 1)[1]) if "#" in value else None
+
+
+def safe_local_reference(value: str | None) -> str | None:
+    if not value:
+        return None
+    return redact_evidence(str(value).strip())[:300] or None
+
+
+def local_reference_escapes(value: str, base: Path, project_root: Path) -> bool:
+    normalized = value.strip().replace("\\", "/")
+    if not normalized or normalized.startswith(("http://", "https://", "npm:", "pypi:")):
+        return False
+    if not looks_like_resource_path(normalized):
+        return False
+    try:
+        candidate = Path(normalized)
+        resolved = (candidate if candidate.is_absolute() else base / candidate).resolve()
+    except OSError:
+        return True
+    return resolved != project_root and project_root not in resolved.parents
+
+
+def dedupe_provenance(items: list[AgentProvenance]) -> list[AgentProvenance]:
+    seen: set[tuple[str, str | None, str | None, str | None]] = set()
+    result: list[AgentProvenance] = []
+    for item in items:
+        key = (item.subject, item.package_name, item.package_version, item.source_ref)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def extract_permissions(data: Any, relative_path: str, default_subject: str, asset_type: str) -> list[AgentPermission]:

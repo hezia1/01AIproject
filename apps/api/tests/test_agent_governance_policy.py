@@ -170,8 +170,49 @@ def test_sarif_location_is_standard_and_html_escapes_content() -> None:
     html = build_agent_html_report({
         "summary": {"asset_count": 0, "permission_count": 0, "finding_count": 1},
         "quality_gate": {"decision": "block", "reasons": ["unsafe <reason>"]},
-        "assets": [], "findings": payload,
+        "assets": [{
+            "path": "plugin.json", "asset_type": "plugin-manifest", "integrity_status": "recorded",
+            "file_sha256": "a" * 64, "permission_count": 0, "finding_count": 1,
+            "provenance": [{
+                "subject": "plugin:<unsafe>", "package_name": "demo", "package_version": "latest",
+                "version_status": "floating", "source_type": "git", "source_ref": "https://example.invalid/<repo>",
+                "installation_method": "git", "publisher_claim": "<publisher>", "publisher_status": "claim-only",
+                "issues": ["version-unpinned"],
+            }],
+        }], "findings": payload,
     })
     assert "&lt;agent&gt;" in html
     assert "&lt;reason&gt;" in html
+    assert "&lt;publisher&gt;" in html
     assert "<script>" not in html
+
+
+def test_gate_blocks_unpinned_source_and_integrity_change() -> None:
+    profile = effective_agent_profile({})
+    asset = {
+        "path": "mcp.json",
+        "asset_type": "mcp-config",
+        "integrity_status": "recorded",
+        "provenance": [{"issues": ["version-unpinned"], "version_status": "floating"}],
+    }
+
+    result = evaluate_agent_quality_gate(
+        findings=[{
+            "rule_id": "AGENT.SUPPLY.UNPINNED_VERSION", "severity": "medium", "file_path": "mcp.json",
+            "line_start": 1, "status": "open", "title": "Unpinned",
+        }], permissions=[], coverage=coverage(), profile=profile,
+        assets=[asset], changed_integrity_identities={"mcp-config::mcp.json"},
+    )
+
+    assert result["decision"] == "block"
+    assert result["blocking_asset_count"] == 1
+    assert any("floating dependency versions" in reason for reason in result["reasons"])
+    assert any("integrity digests changed" in reason for reason in result["reasons"])
+
+    accepted = evaluate_agent_quality_gate(
+        findings=[{
+            "rule_id": "AGENT.SUPPLY.UNPINNED_VERSION", "severity": "medium", "file_path": "mcp.json",
+            "line_start": 1, "status": "accepted_risk", "title": "Unpinned",
+        }], permissions=[], coverage=coverage(), profile=profile, assets=[asset],
+    )
+    assert accepted["decision"] == "pass"

@@ -453,6 +453,19 @@ class AgentPermissionResult(BaseModel):
     source: str
 
 
+class AgentProvenanceResult(BaseModel):
+    subject: str
+    package_name: str | None = None
+    package_version: str | None = None
+    source_type: str
+    source_ref: str | None = None
+    installation_method: str
+    version_status: str
+    publisher_claim: str | None = None
+    publisher_status: str
+    issues: list[str] = Field(default_factory=list)
+
+
 class AgentAssetResult(BaseModel):
     path: str
     asset_type: str
@@ -471,6 +484,11 @@ class AgentAssetResult(BaseModel):
     declared_resources: list[str] = Field(default_factory=list)
     declared_prompts: list[str] = Field(default_factory=list)
     permission_count: int = 0
+    provenance: list[AgentProvenanceResult] = Field(default_factory=list)
+    file_sha256: str | None = None
+    directory_sha256: str | None = None
+    integrity_status: str = "unavailable"
+    integrity_issues: list[str] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -545,6 +563,8 @@ class AgentScanDiffSummary(BaseModel):
     permissions_added: int = 0
     permissions_removed: int = 0
     permissions_changed: int = 0
+    source_changes: int = 0
+    integrity_changes: int = 0
 
 
 class AgentScanDiff(BaseModel):

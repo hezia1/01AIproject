@@ -125,13 +125,31 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         previous_permissions = metadata_dict_list(previous_scan.scan_metadata or {}, "permissions") if previous_scan else []
         previous_permission_identities = {governance_permission_identity(item) for item in previous_permissions}
         current_permission_identities = {governance_permission_identity(item) for item in parsed.permissions}
+        previous_assets = metadata_dict_list(previous_scan.scan_metadata or {}, "assets") if previous_scan else []
+        previous_asset_map = {asset_identity(item): item for item in previous_assets}
+        asset_changes = compare_agent_assets(previous_assets, asset_payloads) if previous_scan else []
+        changed_integrity_identities = {
+            item.identity for item in asset_changes
+            if item.change_type == "changed" and any(field in {
+                "file_sha256", "directory_sha256", "integrity_status", "integrity_issues",
+            } for field in item.changes)
+            and bool(previous_asset_map.get(item.identity, {}).get("file_sha256") or previous_asset_map.get(item.identity, {}).get("directory_sha256"))
+        }
+        changed_source_identities = {
+            item.identity for item in asset_changes
+            if item.change_type == "changed" and "provenance" in item.changes
+            and "provenance" in previous_asset_map.get(item.identity, {})
+        }
         quality_gate = evaluate_agent_quality_gate(
             findings=finding_payloads,
             permissions=parsed.permissions,
+            assets=asset_payloads,
             coverage=coverage.model_dump(),
             profile=profile,
             new_finding_identities=current_finding_identities - previous_finding_identities,
             expanded_permission_identities=current_permission_identities - previous_permission_identities,
+            changed_integrity_identities=changed_integrity_identities,
+            changed_source_identities=changed_source_identities,
         )
 
         scan.status = ScanStatus.completed.value
@@ -507,7 +525,27 @@ def asset_to_dict(asset: AgentAsset) -> dict[str, object]:
         "declared_resources": asset.declared_resources,
         "declared_prompts": asset.declared_prompts,
         "permission_count": len(asset.permissions),
+        "provenance": [provenance_to_dict(item) for item in asset.provenance],
+        "file_sha256": asset.file_sha256,
+        "directory_sha256": asset.directory_sha256,
+        "integrity_status": asset.integrity_status,
+        "integrity_issues": asset.integrity_issues,
         "metadata": asset.metadata,
+    }
+
+
+def provenance_to_dict(item) -> dict[str, object]:
+    return {
+        "subject": item.subject,
+        "package_name": item.package_name,
+        "package_version": item.package_version,
+        "source_type": item.source_type,
+        "source_ref": item.source_ref,
+        "installation_method": item.installation_method,
+        "version_status": item.version_status,
+        "publisher_claim": item.publisher_claim,
+        "publisher_status": item.publisher_status,
+        "issues": item.issues,
     }
 
 
@@ -606,6 +644,10 @@ def build_agent_scan_diff(
             permissions_added=sum(item.change_type == "added" for item in permission_changes),
             permissions_removed=sum(item.change_type == "removed" for item in permission_changes),
             permissions_changed=sum(item.change_type == "changed" for item in permission_changes),
+            source_changes=sum("provenance" in item.changes for item in asset_changes),
+            integrity_changes=sum(any(field in {
+                "file_sha256", "directory_sha256", "integrity_status", "integrity_issues",
+            } for field in item.changes) for item in asset_changes),
         ),
         assets=asset_changes,
         permissions=permission_changes,
@@ -661,6 +703,11 @@ def changed_asset_fields(previous: dict[str, object], current: dict[str, object]
         "declared_resources",
         "declared_prompts",
         "permission_count",
+        "provenance",
+        "file_sha256",
+        "directory_sha256",
+        "integrity_status",
+        "integrity_issues",
     )
     return [field for field in fields if previous.get(field) != current.get(field)]
 
@@ -765,6 +812,10 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
     finding_payloads = [finding_record_report_payload(item) for item in findings]
     assets = metadata_dict_list(metadata, "assets")
     permissions = metadata_dict_list(metadata, "permissions")
+    provenance_count = sum(
+        len(item.get("provenance")) if isinstance(item.get("provenance"), list) else 0
+        for item in assets
+    )
     severity = {key: sum(1 for item in findings if item.severity == key) for key in ("critical", "high", "medium", "low", "info")}
     status = {}
     for item in findings:
@@ -788,6 +839,9 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "rule_version": metadata.get("rule_version"),
         "summary": {
             "asset_count": len(assets),
+            "provenance_count": provenance_count,
+            "integrity_recorded_count": sum(item.get("integrity_status") == "recorded" for item in assets),
+            "integrity_partial_count": sum(item.get("integrity_status") == "partial" for item in assets),
             "permission_count": len(permissions),
             "finding_count": len(findings),
             "suppressed_count": int(metadata.get("suppressed_count") or 0),
@@ -806,6 +860,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
             "The report is generated from local static configuration and instruction analysis.",
             "It does not connect to or execute Agent, MCP Server, plugin, or tool code.",
             "Approved exceptions and allowlists are governance decisions and remain visible in finding status and profile audit history.",
+            "SHA-256 values prove only that local bytes were stable between scans; they do not authenticate a publisher or remote package.",
         ],
     }
 

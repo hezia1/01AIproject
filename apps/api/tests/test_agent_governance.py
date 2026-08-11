@@ -77,3 +77,16 @@ def test_first_agent_scan_has_no_fabricated_comparison() -> None:
     assert result.base_scan_id is None
     assert result.assets == []
     assert result.permissions == []
+
+
+def test_agent_scan_diff_counts_source_and_integrity_changes() -> None:
+    now = datetime(2026, 8, 11, 12, 0, 0)
+    common = {"path": "mcp.json", "asset_type": "mcp-config", "format": "json", "parser": "structured-json", "status": "parsed", "checks": []}
+    base = scan({"assets": [{**common, "file_sha256": "a" * 64, "provenance": [{"source_ref": "npm:server", "package_version": "1.0.0"}]}], "permissions": []}, now)
+    target = scan({"assets": [{**common, "file_sha256": "b" * 64, "provenance": [{"source_ref": "npm:server", "package_version": "2.0.0"}]}], "permissions": []}, now + timedelta(minutes=5))
+
+    result = build_agent_scan_diff(uuid4(), target, base)
+
+    assert result.summary.source_changes == 1
+    assert result.summary.integrity_changes == 1
+    assert {"provenance", "file_sha256"} <= set(result.assets[0].changes)

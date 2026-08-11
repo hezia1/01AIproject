@@ -62,10 +62,14 @@ def main() -> int:
 
     baseline_findings = baseline.get("findings") if isinstance(baseline.get("findings"), list) else []
     baseline_permissions = baseline.get("permissions") if isinstance(baseline.get("permissions"), list) else []
+    baseline_assets = baseline.get("assets") if isinstance(baseline.get("assets"), list) else []
     previous_finding_ids = {finding_identity(item) for item in baseline_findings if isinstance(item, dict)}
     previous_permission_ids = {permission_identity(item) for item in baseline_permissions if isinstance(item, dict)}
     new_finding_ids = {finding_identity(item) for item in finding_payloads} - previous_finding_ids
     expanded_permission_ids = {permission_identity(item) for item in permission_payloads} - previous_permission_ids
+    changed_integrity_ids, changed_source_ids = changed_asset_evidence(
+        [item for item in baseline_assets if isinstance(item, dict)], asset_payloads
+    ) if args.baseline else (set(), set())
     gate = evaluate_agent_quality_gate(
         findings=finding_payloads,
         permissions=output.permissions,
@@ -73,6 +77,9 @@ def main() -> int:
         profile=profile,
         new_finding_identities=new_finding_ids,
         expanded_permission_identities=expanded_permission_ids,
+        assets=asset_payloads,
+        changed_integrity_identities=changed_integrity_ids,
+        changed_source_identities=changed_source_ids,
     )
     scan_id = str(uuid4())
     report = {
@@ -83,6 +90,7 @@ def main() -> int:
         "rule_version": output.rule_version,
         "summary": {
             "asset_count": len(asset_payloads),
+            "provenance_count": sum(len(item.get("provenance") or []) for item in asset_payloads),
             "permission_count": len(permission_payloads),
             "finding_count": len(finding_payloads),
             "suppressed_count": suppressed_count,
@@ -197,8 +205,48 @@ def asset_payloads_with_counts(assets: list[AgentAsset], findings: list[AgentFin
         "declared_resources": asset.declared_resources,
         "declared_prompts": asset.declared_prompts,
         "permission_count": len(asset.permissions),
+        "provenance": [{
+            "subject": item.subject,
+            "package_name": item.package_name,
+            "package_version": item.package_version,
+            "source_type": item.source_type,
+            "source_ref": item.source_ref,
+            "installation_method": item.installation_method,
+            "version_status": item.version_status,
+            "publisher_claim": item.publisher_claim,
+            "publisher_status": item.publisher_status,
+            "issues": item.issues,
+        } for item in asset.provenance],
+        "file_sha256": asset.file_sha256,
+        "directory_sha256": asset.directory_sha256,
+        "integrity_status": asset.integrity_status,
+        "integrity_issues": asset.integrity_issues,
         "metadata": asset.metadata,
     } for asset in assets]
+
+
+def changed_asset_evidence(
+    baseline: list[dict[str, object]],
+    current: list[dict[str, object]],
+) -> tuple[set[str], set[str]]:
+    baseline_map = {asset_identity(item): item for item in baseline}
+    current_map = {asset_identity(item): item for item in current}
+    integrity: set[str] = set()
+    source: set[str] = set()
+    for identity in baseline_map.keys() & current_map.keys():
+        previous = baseline_map[identity]
+        target = current_map[identity]
+        if (previous.get("file_sha256") or previous.get("directory_sha256")) and any(previous.get(field) != target.get(field) for field in (
+            "file_sha256", "directory_sha256", "integrity_status", "integrity_issues",
+        )):
+            integrity.add(identity)
+        if "provenance" in previous and previous.get("provenance") != target.get("provenance"):
+            source.add(identity)
+    return integrity, source
+
+
+def asset_identity(asset: dict[str, object]) -> str:
+    return f"{asset.get('asset_type') or 'unknown'}::{asset.get('path') or ''}"
 
 
 def coverage_payload(assets: list[AgentAsset], skipped: list[dict[str, str]], payloads: list[dict[str, object]]) -> dict[str, object]:
