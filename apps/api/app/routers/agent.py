@@ -41,6 +41,7 @@ from app.services.agent_governance import (
     update_agent_profile,
 )
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree
+from app.services.agent_intelligence import analyze_agent_intelligence
 
 router = APIRouter()
 
@@ -76,7 +77,10 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
     try:
         previous_scan = latest_completed_agent_scan(db, str(payload.project_id))
         parsed = scan_agent_tree(source_path, list(profile.get("excluded_paths") or []))
-        governed_findings = filter_agent_findings(parsed.findings, profile)
+        intelligence_output = analyze_agent_intelligence(parsed.assets)
+        governed_findings = filter_agent_findings(
+            [*parsed.findings, *intelligence_output.findings], profile
+        )
         coverage = build_agent_coverage(parsed.assets, len(parsed.skipped_files))
         asset_payloads = governed_asset_payloads(parsed.assets, governed_findings)
         coverage.findings_by_asset_type = findings_by_asset_type(asset_payloads)
@@ -98,7 +102,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
                 "description": finding.description,
                 "trust_impact": finding.trust_impact,
                 "review_status": "not_reviewed",
-                "analysis_source": "local_rule",
+                "analysis_source": "local_intelligence" if finding.rule_id.startswith("AGENT.INTEL.") else "local_rule",
                 "governance_exception_id": exception_id,
                 "governance_disposition": disposition,
             }
@@ -150,6 +154,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             expanded_permission_identities=current_permission_identities - previous_permission_identities,
             changed_integrity_identities=changed_integrity_identities,
             changed_source_identities=changed_source_identities,
+            intelligence=intelligence_output.report,
         )
 
         scan.status = ScanStatus.completed.value
@@ -167,6 +172,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             "skipped_files": parsed.skipped_files,
             "agent_profile": profile,
             "quality_gate": quality_gate,
+            "intelligence": intelligence_output.report,
         }
         db.commit()
         for record in records:
@@ -194,6 +200,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         rule_version=parsed.rule_version,
         suppressed_count=suppressed_count,
         quality_gate=quality_gate,
+        intelligence=intelligence_output.report,
     )
 
 
@@ -595,6 +602,7 @@ def agent_scan_snapshot(project_id: UUID, scan: ScanTaskRecord) -> AgentScanSnap
         permissions=[AgentPermissionResult(**item) for item in permissions if isinstance(item, dict)],
         skipped_files=[item for item in skipped_files if isinstance(item, dict)],
         quality_gate=metadata.get("quality_gate") if isinstance(metadata.get("quality_gate"), dict) else {},
+        intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
     )
 
 
@@ -853,6 +861,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "permissions": permissions,
         "findings": finding_payloads,
         "quality_gate": metadata.get("quality_gate") or {},
+        "intelligence": metadata.get("intelligence") or {},
         "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
         "profile": report_profile_summary(metadata.get("agent_profile")),
         "skipped_files": metadata.get("skipped_files") or [],
@@ -861,6 +870,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
             "It does not connect to or execute Agent, MCP Server, plugin, or tool code.",
             "Approved exceptions and allowlists are governance decisions and remain visible in finding status and profile audit history.",
             "SHA-256 values prove only that local bytes were stable between scans; they do not authenticate a publisher or remote package.",
+            "Offline intelligence results are limited to configured local sources; checked-no-match is not proof that a package is vulnerability-free.",
         ],
     }
 

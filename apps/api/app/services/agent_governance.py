@@ -41,6 +41,12 @@ DEFAULT_AGENT_PROFILE: dict[str, object] = {
         "block_partial_integrity": True,
         "block_integrity_changes": True,
         "block_source_changes": True,
+        "block_known_vulnerabilities": True,
+        "block_malicious_packages": True,
+        "block_package_confusion": True,
+        "block_intelligence_gaps": False,
+        "block_stale_intelligence": False,
+        "max_intelligence_age_days": 30,
     },
 }
 
@@ -205,6 +211,7 @@ def evaluate_agent_quality_gate(
     assets: list[dict[str, object]] | None = None,
     changed_integrity_identities: set[str] | None = None,
     changed_source_identities: set[str] | None = None,
+    intelligence: dict[str, object] | None = None,
 ) -> dict[str, object]:
     gate = profile.get("quality_gate") if isinstance(profile.get("quality_gate"), dict) else normalize_quality_gate(None)
     if not gate.get("enabled"):
@@ -229,6 +236,46 @@ def evaluate_agent_quality_gate(
         reasons.append(f"{int(coverage.get('failed_asset_count') or 0)} Agent assets failed structured parsing")
     if gate.get("block_skipped_files") and int(coverage.get("skipped_file_count") or 0) > 0:
         reasons.append(f"{int(coverage.get('skipped_file_count') or 0)} Agent files were skipped")
+
+    intelligence_rule_policy = {
+        "AGENT.INTEL.KNOWN_VULNERABILITY": "block_known_vulnerabilities",
+        "AGENT.INTEL.MALICIOUS_PACKAGE": "block_malicious_packages",
+        "AGENT.INTEL.PACKAGE_CONFUSION": "block_package_confusion",
+    }
+    blocking_intelligence = [
+        item for item in active_findings
+        if gate.get(intelligence_rule_policy.get(str(item.get("rule_id") or ""), ""))
+    ]
+    intelligence_reason_labels = {
+        "AGENT.INTEL.KNOWN_VULNERABILITY": "known vulnerable Agent dependencies",
+        "AGENT.INTEL.MALICIOUS_PACKAGE": "local malicious-package intelligence matches",
+        "AGENT.INTEL.PACKAGE_CONFUSION": "protected-package name confusion signals",
+    }
+    for rule_id, label in intelligence_reason_labels.items():
+        count = sum(str(item.get("rule_id") or "") == rule_id for item in blocking_intelligence)
+        if count:
+            reasons.append(f"{count} {label} are present")
+    intelligence_summary = intelligence.get("summary") if isinstance(intelligence, dict) and isinstance(intelligence.get("summary"), dict) else {}
+    if gate.get("block_intelligence_gaps"):
+        gap_count = sum(int(intelligence_summary.get(key) or 0) for key in (
+            "not_covered_count", "version_unresolved_count", "unsupported_count",
+        ))
+        if gap_count:
+            reasons.append(f"{gap_count} Agent package coordinates lack complete local intelligence coverage")
+    stale_sources: list[str] = []
+    if gate.get("block_stale_intelligence") and isinstance(intelligence, dict):
+        sources = intelligence.get("sources") if isinstance(intelligence.get("sources"), dict) else {}
+        maximum_age = int(gate.get("max_intelligence_age_days") or 30)
+        for source_name in ("osv_mirror", "threat_intelligence"):
+            source = sources.get(source_name) if isinstance(sources.get(source_name), dict) else {}
+            age = source.get("age_days")
+            if source.get("status") == "available" and (not isinstance(age, int) or age > maximum_age):
+                stale_sources.append(source_name)
+        if stale_sources:
+            reasons.append(f"{len(stale_sources)} configured Agent intelligence sources exceed the freshness policy")
+
+    blocking_finding_map = {finding_identity(item): item for item in [*blocking_findings, *blocking_intelligence]}
+    blocking_findings = list(blocking_finding_map.values())
 
     expanded_ids = expanded_permission_identities or set()
     unapproved_permissions: list[dict[str, object]] = []
@@ -320,7 +367,14 @@ def evaluate_agent_quality_gate(
         reasons.append(f"{source_change_count} Agent asset source declarations changed from the previous scan")
     decision = "block" if reasons else "pass"
     return gate_result(
-        decision, reasons, blocking_findings, [*expanded_permissions, *unapproved_permissions], gate, blocked_assets
+        decision,
+        reasons,
+        blocking_findings,
+        [*expanded_permissions, *unapproved_permissions],
+        gate,
+        blocked_assets,
+        blocking_intelligence,
+        stale_sources,
     )
 
 
@@ -331,6 +385,8 @@ def gate_result(
     permissions: list[dict[str, object]],
     policy: dict[str, object],
     assets: list[dict[str, object]] | None = None,
+    intelligence_findings: list[dict[str, object]] | None = None,
+    stale_intelligence_sources: list[str] | None = None,
 ) -> dict[str, object]:
     deduped_permissions = {permission_identity(item): item for item in permissions}
     return {
@@ -340,9 +396,12 @@ def gate_result(
         "blocking_finding_count": len(findings),
         "blocking_permission_count": len(deduped_permissions),
         "blocking_asset_count": len(assets or []),
+        "blocking_intelligence_count": len(intelligence_findings or []),
         "blocked_findings": findings[:100],
         "blocked_permissions": list(deduped_permissions.values())[:100],
         "blocked_assets": (assets or [])[:100],
+        "blocked_intelligence": (intelligence_findings or [])[:100],
+        "stale_intelligence_sources": stale_intelligence_sources or [],
         "policy": policy,
         "limitations": [
             "The gate evaluates static declarations and findings; it does not execute Agent, MCP, plugin, or tool code.",
@@ -390,6 +449,9 @@ def build_agent_html_report(report: dict[str, object]) -> str:
     gate = report.get("quality_gate") if isinstance(report.get("quality_gate"), dict) else {}
     assets = report.get("assets") if isinstance(report.get("assets"), list) else []
     findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    intelligence = report.get("intelligence") if isinstance(report.get("intelligence"), dict) else {}
+    intelligence_summary = intelligence.get("summary") if isinstance(intelligence.get("summary"), dict) else {}
+    intelligence_packages = intelligence.get("packages") if isinstance(intelligence.get("packages"), list) else []
     asset_rows = "".join(
         f"<tr><td>{escape(str(item.get('path') or '-'))}</td><td>{escape(str(item.get('asset_type') or '-'))}</td><td>{escape(str(item.get('integrity_status') or '-'))}<br><small>{escape(str(item.get('directory_sha256') or item.get('file_sha256') or '-'))[:20]}</small></td><td>{len(item.get('provenance') or [])}</td><td>{int(item.get('permission_count') or 0)}</td><td>{int(item.get('finding_count') or 0)}</td></tr>"
         for item in assets if isinstance(item, dict)
@@ -404,10 +466,14 @@ def build_agent_html_report(report: dict[str, object]) -> str:
         f"<tr><td>{escape(str(item.get('severity') or '-'))}</td><td>{escape(str(item.get('rule_id') or '-'))}</td><td>{escape(str(item.get('title') or '-'))}</td><td>{escape(str(item.get('file_path') or '-'))}</td><td>{escape(str(item.get('status') or '-'))}</td></tr>"
         for item in findings if isinstance(item, dict)
     )
+    intelligence_rows = "".join(
+        f"<tr><td>{escape(str(item.get('package_name') or '-'))}<br><small>{escape(str(item.get('ecosystem') or '-'))} · {escape(str(item.get('asset_path') or '-'))}</small></td><td>{escape(str(item.get('package_version') or 'unresolved'))}</td><td>{escape(str(item.get('lookup_status') or '-'))}<br><small>{escape(', '.join(str(source) for source in (item.get('coverage_sources') if isinstance(item.get('coverage_sources'), list) else [])))}</small></td><td>{escape(', '.join(str(match.get('id') or '-') for match in (item.get('vulnerabilities') if isinstance(item.get('vulnerabilities'), list) else []) if isinstance(match, dict))) or '-'}</td><td>{len(item.get('threats') or []) + len(item.get('confusion_signals') or [])}</td></tr>"
+        for item in intelligence_packages if isinstance(item, dict)
+    )
     gate_reasons = "".join(
         f"<li>{escape(str(reason))}</li>" for reason in gate.get("reasons", [])
     ) if isinstance(gate.get("reasons"), list) else ""
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；来源：{int(summary.get('provenance_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产完整性</h2><table><thead><tr><th>路径</th><th>类型</th><th>完整性 / SHA-256</th><th>来源</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>来源与安装声明</h2><table><thead><tr><th>资产</th><th>主体</th><th>包 / 版本</th><th>来源</th><th>安装方式</th><th>发布者声明</th><th>问题</th></tr></thead><tbody>{provenance_rows}</tbody></table><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。</p></body></html>"""
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；来源：{int(summary.get('provenance_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>本地情报包坐标：{int(intelligence_summary.get('coordinate_count') or 0)}；漏洞包：{int(intelligence_summary.get('vulnerable_package_count') or 0)}；恶意包命中：{int(intelligence_summary.get('malicious_match_count') or 0)}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产完整性</h2><table><thead><tr><th>路径</th><th>类型</th><th>完整性 / SHA-256</th><th>来源</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>来源与安装声明</h2><table><thead><tr><th>资产</th><th>主体</th><th>包 / 版本</th><th>来源</th><th>安装方式</th><th>发布者声明</th><th>问题</th></tr></thead><tbody>{provenance_rows}</tbody></table><h2>离线漏洞与恶意包情报</h2><table><thead><tr><th>包 / 资产</th><th>版本</th><th>查询状态 / 覆盖源</th><th>漏洞</th><th>威胁信号</th></tr></thead><tbody>{intelligence_rows}</tbody></table><p>“checked_no_match”只表示已配置的本地来源未匹配该精确版本，不代表组件无漏洞。</p><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策、本地情报匹配和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。</p></body></html>"""
 
 
 def finding_identity(finding: AgentFinding | dict[str, object]) -> str:
@@ -586,6 +652,11 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
         "block_partial_integrity",
         "block_integrity_changes",
         "block_source_changes",
+        "block_known_vulnerabilities",
+        "block_malicious_packages",
+        "block_package_confusion",
+        "block_intelligence_gaps",
+        "block_stale_intelligence",
     ):
         if strict and not isinstance(gate[key], bool):
             raise ValueError(f"quality_gate.{key} must be a boolean")
@@ -595,6 +666,7 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
         raise ValueError("quality_gate.threshold is invalid")
     gate["threshold"] = threshold
     gate["max_blocking_findings"] = bounded_int(gate.get("max_blocking_findings"), 0, 0, 10_000)
+    gate["max_intelligence_age_days"] = bounded_int(gate.get("max_intelligence_age_days"), 30, 1, 3650)
     return gate
 
 

@@ -514,6 +514,7 @@ class AgentScanResult(BaseModel):
     rule_version: str
     suppressed_count: int = 0
     quality_gate: dict[str, object] = Field(default_factory=dict)
+    intelligence: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentScanHistoryItem(BaseModel):
@@ -539,6 +540,7 @@ class AgentScanSnapshot(BaseModel):
     permissions: list[AgentPermissionResult] = Field(default_factory=list)
     skipped_files: list[dict[str, str]] = Field(default_factory=list)
     quality_gate: dict[str, object] = Field(default_factory=dict)
+    intelligence: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentAssetDiffItem(BaseModel):
