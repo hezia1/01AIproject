@@ -25,6 +25,7 @@ from app.services.agent_governance import (  # noqa: E402
 )
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree  # noqa: E402
 from app.services.agent_intelligence import analyze_agent_intelligence  # noqa: E402
+from app.services.agent_dataflow import analyze_agent_dataflow  # noqa: E402
 
 
 def main() -> int:
@@ -50,7 +51,12 @@ def main() -> int:
         parser.error(str(exc))
 
     intelligence_output = analyze_agent_intelligence(output.assets)
-    findings = filter_agent_findings([*output.findings, *intelligence_output.findings], profile)
+    dataflow_output = analyze_agent_dataflow(
+        output.assets, [*output.findings, *intelligence_output.findings], profile
+    )
+    findings = filter_agent_findings(
+        [*output.findings, *intelligence_output.findings, *dataflow_output.findings], profile
+    )
     finding_payloads = []
     suppressed_count = 0
     for finding in findings:
@@ -83,6 +89,7 @@ def main() -> int:
         changed_integrity_identities=changed_integrity_ids,
         changed_source_identities=changed_source_ids,
         intelligence=intelligence_output.report,
+        dataflow=dataflow_output.report,
     )
     scan_id = str(uuid4())
     report = {
@@ -104,6 +111,7 @@ def main() -> int:
         "findings": finding_payloads,
         "quality_gate": gate,
         "intelligence": intelligence_output.report,
+        "dataflow": dataflow_output.report,
         "profile": profile,
         "skipped_files": output.skipped_files,
         "baseline": {"provided": bool(args.baseline), "path": str(Path(args.baseline).resolve()) if args.baseline else None},
@@ -112,6 +120,7 @@ def main() -> int:
             "Without --baseline, every current finding and permission is treated as new for gate evaluation.",
             "All evidence emitted by the scanner uses its credential-redaction path.",
             "Offline intelligence checks use only bundled rules and explicitly configured local files; checked-no-match is not a clean bill of health.",
+            "Data-flow paths are static, confidence-labelled relationships and do not prove observed runtime behavior.",
         ],
     }
     write_text(args.json_path, json.dumps(report, ensure_ascii=False, indent=2))
@@ -123,6 +132,10 @@ def main() -> int:
         "finding_count": len(finding_payloads),
         "vulnerable_package_count": int((intelligence_output.report.get("summary") or {}).get("vulnerable_package_count") or 0),
         "malicious_match_count": int((intelligence_output.report.get("summary") or {}).get("malicious_match_count") or 0),
+        "high_risk_dataflow_count": sum(
+            int((dataflow_output.report.get("summary") or {}).get(key) or 0)
+            for key in ("critical_path_count", "high_path_count")
+        ),
         "suppressed_count": suppressed_count,
         "quality_gate": gate.get("decision"),
         "failed": gate.get("decision") == "block",

@@ -4,6 +4,15 @@
 
 本文档反映 **2026-08-11** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
+## 2026-08-11 AGENT Prompt → 工具 → 资源静态数据流更新
+
+- AGENT 现在把 Prompt/指令、Agent 资产、工具能力和资源范围建模为节点与有向边，并为每条边记录 `explicit-asset-type`、`explicit-permission`、`co-declared` 或 `conservative-inference` 依据及高/中/低置信度。
+- 同一资产内可形成 `Prompt → Agent → 工具 → 资源` 路径；当可疑指令与高风险工具位于不同配置文件时，只生成明确标记为低置信度的项目级保守推断，不冒充真实运行时调用。
+- 新增 Prompt 到 Shell/进程、文件写入、密钥、网络等敏感能力路径，以及“密钥访问 + 网络外联”的潜在外传路径；每条路径显示已声明审批/资源范围、治理例外和缺失控制。Allowlist/例外不会被当成运行时防护，审批声明也明确标记为尚未验证执行。
+- 数据流 Finding 已接入例外审批、质量门禁、扫描快照、JSON/SARIF/HTML 和离线 CI；默认阻断严重/高风险数据流 Finding。图模型限制为最多 1,000 个节点、2,000 条边和 300 条路径。
+- 前端新增“Prompt → 工具 → 资源静态路径”面板，显示路径序列、证据、来源/工具配置位置、置信度、已有控制和缺失控制。
+- 该能力仍是静态配置模型，不会运行 Agent、调用工具或证明数据真实传输。外部资源在没有方向性配置证据时不会被假定进入模型上下文。
+
 ## 2026-08-11 AGENT 离线漏洞与恶意包情报更新
 
 - AGENT 会把来源证据中的 npm/PyPI 包名和精确版本转换为包坐标与 purl，并复用仓库内置 SCA 漏洞规则和可选本地 OSV 镜像；扫描过程不请求网络。
@@ -124,7 +133,7 @@ npm run dev
 | --- | --- | --- |
 | SCA | 多生态依赖解析、版本解析质量、漏洞情报覆盖证明、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、未验证组件门禁、本地 CI CLI；所有治理和可信度入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树。目标项目没有锁文件/实际环境且离线库不覆盖时，平台会正确给出“部分验证/阻断”，不能给出完整无漏洞结论。 |
 | SAST | 本地规则扫描、项目自定义正则规则、内置及项目自定义 Semgrep YAML 规则包（校验/预检/发布/启停/版本）、固定版 Semgrep 离线增强、Python AST 与有限跨函数污点分析、JS/TS 保守数据流、开放重定向/原始 HTML/XXE 线索、低噪声 Git 历史密钥证据、Git 基线、规则/路径豁免、扫描历史/差异、JSON/HTML/SARIF 导出、项目策略一致的离线 CI、持久化任务队列和 Finding 统一治理；另有可选 DeepSeek 七角色真实模型审计、AI 漏洞发现、证据终审、审计历史和人工修复草案；入口均已在当前 SAST 页面开放。 | 自动写入修复或提交 PR；可执行工具的自治 Agent；跨语言、跨服务、全程序数据流；运行态和业务权限漏洞的完整证明；外部漏洞知识库/RAG 和自动学习；全模块分布式调度。 |
-| AGENT | 识别 Agent 指令、Prompt、Skill、MCP、工具和插件配置；结构化解析 Markdown Frontmatter、JSON、YAML、TOML，归一化资产、权限和审批边界；提取包/版本/来源/安装方式，记录文件及受限本地目录 SHA-256；以严格离线方式关联内置漏洞规则、可选本地 OSV 镜像和可选恶意包/受保护包名情报；比较来源与完整性变化；项目策略、Allowlist、例外审批、质量门禁、审计、JSON/SARIF/HTML 和离线 CI 均已在 AGENT 治理页开放。 | 不运行真实 Agent、不连接 MCP Server、不执行工具调用；本地哈希不等同远端制品认证，发布者仅为声明，本地情报未命中也不等于无漏洞。尚缺数字签名/Registry 身份验证、在线或自动同步情报、复杂 Schema/引用解析、Prompt→工具→资源数据流证明、可解释信任评分、AGENT 专用 AI 复核、可信 IAM 审批和行为回放。 |
+| AGENT | 识别 Agent 指令、Prompt、Skill、MCP、工具和插件配置；结构化解析 Markdown Frontmatter、JSON、YAML、TOML，归一化资产、权限和审批边界；提取包/版本/来源/安装方式，记录文件及受限本地目录 SHA-256；以严格离线方式关联内置漏洞规则、可选本地 OSV 镜像和可选恶意包/受保护包名情报；建立带证据、依据和置信度的 Prompt→工具→资源静态路径；比较来源与完整性变化；项目策略、Allowlist、例外审批、质量门禁、审计、JSON/SARIF/HTML 和离线 CI 均已在 AGENT 治理页开放。 | 不运行真实 Agent、不连接 MCP Server、不执行工具调用；静态路径不等于运行时数据流证明，本地哈希不等同远端制品认证，发布者仅为声明，本地情报未命中也不等于无漏洞。尚缺数字签名/Registry 身份验证、在线或自动同步情报、复杂 Schema/引用解析、跨服务全程序数据流、可解释信任评分、AGENT 专用 AI 复核、可信 IAM 审批和行为回放。 |
 | DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
 | SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
 | ASPM / 治理 | 汇总模块状态、组件、Finding、DAST、SANDBOX、扫描任务；证据图谱、攻击链、整改字段、复测对比、项目报告和知识中枢均已可见。 | 项目级 CVSS/EPSS/资产暴露面/业务权重风险模型、趋势与 SLA、工单与审批、图数据库/语义推理、全局审计与后台任务。 |
@@ -182,7 +191,7 @@ Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、
 ## 其他模块的接口与实际边界
 
 - SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET /api/sast/ai-health`、`POST /api/sast/ai-health/test`、`GET /api/sast/projects/{project_id}/agent-runs`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`GET/POST/PATCH /api/sast/projects/{project_id}/rules`、`POST /api/sast/rules/validate`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/projects/{project_id}/ci-config`、`GET /api/sast/tool-health`。基础扫描使用本地规则/静态分析；项目启用 AI 后，Agent 复核会真实调用 DeepSeek 七个角色，并按证据与置信度门槛写回结果。
-- AGENT：`POST /api/agent/scan`；`GET /api/agent/projects/{project_id}/findings|scan-history|snapshot|scan-diff|gate|report|sarif|report.html|ci-config`；`GET/PATCH /api/agent/projects/{project_id}/profile`；`POST /api/agent/projects/{project_id}/exceptions`；`PATCH /api/agent/projects/{project_id}/exceptions/{exception_id}`。扫描路径必须位于项目配置的源码目录内；仅返回最新完成批次 Finding，并保存资产、权限、情报覆盖、策略、门禁和批次历史。只分析本地配置、文本和本地情报文件，不联网、不连接或执行 Agent/MCP/插件，本地规则命中也不等于已经完成人工或 AI 复核。
+- AGENT：`POST /api/agent/scan`；`GET /api/agent/projects/{project_id}/findings|scan-history|snapshot|scan-diff|gate|report|sarif|report.html|ci-config`；`GET/PATCH /api/agent/projects/{project_id}/profile`；`POST /api/agent/projects/{project_id}/exceptions`；`PATCH /api/agent/projects/{project_id}/exceptions/{exception_id}`。扫描路径必须位于项目配置的源码目录内；仅返回最新完成批次 Finding，并保存资产、权限、情报覆盖、静态数据流图/路径、策略、门禁和批次历史。只分析本地配置、文本和本地情报文件，不联网、不连接或执行 Agent/MCP/插件；规则或静态路径命中也不等于已经完成人工、AI 或运行时复核。
 - AGENT 单文件上限为 512 KiB，单资产最多持久化 500 条去重权限；超过上限会在快照元数据和前端资产结果中明确显示截断数量。
 - DAST：`POST /api/dast/probe`、`POST /api/dast/validations`、`GET /api/dast/projects/{project_id}/validations`。基础检查只验证 HTTP/HTTPS、状态、耗时、Server Header 和基础安全响应头；不能证明 SQL 注入、鉴权绕过等业务漏洞可利用。
 - SANDBOX：`POST /api/sandbox/run`、`POST /api/sandbox/evidence`、`GET /api/sandbox/projects/{project_id}/evidence`。默认使用受限 Docker 容器；执行摘要和隔离策略不等同系统级行为取证。

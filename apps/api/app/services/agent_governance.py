@@ -47,6 +47,7 @@ DEFAULT_AGENT_PROFILE: dict[str, object] = {
         "block_intelligence_gaps": False,
         "block_stale_intelligence": False,
         "max_intelligence_age_days": 30,
+        "block_high_risk_dataflow_paths": True,
     },
 }
 
@@ -212,6 +213,7 @@ def evaluate_agent_quality_gate(
     changed_integrity_identities: set[str] | None = None,
     changed_source_identities: set[str] | None = None,
     intelligence: dict[str, object] | None = None,
+    dataflow: dict[str, object] | None = None,
 ) -> dict[str, object]:
     gate = profile.get("quality_gate") if isinstance(profile.get("quality_gate"), dict) else normalize_quality_gate(None)
     if not gate.get("enabled"):
@@ -275,6 +277,20 @@ def evaluate_agent_quality_gate(
             reasons.append(f"{len(stale_sources)} configured Agent intelligence sources exceed the freshness policy")
 
     blocking_finding_map = {finding_identity(item): item for item in [*blocking_findings, *blocking_intelligence]}
+    dataflow_rule_ids = {
+        "AGENT.FLOW.POTENTIAL_SECRET_EXFILTRATION",
+        "AGENT.FLOW.UNTRUSTED_TO_HIGH_RISK_TOOL",
+        "AGENT.FLOW.PROMPT_TO_SENSITIVE_RESOURCE",
+    }
+    blocking_dataflow = [
+        item for item in active_findings
+        if gate.get("block_high_risk_dataflow_paths")
+        and str(item.get("rule_id") or "") in dataflow_rule_ids
+        and str(item.get("severity") or "") in {"critical", "high"}
+    ]
+    if blocking_dataflow:
+        reasons.append(f"{len(blocking_dataflow)} high-risk Prompt-to-tool-to-resource paths are present")
+    blocking_finding_map.update({finding_identity(item): item for item in blocking_dataflow})
     blocking_findings = list(blocking_finding_map.values())
 
     expanded_ids = expanded_permission_identities or set()
@@ -375,6 +391,8 @@ def evaluate_agent_quality_gate(
         blocked_assets,
         blocking_intelligence,
         stale_sources,
+        blocking_dataflow,
+        dataflow.get("summary") if isinstance(dataflow, dict) and isinstance(dataflow.get("summary"), dict) else {},
     )
 
 
@@ -387,6 +405,8 @@ def gate_result(
     assets: list[dict[str, object]] | None = None,
     intelligence_findings: list[dict[str, object]] | None = None,
     stale_intelligence_sources: list[str] | None = None,
+    dataflow_findings: list[dict[str, object]] | None = None,
+    dataflow_summary: dict[str, object] | None = None,
 ) -> dict[str, object]:
     deduped_permissions = {permission_identity(item): item for item in permissions}
     return {
@@ -397,11 +417,14 @@ def gate_result(
         "blocking_permission_count": len(deduped_permissions),
         "blocking_asset_count": len(assets or []),
         "blocking_intelligence_count": len(intelligence_findings or []),
+        "blocking_dataflow_count": len(dataflow_findings or []),
         "blocked_findings": findings[:100],
         "blocked_permissions": list(deduped_permissions.values())[:100],
         "blocked_assets": (assets or [])[:100],
         "blocked_intelligence": (intelligence_findings or [])[:100],
         "stale_intelligence_sources": stale_intelligence_sources or [],
+        "blocked_dataflow": (dataflow_findings or [])[:100],
+        "dataflow_summary": dataflow_summary or {},
         "policy": policy,
         "limitations": [
             "The gate evaluates static declarations and findings; it does not execute Agent, MCP, plugin, or tool code.",
@@ -452,6 +475,9 @@ def build_agent_html_report(report: dict[str, object]) -> str:
     intelligence = report.get("intelligence") if isinstance(report.get("intelligence"), dict) else {}
     intelligence_summary = intelligence.get("summary") if isinstance(intelligence.get("summary"), dict) else {}
     intelligence_packages = intelligence.get("packages") if isinstance(intelligence.get("packages"), list) else []
+    dataflow = report.get("dataflow") if isinstance(report.get("dataflow"), dict) else {}
+    dataflow_summary = dataflow.get("summary") if isinstance(dataflow.get("summary"), dict) else {}
+    dataflow_paths = dataflow.get("paths") if isinstance(dataflow.get("paths"), list) else []
     asset_rows = "".join(
         f"<tr><td>{escape(str(item.get('path') or '-'))}</td><td>{escape(str(item.get('asset_type') or '-'))}</td><td>{escape(str(item.get('integrity_status') or '-'))}<br><small>{escape(str(item.get('directory_sha256') or item.get('file_sha256') or '-'))[:20]}</small></td><td>{len(item.get('provenance') or [])}</td><td>{int(item.get('permission_count') or 0)}</td><td>{int(item.get('finding_count') or 0)}</td></tr>"
         for item in assets if isinstance(item, dict)
@@ -470,10 +496,14 @@ def build_agent_html_report(report: dict[str, object]) -> str:
         f"<tr><td>{escape(str(item.get('package_name') or '-'))}<br><small>{escape(str(item.get('ecosystem') or '-'))} · {escape(str(item.get('asset_path') or '-'))}</small></td><td>{escape(str(item.get('package_version') or 'unresolved'))}</td><td>{escape(str(item.get('lookup_status') or '-'))}<br><small>{escape(', '.join(str(source) for source in (item.get('coverage_sources') if isinstance(item.get('coverage_sources'), list) else [])))}</small></td><td>{escape(', '.join(str(match.get('id') or '-') for match in (item.get('vulnerabilities') if isinstance(item.get('vulnerabilities'), list) else []) if isinstance(match, dict))) or '-'}</td><td>{len(item.get('threats') or []) + len(item.get('confusion_signals') or [])}</td></tr>"
         for item in intelligence_packages if isinstance(item, dict)
     )
+    dataflow_rows = "".join(
+        f"<tr><td>{escape(str(item.get('severity') or '-'))}<br><small>{escape(str(item.get('confidence') or '-'))} confidence</small></td><td>{escape(str(item.get('title') or '-'))}<br><small>{escape(str(item.get('asset_path') or '-'))}</small></td><td>{escape(str(item.get('capability') or '-'))}<br><small>{escape(str(item.get('resource_type') or '-'))}: {escape(str(item.get('resource_scope') or '-'))}</small></td><td>{escape(', '.join(str(control.get('type') or '-') for control in (item.get('controls') if isinstance(item.get('controls'), list) else []) if isinstance(control, dict))) or '-'}</td><td>{escape(', '.join(str(value) for value in (item.get('missing_controls') if isinstance(item.get('missing_controls'), list) else []))) or '-'}</td></tr>"
+        for item in dataflow_paths if isinstance(item, dict)
+    )
     gate_reasons = "".join(
         f"<li>{escape(str(reason))}</li>" for reason in gate.get("reasons", [])
     ) if isinstance(gate.get("reasons"), list) else ""
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；来源：{int(summary.get('provenance_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>本地情报包坐标：{int(intelligence_summary.get('coordinate_count') or 0)}；漏洞包：{int(intelligence_summary.get('vulnerable_package_count') or 0)}；恶意包命中：{int(intelligence_summary.get('malicious_match_count') or 0)}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产完整性</h2><table><thead><tr><th>路径</th><th>类型</th><th>完整性 / SHA-256</th><th>来源</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>来源与安装声明</h2><table><thead><tr><th>资产</th><th>主体</th><th>包 / 版本</th><th>来源</th><th>安装方式</th><th>发布者声明</th><th>问题</th></tr></thead><tbody>{provenance_rows}</tbody></table><h2>离线漏洞与恶意包情报</h2><table><thead><tr><th>包 / 资产</th><th>版本</th><th>查询状态 / 覆盖源</th><th>漏洞</th><th>威胁信号</th></tr></thead><tbody>{intelligence_rows}</tbody></table><p>“checked_no_match”只表示已配置的本地来源未匹配该精确版本，不代表组件无漏洞。</p><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策、本地情报匹配和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。</p></body></html>"""
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；来源：{int(summary.get('provenance_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>本地情报包坐标：{int(intelligence_summary.get('coordinate_count') or 0)}；漏洞包：{int(intelligence_summary.get('vulnerable_package_count') or 0)}；恶意包命中：{int(intelligence_summary.get('malicious_match_count') or 0)}</p><p>静态数据流路径：{int(dataflow_summary.get('path_count') or 0)}；严重/高风险：{int(dataflow_summary.get('critical_path_count') or 0) + int(dataflow_summary.get('high_path_count') or 0)}；保守推断边：{int(dataflow_summary.get('inferred_edge_count') or 0)}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产完整性</h2><table><thead><tr><th>路径</th><th>类型</th><th>完整性 / SHA-256</th><th>来源</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>来源与安装声明</h2><table><thead><tr><th>资产</th><th>主体</th><th>包 / 版本</th><th>来源</th><th>安装方式</th><th>发布者声明</th><th>问题</th></tr></thead><tbody>{provenance_rows}</tbody></table><h2>离线漏洞与恶意包情报</h2><table><thead><tr><th>包 / 资产</th><th>版本</th><th>查询状态 / 覆盖源</th><th>漏洞</th><th>威胁信号</th></tr></thead><tbody>{intelligence_rows}</tbody></table><p>“checked_no_match”只表示已配置的本地来源未匹配该精确版本，不代表组件无漏洞。</p><h2>Prompt → 工具 → 资源静态路径</h2><table><thead><tr><th>等级 / 置信度</th><th>路径 / 资产</th><th>能力 / 资源</th><th>已声明控制</th><th>缺失控制</th></tr></thead><tbody>{dataflow_rows}</tbody></table><p>数据流路径来自静态配置关系；低置信度和 conservative-inference 表示保守推断，不代表已观察到运行时调用或数据传输。</p><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策、本地情报匹配和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。</p></body></html>"""
 
 
 def finding_identity(finding: AgentFinding | dict[str, object]) -> str:
@@ -657,6 +687,7 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
         "block_package_confusion",
         "block_intelligence_gaps",
         "block_stale_intelligence",
+        "block_high_risk_dataflow_paths",
     ):
         if strict and not isinstance(gate[key], bool):
             raise ValueError(f"quality_gate.{key} must be a boolean")

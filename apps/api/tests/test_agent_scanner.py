@@ -1,10 +1,24 @@
 import json
 
-from app.services.agent_scanner import AGENT_RULE_VERSION, scan_agent_tree
+from app.services.agent_scanner import AGENT_RULE_VERSION, extract_declared_security_controls, scan_agent_tree
 
 
 def rule_ids(result):
     return {finding.rule_id for finding in result.findings}
+
+
+def test_declared_security_controls_capture_keys_without_storing_values():
+    controls = extract_declared_security_controls({
+        "guardrails": {"secretFilter": "sensitive-value"},
+        "allowedDomains": ["example.test"],
+        "sandbox": False,
+    })
+
+    assert controls == [
+        {"type": "content-validation-declared", "path": "guardrails"},
+        {"type": "network-destination-allowlist-declared", "path": "allowedDomains"},
+    ]
+    assert "sensitive-value" not in str(controls)
 
 
 def test_only_recognized_agent_assets_are_scanned(tmp_path):

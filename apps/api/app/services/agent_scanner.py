@@ -618,6 +618,7 @@ def extract_agent_asset_details(data: Any, relative_path: str, asset_type: str, 
         "subject_count": len({permission.subject for permission in permissions}),
         "permission_limit": MAX_PERMISSIONS_PER_ASSET,
         "permissions_truncated": max(0, len(extracted_permissions) - len(permissions)),
+        "declared_security_controls": extract_declared_security_controls(data),
     }
     return AgentAssetDetails(
         name=safe_metadata_value(name),
@@ -631,6 +632,53 @@ def extract_agent_asset_details(data: Any, relative_path: str, asset_type: str, 
         permissions=permissions,
         metadata=metadata,
     )
+
+
+def extract_declared_security_controls(data: Any) -> list[dict[str, str]]:
+    control_keys = {
+        "inputvalidation": "content-validation-declared",
+        "contentvalidation": "content-validation-declared",
+        "promptfilter": "content-validation-declared",
+        "inputfilter": "content-validation-declared",
+        "sanitizer": "content-validation-declared",
+        "sanitize": "content-validation-declared",
+        "guardrails": "content-validation-declared",
+        "allowedhosts": "network-destination-allowlist-declared",
+        "alloweddomains": "network-destination-allowlist-declared",
+        "networkallowlist": "network-destination-allowlist-declared",
+        "domainallowlist": "network-destination-allowlist-declared",
+        "urlallowlist": "network-destination-allowlist-declared",
+        "sandbox": "sandbox-isolation-declared",
+        "isolation": "sandbox-isolation-declared",
+        "networkpolicy": "sandbox-isolation-declared",
+        "filesystempolicy": "sandbox-isolation-declared",
+    }
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for path, key, value in walk_json(data):
+        control_type = control_keys.get(normalize_key(str(key)))
+        if control_type is None or not active_control_declaration(value):
+            continue
+        item = (control_type, ".".join(path))
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append({"type": control_type, "path": item[1][:300]})
+        if len(result) >= 50:
+            break
+    return result
+
+
+def active_control_declaration(value: Any) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, str) and value.strip().lower() in {
+        "", "false", "none", "off", "disabled", "never", "no",
+    }:
+        return False
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return True
 
 
 def extract_agent_provenance(
