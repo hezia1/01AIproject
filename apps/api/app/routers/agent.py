@@ -49,6 +49,7 @@ from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission
 from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
 from app.services.agent_runtime_validation import build_agent_runtime_plan, staging_workspace_path
+from app.services.agent_trust import calculate_agent_trust_score
 from app.services.agent_staging import build_filtered_staging
 from app.services.agent_fixture_runtime import (
     FixtureRuntimeRejected,
@@ -182,6 +183,15 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             if item.change_type == "changed" and "provenance" in item.changes
             and "provenance" in previous_asset_map.get(item.identity, {})
         }
+        trust_score = calculate_agent_trust_score(
+            assets=asset_payloads,
+            permissions=parsed.permissions,
+            findings=finding_payloads,
+            coverage=coverage.model_dump(),
+            intelligence=intelligence_output.report,
+            dataflow=dataflow_output.report,
+            runtime_validation=runtime_validation,
+        )
         quality_gate = evaluate_agent_quality_gate(
             findings=finding_payloads,
             permissions=parsed.permissions,
@@ -194,6 +204,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             changed_source_identities=changed_source_identities,
             intelligence=intelligence_output.report,
             dataflow=dataflow_output.report,
+            trust_score=trust_score,
         )
 
         scan.status = ScanStatus.completed.value
@@ -214,6 +225,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             "intelligence": intelligence_output.report,
             "dataflow": dataflow_output.report,
             "runtime_validation": runtime_validation,
+            "trust_score": trust_score,
         }
         db.commit()
         for record in records:
@@ -244,6 +256,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         intelligence=intelligence_output.report,
         dataflow=dataflow_output.report,
         runtime_validation=runtime_validation,
+        trust_score=trust_score,
     )
 
 
@@ -789,6 +802,7 @@ def agent_scan_snapshot(project_id: UUID, scan: ScanTaskRecord) -> AgentScanSnap
         intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
         dataflow=metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {},
         runtime_validation=metadata.get("runtime_validation") if isinstance(metadata.get("runtime_validation"), dict) else {},
+        trust_score=metadata.get("trust_score") if isinstance(metadata.get("trust_score"), dict) else {},
     )
 
 
@@ -1068,6 +1082,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "intelligence": metadata.get("intelligence") or {},
         "dataflow": metadata.get("dataflow") or {},
         "runtime_validation": metadata.get("runtime_validation") or {},
+        "trust_score": metadata.get("trust_score") or {},
         "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
         "profile": report_profile_summary(metadata.get("agent_profile")),
         "skipped_files": metadata.get("skipped_files") or [],

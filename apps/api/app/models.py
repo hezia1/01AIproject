@@ -538,6 +538,7 @@ class AgentScanResult(BaseModel):
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
     runtime_validation: dict[str, object] = Field(default_factory=dict)
+    trust_score: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentScanHistoryItem(BaseModel):
@@ -566,6 +567,7 @@ class AgentScanSnapshot(BaseModel):
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
     runtime_validation: dict[str, object] = Field(default_factory=dict)
+    trust_score: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentAssetDiffItem(BaseModel):

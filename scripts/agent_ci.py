@@ -27,6 +27,7 @@ from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission
 from app.services.agent_intelligence import analyze_agent_intelligence  # noqa: E402
 from app.services.agent_dataflow import analyze_agent_dataflow  # noqa: E402
 from app.services.agent_runtime_validation import build_agent_runtime_plan  # noqa: E402
+from app.services.agent_trust import calculate_agent_trust_score  # noqa: E402
 
 
 def main() -> int:
@@ -78,6 +79,15 @@ def main() -> int:
     asset_payloads = asset_payloads_with_counts(output.assets, findings)
     permission_payloads = [permission_payload(item) for item in output.permissions]
     coverage = coverage_payload(output.assets, output.skipped_files, asset_payloads)
+    trust_score = calculate_agent_trust_score(
+        assets=asset_payloads,
+        permissions=permission_payloads,
+        findings=finding_payloads,
+        coverage=coverage,
+        intelligence=intelligence_output.report,
+        dataflow=dataflow_output.report,
+        runtime_validation=runtime_validation,
+    )
 
     baseline_findings = baseline.get("findings") if isinstance(baseline.get("findings"), list) else []
     baseline_permissions = baseline.get("permissions") if isinstance(baseline.get("permissions"), list) else []
@@ -101,6 +111,7 @@ def main() -> int:
         changed_source_identities=changed_source_ids,
         intelligence=intelligence_output.report,
         dataflow=dataflow_output.report,
+        trust_score=trust_score,
     )
     scan_id = str(uuid4())
     report = {
@@ -124,6 +135,7 @@ def main() -> int:
         "intelligence": intelligence_output.report,
         "dataflow": dataflow_output.report,
         "runtime_validation": runtime_validation,
+        "trust_score": trust_score,
         "profile": profile,
         "skipped_files": output.skipped_files,
         "baseline": {"provided": bool(args.baseline), "path": str(Path(args.baseline).resolve()) if args.baseline else None},
@@ -150,6 +162,8 @@ def main() -> int:
             for key in ("critical_path_count", "high_path_count")
         ),
         "runtime_preflight": runtime_validation.get("decision"),
+        "trust_score": trust_score.get("score"),
+        "trust_grade": trust_score.get("grade"),
         "suppressed_count": suppressed_count,
         "quality_gate": gate.get("decision"),
         "failed": gate.get("decision") == "block",

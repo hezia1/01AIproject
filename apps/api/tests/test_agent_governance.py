@@ -103,9 +103,18 @@ def test_agent_snapshot_exposes_runtime_preflight_without_execution_claims() -> 
             "execution_enabled": False,
             "decision": "blocked",
         },
+        "trust_score": {
+            "schema": "ai-security-platform.agent-trust-score/v1",
+            "score": 63,
+            "grade": "low",
+            "confidence": "medium",
+            "trust_sha256": "a" * 64,
+        },
     }, datetime(2026, 8, 12, 12, 0, 0))
 
     snapshot = agent_scan_snapshot(project_id, target)
 
     assert snapshot.runtime_validation["mode"] == "preflight-only"
     assert snapshot.runtime_validation["execution_enabled"] is False
+    assert snapshot.trust_score["score"] == 63
+    assert snapshot.trust_score["trust_sha256"] == "a" * 64

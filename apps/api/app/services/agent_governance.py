@@ -48,6 +48,8 @@ DEFAULT_AGENT_PROFILE: dict[str, object] = {
         "block_stale_intelligence": False,
         "max_intelligence_age_days": 30,
         "block_high_risk_dataflow_paths": True,
+        "block_low_trust_score": False,
+        "minimum_trust_score": 70,
     },
 }
 
@@ -214,10 +216,11 @@ def evaluate_agent_quality_gate(
     changed_source_identities: set[str] | None = None,
     intelligence: dict[str, object] | None = None,
     dataflow: dict[str, object] | None = None,
+    trust_score: dict[str, object] | None = None,
 ) -> dict[str, object]:
     gate = profile.get("quality_gate") if isinstance(profile.get("quality_gate"), dict) else normalize_quality_gate(None)
     if not gate.get("enabled"):
-        return gate_result("pass", [], [], [], gate)
+        return gate_result("pass", [], [], [], gate, trust_score=trust_score)
     threshold = str(gate.get("threshold") or "high")
     threshold_rank = SEVERITY_RANK.get(threshold, SEVERITY_RANK["high"])
     governed_active_findings = [item for item in findings if str(item.get("status") or "open") not in {"accepted_risk", "false_positive", "fixed", "closed"}]
@@ -381,6 +384,11 @@ def evaluate_agent_quality_gate(
         reasons.append(f"{integrity_change_count} Agent asset integrity digests changed from the previous scan")
     if source_change_count:
         reasons.append(f"{source_change_count} Agent asset source declarations changed from the previous scan")
+    if gate.get("block_low_trust_score"):
+        minimum_trust_score = int(gate.get("minimum_trust_score") or 70)
+        actual_trust_score = int((trust_score or {}).get("score") or 0)
+        if actual_trust_score < minimum_trust_score:
+            reasons.append(f"Agent trust score {actual_trust_score} is below the required {minimum_trust_score}")
     decision = "block" if reasons else "pass"
     return gate_result(
         decision,
@@ -393,6 +401,7 @@ def evaluate_agent_quality_gate(
         stale_sources,
         blocking_dataflow,
         dataflow.get("summary") if isinstance(dataflow, dict) and isinstance(dataflow.get("summary"), dict) else {},
+        trust_score,
     )
 
 
@@ -407,6 +416,7 @@ def gate_result(
     stale_intelligence_sources: list[str] | None = None,
     dataflow_findings: list[dict[str, object]] | None = None,
     dataflow_summary: dict[str, object] | None = None,
+    trust_score: dict[str, object] | None = None,
 ) -> dict[str, object]:
     deduped_permissions = {permission_identity(item): item for item in permissions}
     return {
@@ -425,6 +435,12 @@ def gate_result(
         "stale_intelligence_sources": stale_intelligence_sources or [],
         "blocked_dataflow": (dataflow_findings or [])[:100],
         "dataflow_summary": dataflow_summary or {},
+        "trust_score": {
+            "score": int((trust_score or {}).get("score") or 0),
+            "grade": (trust_score or {}).get("grade"),
+            "confidence": (trust_score or {}).get("confidence"),
+            "trust_sha256": (trust_score or {}).get("trust_sha256"),
+        } if trust_score else {},
         "policy": policy,
         "limitations": [
             "The gate evaluates static declarations and findings; it does not execute Agent, MCP, plugin, or tool code.",
@@ -467,7 +483,7 @@ def build_agent_sarif(findings: list[dict[str, object]], scan_id: str) -> dict[s
     }
 
 
-def build_agent_html_report(report: dict[str, object]) -> str:
+def _build_agent_html_report_without_trust(report: dict[str, object]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     gate = report.get("quality_gate") if isinstance(report.get("quality_gate"), dict) else {}
     assets = report.get("assets") if isinstance(report.get("assets"), list) else []
@@ -511,6 +527,35 @@ def build_agent_html_report(report: dict[str, object]) -> str:
         f"<li>{escape(str(reason))}</li>" for reason in gate.get("reasons", [])
     ) if isinstance(gate.get("reasons"), list) else ""
     return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>AGENT 安全报告</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}}table{{border-collapse:collapse;width:100%;margin-bottom:28px}}th,td{{border:1px solid #d9e0ec;padding:9px;text-align:left}}.meta{{background:#f5f7fb;padding:16px;border-radius:8px}}</style></head><body><h1>AGENT 安全报告</h1><div class='meta'><p>项目：{escape(str(report.get('project_id') or '-'))}</p><p>扫描批次：{escape(str(report.get('scan_task_id') or '-'))}</p><p>资产：{int(summary.get('asset_count') or 0)}；来源：{int(summary.get('provenance_count') or 0)}；权限：{int(summary.get('permission_count') or 0)}；风险：{int(summary.get('finding_count') or 0)}</p><p>本地情报包坐标：{int(intelligence_summary.get('coordinate_count') or 0)}；漏洞包：{int(intelligence_summary.get('vulnerable_package_count') or 0)}；恶意包命中：{int(intelligence_summary.get('malicious_match_count') or 0)}</p><p>静态数据流路径：{int(dataflow_summary.get('path_count') or 0)}；严重/高风险：{int(dataflow_summary.get('critical_path_count') or 0) + int(dataflow_summary.get('high_path_count') or 0)}；保守推断边：{int(dataflow_summary.get('inferred_edge_count') or 0)}</p><p>运行预检：{escape(str(runtime_validation.get('decision') or 'not_available'))}；阻断项：{int(runtime_summary.get('blocking_count') or 0)}；执行已启用：{escape(str(runtime_validation.get('execution_enabled') or False))}</p><p>质量门禁：{escape(str(gate.get('decision') or 'unknown'))}</p>{f'<ul>{gate_reasons}</ul>' if gate_reasons else ''}</div><h2>资产完整性</h2><table><thead><tr><th>路径</th><th>类型</th><th>完整性 / SHA-256</th><th>来源</th><th>权限</th><th>问题</th></tr></thead><tbody>{asset_rows}</tbody></table><h2>来源与安装声明</h2><table><thead><tr><th>资产</th><th>主体</th><th>包 / 版本</th><th>来源</th><th>安装方式</th><th>发布者声明</th><th>问题</th></tr></thead><tbody>{provenance_rows}</tbody></table><h2>离线漏洞与恶意包情报</h2><table><thead><tr><th>包 / 资产</th><th>版本</th><th>查询状态 / 覆盖源</th><th>漏洞</th><th>威胁信号</th></tr></thead><tbody>{intelligence_rows}</tbody></table><p>“checked_no_match”只表示已配置的本地来源未匹配该精确版本，不代表组件无漏洞。</p><h2>Prompt → 工具 → 资源静态路径</h2><table><thead><tr><th>等级 / 置信度</th><th>路径 / 资产</th><th>能力 / 资源</th><th>已声明控制</th><th>缺失控制</th></tr></thead><tbody>{dataflow_rows}</tbody></table><p>数据流路径来自静态配置关系；低置信度和 conservative-inference 表示保守推断，不代表已观察到运行时调用或数据传输。</p><h2>AGENT 受控运行预检（仅计划）</h2><table><thead><tr><th>状态</th><th>检查</th><th>说明</th><th>处理建议</th></tr></thead><tbody>{runtime_rows}</tbody></table><p>该预检不会创建过滤副本、拉取镜像或运行容器；项目源目录不会直接作为未来 AGENT 运行时工作区。</p><h2>风险发现</h2><table><thead><tr><th>等级</th><th>规则</th><th>标题</th><th>位置</th><th>状态</th></tr></thead><tbody>{finding_rows}</tbody></table><p>本报告只包含静态声明、治理决策、本地情报匹配和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。</p></body></html>"""
+
+
+def build_agent_html_report(report: dict[str, object]) -> str:
+    html = _build_agent_html_report_without_trust(report)
+    trust = report.get("trust_score") if isinstance(report.get("trust_score"), dict) else {}
+    if not trust:
+        return html
+    dimension_rows = "".join(
+        f"<tr><td>{escape(str(item.get('label') or item.get('id') or '-'))}</td>"
+        f"<td>{int(item.get('score') or 0)} / {int(item.get('max_score') or 0)}</td>"
+        f"<td>{escape(str(item.get('status') or '-'))}</td>"
+        f"<td>{escape('; '.join(str(value.get('detail') or '') for value in item.get('deductions', []) if isinstance(value, dict))) or '-'}</td></tr>"
+        for item in trust.get("dimensions", []) if isinstance(item, dict)
+    )
+    improvements = "".join(
+        f"<li><strong>{escape(str(item.get('title') or '-'))}</strong>：{escape(str(item.get('action') or '-'))}</li>"
+        for item in trust.get("improvements", []) if isinstance(item, dict)
+    )
+    trust_section = (
+        "<h2>可解释的 AGENT 信任评分</h2>"
+        f"<p><strong>{int(trust.get('score') or 0)} / 100</strong>；等级：{escape(str(trust.get('grade') or '-'))}；"
+        f"证据置信度：{escape(str(trust.get('confidence') or '-'))}；证据完整度：{int(trust.get('evidence_completeness') or 0)}%</p>"
+        "<p>该分数归纳当前扫描证据，不是安全保证；缺少目标运行证据时静态总分最高 90。</p>"
+        "<table><thead><tr><th>分项</th><th>得分</th><th>状态</th><th>主要扣分证据</th></tr></thead>"
+        f"<tbody>{dimension_rows}</tbody></table>"
+        f"<h3>优先改进</h3><ul>{improvements}</ul>"
+        f"<p><small>评分证据摘要 SHA-256：{escape(str(trust.get('trust_sha256') or '-'))}</small></p>"
+    )
+    return html.replace("</body>", f"{trust_section}</body>")
 
 
 def finding_identity(finding: AgentFinding | dict[str, object]) -> str:
@@ -695,6 +740,7 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
         "block_intelligence_gaps",
         "block_stale_intelligence",
         "block_high_risk_dataflow_paths",
+        "block_low_trust_score",
     ):
         if strict and not isinstance(gate[key], bool):
             raise ValueError(f"quality_gate.{key} must be a boolean")
@@ -705,6 +751,7 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
     gate["threshold"] = threshold
     gate["max_blocking_findings"] = bounded_int(gate.get("max_blocking_findings"), 0, 0, 10_000)
     gate["max_intelligence_age_days"] = bounded_int(gate.get("max_intelligence_age_days"), 30, 1, 3650)
+    gate["minimum_trust_score"] = bounded_int(gate.get("minimum_trust_score"), 70, 0, 100)
     return gate
 
 

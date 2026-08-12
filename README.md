@@ -49,6 +49,14 @@
 
 本地 OSV 镜像默认读取 `D:\project\PYproject\AI网安项目\artifacts\sca-offline\osv-mirror.json`（可用 `SCA_OSV_MIRROR_PATH` 覆盖）；恶意包情报默认读取 `D:\project\PYproject\AI网安项目\artifacts\agent-offline\threat-intelligence.json`（可用 `AGENT_THREAT_INTELLIGENCE_PATH` 覆盖）。两者均为可选文件，平台不会自动下载。恶意包情报 JSON 使用 `ai-security-platform.agent-threat-intelligence/v1`，包含 `updated_at`、可选 `sources`、`entries`（`id/ecosystem/package/affected/severity/summary/source/references`）和 `protected_packages`（`ecosystem/package/source`）。
 
+## 2026-08-12 AGENT 可解释信任评分更新
+
+- AGENT 扫描现在基于同一批次的资产解析覆盖、来源/版本/SHA-256、离线漏洞与恶意包情报、权限/审批、Prompt→工具→资源静态路径和受控运行证据生成可复算的 100 分信任评分。
+- 六个分项权重固定为 15/20/20/15/20/10；每个分项同时保存得分、扣分证据、证据数量、限制和改进建议，完整结果进入扫描快照、JSON/HTML 报告与离线 CI。
+- 当前目标 Agent 尚未受控运行时，运行分项最多只计预检计划 3/10，静态总分封顶 90，证据置信度最高为中；仓库无害夹具验收只验证实验室隔离策略，不增加目标信任分。
+- `checked_no_match` 只表示已配置本地情报未匹配精确版本，不会显示为“安全”；接受风险不会抹掉技术扣分，误报只取消对应 Finding 的直接扣分，独立的来源、情报、权限或路径证据仍可能扣分。
+- 质量门禁可选择启用最低信任分阈值，默认关闭以保持原有裁决行为。前端已显示总分、六个分项、主要扣分、证据完整度/置信度、评分上限、改进建议与证据摘要 SHA-256。
+
 ## 2026-08-11 AGENT 来源完整性更新
 
 - AGENT 现在从 MCP、插件、Skill 和 Agent 配置中提取包名、版本、Registry/Git/容器/远程服务/本地来源与安装方式，区分不可变锁定、固定标签、浮动版本、缺失版本和不适用。
