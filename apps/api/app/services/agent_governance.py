@@ -23,6 +23,7 @@ DEFAULT_AGENT_PROFILE: dict[str, object] = {
         "filesystem-write",
         "secret-access",
     ],
+    "target_runtime_execution_enabled": False,
     "exceptions": [],
     "audit_log": [],
     "quality_gate": {
@@ -67,6 +68,7 @@ def effective_agent_profile(config: dict[str, object] | None) -> dict[str, objec
     profile["disabled_rule_ids"] = normalize_string_list(profile.get("disabled_rule_ids"), 200)
     profile["excluded_paths"] = normalize_string_list(profile.get("excluded_paths"), 200)
     profile["required_approval_capabilities"] = normalize_string_list(profile.get("required_approval_capabilities"), 100)
+    profile["target_runtime_execution_enabled"] = bool(profile.get("target_runtime_execution_enabled"))
     profile["permission_allowlist"] = normalize_permission_allowlist(profile.get("permission_allowlist"))
     profile["exceptions"] = normalize_exceptions(profile.get("exceptions"))
     profile["audit_log"] = normalize_audit_log(profile.get("audit_log"))
@@ -86,6 +88,7 @@ def update_agent_profile(
         "excluded_paths",
         "permission_allowlist",
         "required_approval_capabilities",
+        "target_runtime_execution_enabled",
         "quality_gate",
     }
     unknown = set(payload) - allowed_fields
@@ -101,6 +104,10 @@ def update_agent_profile(
         profile["permission_allowlist"] = normalize_permission_allowlist(payload["permission_allowlist"], strict=True)
     if "quality_gate" in payload:
         profile["quality_gate"] = normalize_quality_gate(payload["quality_gate"], strict=True)
+    if "target_runtime_execution_enabled" in payload:
+        if not isinstance(payload["target_runtime_execution_enabled"], bool):
+            raise ValueError("target_runtime_execution_enabled must be a boolean")
+        profile["target_runtime_execution_enabled"] = payload["target_runtime_execution_enabled"]
     profile["profile_version"] = int(profile["profile_version"]) + 1
     append_profile_audit(profile, "profile.update", actor, {"fields": sorted(payload)})
     return profile
@@ -531,6 +538,28 @@ def _build_agent_html_report_without_trust(report: dict[str, object]) -> str:
 
 def build_agent_html_report(report: dict[str, object]) -> str:
     html = _build_agent_html_report_without_trust(report)
+    runtime = report.get("runtime_validation") if isinstance(report.get("runtime_validation"), dict) else {}
+    target = runtime.get("evidence") if isinstance(runtime.get("evidence"), dict) else {}
+    if target:
+        html = html.replace(
+            "本报告只包含静态声明、治理决策、本地情报匹配和本地 SHA-256 证据；发布者字段未经身份验证，也不代表运行时安全证明。",
+            "除下方明确列出的单次受控运行证据外，报告其余部分来自静态声明、治理决策、本地情报和 SHA-256；发布者字段仍未经身份验证。",
+        )
+        telemetry = target.get("telemetry_coverage") if isinstance(target.get("telemetry_coverage"), dict) else {}
+        telemetry_rows = "".join(
+            f"<tr><td>{escape(str(key))}</td><td>{escape(str(value))}</td></tr>"
+            for key, value in telemetry.items()
+        )
+        target_section = (
+            "<h2>指定 Agent 受控运行证据</h2>"
+            f"<p>状态：{escape(str(target.get('status') or '-'))}；策略验证：{escape(str(target.get('policy_verified') is True))}；"
+            f"行为插桩完整：{escape(str(target.get('behavioral_telemetry_complete') is True))}</p>"
+            f"<p>执行 ID：{escape(str(target.get('execution_id') or '-'))}；证据 SHA-256：{escape(str(target.get('evidence_sha256') or '-'))}</p>"
+            "<table><thead><tr><th>观测类别</th><th>覆盖状态</th></tr></thead>"
+            f"<tbody>{telemetry_rows}</tbody></table>"
+            "<p>本节不展示 Agent 标准输出。未插桩或未观察不代表行为不可能发生，证据只覆盖该次精确副本、镜像、命令和超时。</p>"
+        )
+        html = html.replace("</body>", f"{target_section}</body>")
     trust = report.get("trust_score") if isinstance(report.get("trust_score"), dict) else {}
     if not trust:
         return html
@@ -545,11 +574,18 @@ def build_agent_html_report(report: dict[str, object]) -> str:
         f"<li><strong>{escape(str(item.get('title') or '-'))}</strong>：{escape(str(item.get('action') or '-'))}</li>"
         for item in trust.get("improvements", []) if isinstance(item, dict)
     )
+    trust_runtime_note = (
+        "目标已受控运行并记录完整行为插桩，仍只代表该次精确执行。"
+        if target.get("behavioral_telemetry_complete") is True
+        else "目标已受控运行，但行为插桩不完整时总分最高 95。"
+        if target and target.get("policy_verified") is True
+        else "缺少目标运行证据时静态总分最高 90。"
+    )
     trust_section = (
         "<h2>可解释的 AGENT 信任评分</h2>"
         f"<p><strong>{int(trust.get('score') or 0)} / 100</strong>；等级：{escape(str(trust.get('grade') or '-'))}；"
         f"证据置信度：{escape(str(trust.get('confidence') or '-'))}；证据完整度：{int(trust.get('evidence_completeness') or 0)}%</p>"
-        "<p>该分数归纳当前扫描证据，不是安全保证；缺少目标运行证据时静态总分最高 90。</p>"
+        f"<p>该分数归纳当前扫描证据，不是安全保证；{trust_runtime_note}</p>"
         "<table><thead><tr><th>分项</th><th>得分</th><th>状态</th><th>主要扣分证据</th></tr></thead>"
         f"<tbody>{dimension_rows}</tbody></table>"
         f"<h3>优先改进</h3><ul>{improvements}</ul>"

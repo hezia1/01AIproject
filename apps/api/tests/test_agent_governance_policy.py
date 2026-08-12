@@ -57,12 +57,14 @@ def test_profile_update_validates_and_versions_policy() -> None:
     profile = update_agent_profile({}, {
         "disabled_rule_ids": ["AGENT.NET.EXTERNAL_REQUEST"],
         "excluded_paths": ["fixtures/**"],
+        "target_runtime_execution_enabled": True,
         "quality_gate": {"threshold": "medium", "block_new_only": True},
     }, actor="security-owner")
 
     assert profile["profile_version"] == 2
     assert profile["disabled_rule_ids"] == ["AGENT.NET.EXTERNAL_REQUEST"]
     assert profile["quality_gate"]["threshold"] == "medium"
+    assert profile["target_runtime_execution_enabled"] is True
     assert profile["audit_log"][0]["actor"] == "security-owner"
     assert filter_agent_findings([finding("AGENT.NET.EXTERNAL_REQUEST")], profile) == []
 

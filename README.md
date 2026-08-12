@@ -49,6 +49,14 @@
 
 本地 OSV 镜像默认读取 `D:\project\PYproject\AI网安项目\artifacts\sca-offline\osv-mirror.json`（可用 `SCA_OSV_MIRROR_PATH` 覆盖）；恶意包情报默认读取 `D:\project\PYproject\AI网安项目\artifacts\agent-offline\threat-intelligence.json`（可用 `AGENT_THREAT_INTELLIGENCE_PATH` 覆盖）。两者均为可选文件，平台不会自动下载。恶意包情报 JSON 使用 `ai-security-platform.agent-threat-intelligence/v1`，包含 `updated_at`、可选 `sources`、`entries`（`id/ecosystem/package/affected/severity/summary/source/references`）和 `protected_packages`（`ecosystem/package/source`）。
 
+## 2026-08-12 AGENT 指定目标安全执行器更新
+
+- 已实现指定项目 Agent 的受控 Docker 执行器，但项目策略 `target_runtime_execution_enabled` 默认关闭；开启策略本身不会运行任何内容，实际执行还要求选择精确绑定的 staging、输入固定确认短语并再次勾选。
+- 新建 staging 会把扫描批次、预检计划 SHA-256、命令 SHA-256、镜像 digest 和超时写入受哈希保护的 manifest。执行前服务器重新验证逐文件/整体/manifest 哈希和全部绑定，任一变化都会在联系 Docker 前拒绝。
+- 容器使用参数数组而非 Shell，强制 `--pull=never`、本地 Docker Context、digest 镜像、禁网、根目录/工作区只读、非 root、drop-all、no-new-privileges、无宿主环境/Socket、IPC/PID 隔离、CPU/内存/PID/超时限制、关闭镜像 Healthcheck 和有界本地日志；创建后先 inspect，策略不一致绝不启动。日志正文不落库、不进报告，只保存脱敏后的长度和摘要。
+- 证据保存主进程结果、工作区运行前后完整性、容器策略、脱敏有限日志、静态路径关联和证据 SHA-256，并明确把子进程、逐文件访问、网络尝试目的地和工具调用标记为未插桩。有限目标观测的运行分为 7/10、总分最高 95，不会冒充完整行为取证。
+- API 和前端已提供状态、绑定副本、最近证据和独立真实运行确认入口。本次开发与测试只使用模拟 Docker 调用，没有运行任何项目 Agent、下载镜像或生成真实目标证据。
+
 ## 2026-08-12 AGENT 可解释信任评分更新
 
 - AGENT 扫描现在基于同一批次的资产解析覆盖、来源/版本/SHA-256、离线漏洞与恶意包情报、权限/审批、Prompt→工具→资源静态路径和受控运行证据生成可复算的 100 分信任评分。

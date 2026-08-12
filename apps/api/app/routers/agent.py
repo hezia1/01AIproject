@@ -1,6 +1,8 @@
 from datetime import datetime
 import hmac
 import json
+import subprocess
+from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
@@ -26,6 +28,7 @@ from app.models import (
     AgentRuntimePreflightRequest,
     AgentStagingBuildRequest,
     AgentFixtureRuntimeRequest,
+    AgentTargetRuntimeRequest,
     Finding,
     ModuleKey,
     ScanStatus,
@@ -56,6 +59,12 @@ from app.services.agent_fixture_runtime import (
     list_fixture_evidence,
     list_local_fixture_images,
     run_harmless_fixture_validation,
+)
+from app.services.agent_target_runtime import (
+    TargetRuntimeRejected,
+    list_target_evidence,
+    list_target_runtime_status,
+    run_target_agent_validation,
 )
 
 router = APIRouter()
@@ -421,11 +430,13 @@ def build_project_agent_runtime_staging(
     scan = latest_completed_agent_scan(db, str(project_id))
     metadata = scan.scan_metadata if scan and isinstance(scan.scan_metadata, dict) else {}
     dataflow = metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {}
+    selected_command = payload.command if payload.command is not None else project.sandbox_command
+    selected_image = payload.image if payload.image is not None else project.sandbox_image
     plan = build_agent_runtime_plan(
         project_id=str(project_id),
         source_path=project.source_path,
-        command=payload.command if payload.command is not None else project.sandbox_command,
-        image=payload.image if payload.image is not None else project.sandbox_image,
+        command=selected_command,
+        image=selected_image,
         dataflow=dataflow,
         sandbox_enabled=sandbox_module is not None,
         operator_confirmed=payload.operator_confirmed,
@@ -453,6 +464,13 @@ def build_project_agent_runtime_staging(
             source_path=project.source_path,
             project_id=str(project_id),
             destination_root=staging_workspace_path(str(project_id)),
+            binding={
+                "scan_task_id": str(scan.id),
+                "plan_sha256": str(plan.get("plan_sha256") or ""),
+                "command_sha256": sha256(str(selected_command or "").strip().encode("utf-8")).hexdigest(),
+                "image": str(selected_image or "").strip(),
+                "timeout_seconds": payload.timeout_seconds,
+            } if scan is not None else None,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -508,6 +526,113 @@ def validate_project_agent_runtime_fixture(
         )
     except FixtureRuntimeRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/runtime-target-status")
+def get_project_agent_target_runtime_status(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_agent_fixture_modules(db, project_id)
+    module = enabled_agent_module(db, project_id)
+    profile = effective_agent_profile(module.config)
+    try:
+        status = list_target_runtime_status(
+            str(project_id), bool(profile.get("target_runtime_execution_enabled"))
+        )
+        scan = latest_completed_agent_scan(db, str(project_id))
+        current_scan_id = str(scan.id) if scan is not None else None
+        builds = status.get("builds") if isinstance(status.get("builds"), list) else []
+        status["current_scan_task_id"] = current_scan_id
+        status["builds"] = [
+            item for item in builds
+            if isinstance(item, dict) and str(item.get("scan_task_id") or "") == current_scan_id
+        ]
+        return status
+    except TargetRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/runtime-target-evidence")
+def get_project_agent_target_runtime_evidence(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[dict[str, object]]:
+    require_agent_fixture_modules(db, project_id)
+    try:
+        return list_target_evidence(str(project_id))
+    except TargetRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/runtime-target-validation", status_code=201)
+def validate_project_agent_runtime_target(
+    project_id: UUID,
+    payload: AgentTargetRuntimeRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_agent_fixture_modules(db, project_id)
+    module = enabled_agent_module(db, project_id)
+    profile = effective_agent_profile(module.config)
+    if not profile.get("target_runtime_execution_enabled"):
+        raise HTTPException(
+            status_code=403,
+            detail="Target Agent execution is disabled by the project policy.",
+        )
+    scan = latest_completed_agent_scan(db, str(project_id))
+    if scan is None:
+        raise HTTPException(status_code=400, detail="A completed AGENT scan is required before target validation.")
+    metadata = scan.scan_metadata if isinstance(scan.scan_metadata, dict) else {}
+    dataflow = metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {}
+    try:
+        evidence = run_target_agent_validation(
+            project_id=str(project_id),
+            scan_task_id=str(scan.id),
+            command=payload.command,
+            image=payload.image,
+            timeout_seconds=payload.timeout_seconds,
+            plan_sha256=payload.plan_sha256,
+            staging_build_id=payload.staging_build_id,
+            staging_sha256=payload.staging_sha256,
+            manifest_sha256=payload.manifest_sha256,
+            authorization_phrase=payload.authorization_phrase,
+            operator_confirmed=payload.operator_confirmed,
+            dataflow=dataflow,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=400, detail="A Docker control command timed out; the target was not approved as completed.") from exc
+    except (TargetRuntimeRejected, OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    runtime_validation = (
+        dict(metadata.get("runtime_validation"))
+        if isinstance(metadata.get("runtime_validation"), dict)
+        else {}
+    )
+    runtime_validation["evidence"] = evidence
+    assets = metadata_dict_list(metadata, "assets")
+    permissions = metadata_dict_list(metadata, "permissions")
+    findings = db.scalars(
+        select(FindingRecord)
+        .where(FindingRecord.scan_task_id == scan.id, FindingRecord.source == "AGENT")
+        .order_by(FindingRecord.created_at.asc())
+    ).all()
+    trust_score = calculate_agent_trust_score(
+        assets=assets,
+        permissions=permissions,
+        findings=[finding_record_report_payload(item) for item in findings],
+        coverage=metadata.get("coverage") if isinstance(metadata.get("coverage"), dict) else {},
+        intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
+        dataflow=dataflow,
+        runtime_validation=runtime_validation,
+    )
+    scan.scan_metadata = {
+        **metadata,
+        "runtime_validation": runtime_validation,
+        "trust_score": trust_score,
+    }
+    db.commit()
+    return {**evidence, "trust_score": trust_score}
 
 
 @router.get("/projects/{project_id}/scan-diff", response_model=AgentScanDiff)
@@ -1052,6 +1177,8 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         .order_by(ScanTaskRecord.created_at.desc())
         .limit(1)
     )
+    runtime_metadata = metadata.get("runtime_validation") if isinstance(metadata.get("runtime_validation"), dict) else {}
+    target_evidence_present = isinstance(runtime_metadata.get("evidence"), dict)
     return {
         "project_id": str(project_id),
         "scan_task_id": str(scan.id),
@@ -1087,13 +1214,17 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "profile": report_profile_summary(metadata.get("agent_profile")),
         "skipped_files": metadata.get("skipped_files") or [],
         "capability_boundaries": [
-            "The report is generated from local static configuration and instruction analysis.",
-            "It does not connect to or execute Agent, MCP Server, plugin, or tool code.",
+            "The scan is generated from local static configuration and instruction analysis; target execution is a separate explicitly confirmed action.",
+            (
+                "This report includes one separately confirmed target runtime evidence record with explicitly limited telemetry."
+                if target_evidence_present
+                else "No project Agent, MCP server, plugin or tool was executed for this report."
+            ),
             "Approved exceptions and allowlists are governance decisions and remain visible in finding status and profile audit history.",
             "SHA-256 values prove only that local bytes were stable between scans; they do not authenticate a publisher or remote package.",
             "Offline intelligence results are limited to configured local sources; checked-no-match is not proof that a package is vulnerability-free.",
             "Data-flow paths are static, confidence-labelled relationships and are not proof of observed runtime execution.",
-            "The Agent runtime plan is preflight-only: it does not create staging files, pull images or run containers.",
+            "The Agent runtime plan remains preflight-only; any target evidence is separately bound to an exact D-drive staging digest and uses --pull=never.",
         ],
     }
 
@@ -1128,6 +1259,7 @@ def report_profile_summary(value: object) -> dict[str, object]:
         "excluded_paths": profile.get("excluded_paths") or [],
         "permission_allowlist": profile.get("permission_allowlist") or [],
         "required_approval_capabilities": profile.get("required_approval_capabilities") or [],
+        "target_runtime_execution_enabled": bool(profile.get("target_runtime_execution_enabled")),
         "quality_gate": profile.get("quality_gate") or {},
         "exceptions": profile.get("exceptions") or [],
         "audit_log": profile.get("audit_log") or [],

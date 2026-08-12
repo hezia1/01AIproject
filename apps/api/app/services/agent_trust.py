@@ -49,7 +49,8 @@ def calculate_agent_trust_score(
         asset_items, coverage, intel, flow, runtime
     )
     target_runtime_observed = has_target_runtime_evidence(runtime)
-    confidence = confidence_label(evidence_completeness, target_runtime_observed)
+    complete_runtime_telemetry = has_complete_runtime_telemetry(runtime)
+    confidence = confidence_label(evidence_completeness, target_runtime_observed, complete_runtime_telemetry)
     deductions = sorted(
         [
             {**item, "dimension_id": dimension["id"], "dimension_label": dimension["label"]}
@@ -78,6 +79,7 @@ def calculate_agent_trust_score(
             "package_coordinate_count": integer(summary(intel).get("coordinate_count")),
             "dataflow_path_count": integer(summary(flow).get("path_count")),
             "target_runtime_observed": target_runtime_observed,
+            "complete_runtime_telemetry": complete_runtime_telemetry,
         },
         "limitations": [
             "The score summarizes current scanner evidence; it is not a security guarantee or publisher identity attestation.",
@@ -280,9 +282,16 @@ def dataflow_dimension(dataflow: dict[str, object]) -> dict[str, object]:
 def runtime_dimension(runtime: dict[str, object]) -> dict[str, object]:
     maximum = 10
     if has_target_runtime_evidence(runtime):
+        complete = has_complete_runtime_telemetry(runtime)
+        score = maximum if complete else 7
         return dimension(
-            "runtime_assurance", "受控运行验证", maximum, maximum, "observed", [],
-            ["已记录目标 Agent 的受控运行证据。"],
+            "runtime_assurance", "受控运行验证", score, maximum,
+            "observed" if complete else "limited_observation",
+            [] if complete else [deduction(
+                "limited-runtime-telemetry", 3, 1,
+                "已受控运行目标，但子进程、文件访问、网络尝试和工具调用尚未完整插桩。",
+            )],
+            ["已记录目标 Agent 的受控运行与容器策略证据。"],
             ["运行证据只覆盖该次镜像、命令、输入与策略。"],
         )
     has_plan = bool(runtime.get("schema") and isinstance(runtime.get("isolation_policy"), dict))
@@ -305,6 +314,8 @@ def score_caps(
     caps: list[dict[str, object]] = []
     if not has_target_runtime_evidence(runtime):
         caps.append({"id": "static-evidence-only", "maximum_score": MAX_STATIC_SCORE, "detail": "缺少目标 Agent 运行证据，静态总分最高 90。"})
+    elif not has_complete_runtime_telemetry(runtime):
+        caps.append({"id": "limited-runtime-telemetry", "maximum_score": 95, "detail": "目标已受控运行，但行为插桩不完整，总分最高 95。"})
     if integer(coverage.get("failed_asset_count")):
         caps.append({"id": "parse-failures", "maximum_score": 70, "detail": "存在解析失败资产，总分最高 70。"})
     if integer(coverage.get("skipped_file_count")):
@@ -328,7 +339,7 @@ def evidence_completeness_score(
     coordinates = integer(intel_values.get("coordinate_count"))
     intel_points = round(15 * integer(intel_values.get("covered_count")) / coordinates) if coordinates else 15
     dataflow_points = 15 if dataflow.get("schema") else 0
-    runtime_points = 15 if has_target_runtime_evidence(runtime) else 5 if runtime.get("schema") else 0
+    runtime_points = 15 if has_complete_runtime_telemetry(runtime) else 10 if has_target_runtime_evidence(runtime) else 5 if runtime.get("schema") else 0
     return min(100, coverage_points + digest_points + provenance_points + intel_points + dataflow_points + runtime_points)
 
 
@@ -336,12 +347,27 @@ def has_target_runtime_evidence(runtime: dict[str, object]) -> bool:
     evidence = runtime.get("evidence")
     if not isinstance(evidence, dict):
         return False
-    return str(evidence.get("status") or "").lower() in {"completed", "passed", "observed"} and bool(evidence.get("execution_id"))
+    return (
+        str(evidence.get("status") or "").lower() in {"completed", "passed", "observed"}
+        and bool(evidence.get("execution_id"))
+        and evidence.get("policy_verified") is True
+    )
 
 
-def confidence_label(completeness: int, target_runtime_observed: bool) -> str:
+def has_complete_runtime_telemetry(runtime: dict[str, object]) -> bool:
+    evidence = runtime.get("evidence")
+    return bool(
+        has_target_runtime_evidence(runtime)
+        and isinstance(evidence, dict)
+        and evidence.get("behavioral_telemetry_complete") is True
+    )
+
+
+def confidence_label(
+    completeness: int, target_runtime_observed: bool, complete_runtime_telemetry: bool,
+) -> str:
     label = "high" if completeness >= 80 else "medium" if completeness >= 50 else "low"
-    return "medium" if label == "high" and not target_runtime_observed else label
+    return "medium" if label == "high" and (not target_runtime_observed or not complete_runtime_telemetry) else label
 
 
 def grade(score: int, discovered: int) -> str:
@@ -378,6 +404,7 @@ def improvements(
         "unguarded-dataflow-path": ("补齐路径控制", "为未受控路径增加审批、范围限制或沙箱策略。"),
         "prompt-injection-path": ("隔离指令覆盖影响", "阻止不可信指令直接控制敏感工具和资源。"),
         "target-runtime-not-observed": ("执行受控目标验证", "在确认命令、摘要锁定镜像和过滤副本后，单独批准沙箱运行。"),
+        "limited-runtime-telemetry": ("补齐运行时插桩", "增加子进程、文件访问、网络尝试和工具调用的受控观测后再提高运行证据等级。"),
     }
     result: list[dict[str, str]] = []
     seen: set[str] = set()

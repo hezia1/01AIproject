@@ -462,6 +462,18 @@ class AgentFixtureRuntimeRequest(BaseModel):
     operator_confirmed: bool = False
 
 
+class AgentTargetRuntimeRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=1000)
+    image: str = Field(min_length=1, max_length=300)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+    plan_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    staging_build_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    staging_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    authorization_phrase: str = Field(min_length=1, max_length=100)
+    operator_confirmed: bool = False
+
+
 class AgentPermissionResult(BaseModel):
     asset_path: str
     subject: str

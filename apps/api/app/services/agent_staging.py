@@ -49,6 +49,7 @@ def build_filtered_staging(
     source_path: str,
     project_id: str,
     destination_root: Path,
+    binding: dict[str, object] | None = None,
 ) -> dict[str, object]:
     source = resolve_source_directory(source_path)
     project_root = destination_root.resolve(strict=False)
@@ -104,6 +105,7 @@ def build_filtered_staging(
                 "existing_destination_overwritten": False,
                 "container_or_agent_executed": False,
             },
+            "binding": normalized_staging_binding(binding),
         }
         manifest["manifest_sha256"] = manifest_sha256(manifest)
         (temporary / MANIFEST_NAME).write_text(
@@ -287,6 +289,34 @@ def verify_filtered_staging(destination: Path) -> dict[str, object]:
         "total_bytes": total_bytes,
         "runtime_executed": False,
     }
+
+
+def load_filtered_staging_manifest(destination: Path) -> dict[str, object]:
+    root = destination.resolve(strict=True)
+    verify_filtered_staging(root)
+    manifest = json.loads((root / MANIFEST_NAME).read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("Filtered staging manifest is invalid.")
+    return manifest
+
+
+def normalized_staging_binding(value: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        "schema": "ai-security-platform.agent-staging-binding/v1",
+        "scan_task_id": str(value.get("scan_task_id") or "")[:100],
+        "plan_sha256": str(value.get("plan_sha256") or "")[:64],
+        "command_sha256": str(value.get("command_sha256") or "")[:64],
+        "image": str(value.get("image") or "")[:300],
+        "timeout_seconds": max(1, min(30, int(value.get("timeout_seconds") or 10))),
+    }
+    for key in ("plan_sha256", "command_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(result[key])):
+            raise ValueError(f"Filtered staging {key} binding is invalid.")
+    if not result["scan_task_id"] or not result["image"]:
+        raise ValueError("Filtered staging execution binding is incomplete.")
+    return result
 
 
 def resolve_source_directory(value: str) -> Path:

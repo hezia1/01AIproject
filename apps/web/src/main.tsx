@@ -76,7 +76,7 @@ type AgentGatePolicy = { enabled: boolean; threshold: "critical" | "high" | "med
 type AgentAllowlistItem = { id?: string; path_pattern: string; subject_pattern: string; capability: string; scope_pattern: string; reason: string };
 type AgentException = { id: string; kind: "finding" | "permission"; disposition: "suppress" | "accept_risk"; rule_id?: string; path_pattern: string; subject_pattern?: string; capability?: string; scope_pattern?: string; reason: string; expires_at?: string | null; status: "pending" | "approved" | "rejected" | "revoked"; requester?: string | null; approver?: string | null; approval_note?: string | null; created_at?: string | null };
 type AgentAuditItem = { id: string; action: string; actor: string; at: string; detail: Record<string, unknown> };
-type AgentProfile = { profile_version: number; rule_version: string; disabled_rule_ids: string[]; excluded_paths: string[]; permission_allowlist: AgentAllowlistItem[]; required_approval_capabilities: string[]; exceptions: AgentException[]; audit_log: AgentAuditItem[]; quality_gate: AgentGatePolicy };
+type AgentProfile = { profile_version: number; rule_version: string; disabled_rule_ids: string[]; excluded_paths: string[]; permission_allowlist: AgentAllowlistItem[]; required_approval_capabilities: string[]; target_runtime_execution_enabled: boolean; exceptions: AgentException[]; audit_log: AgentAuditItem[]; quality_gate: AgentGatePolicy };
 type AgentScanHistoryItem = { scan_task_id: string; status: string; created_at: string; started_at: string | null; finished_at: string | null; source_path: string | null; finding_count: number; rule_version: string | null; coverage: AgentScanCoverage; gate_decision?: string | null };
 type AgentPermission = { asset_path: string; subject: string; capability: string; access: string; resource_type: string; scope: string; approval: string; risk_level: string; source: string };
 type AgentProvenance = { subject: string; package_name: string | null; package_version: string | null; source_type: string; source_ref: string | null; installation_method: string; version_status: string; publisher_claim: string | null; publisher_status: string; issues: string[] };
@@ -94,10 +94,13 @@ type AgentTrustDimension = { id: string; label: string; score: number; max_score
 type AgentTrustScore = { schema: string; algorithm_version: string; score: number; uncapped_score: number; score_cap: number; grade: string; confidence: "low" | "medium" | "high"; evidence_completeness: number; dimensions: AgentTrustDimension[]; top_deductions: AgentTrustDeduction[]; improvements: { id: string; title: string; action: string }[]; score_caps: { id: string; maximum_score: number; detail: string }[]; evidence_summary: Record<string, number | boolean>; limitations: string[]; trust_sha256: string };
 type AgentRuntimeCheck = { id: string; status: "pass" | "warn" | "block"; detail: string; remediation: string | null };
 type AgentRuntimePath = { id: string; kind: string; title: string; severity: Severity; confidence: string; asset_path: string; tool_asset_path?: string | null; capability: string; resource_type: string; resource_scope: string };
-type AgentRuntimePlan = { schema: string; mode: string; execution_enabled: boolean; decision: "blocked" | "awaiting_explicit_execution_approval"; plan_sha256: string; source_path: string | null; proposed_command: string | null; proposed_image: string | null; timeout_seconds: number; staging: { status: string; path: string; source_mode: string; container_mount: string; sensitive_file_count: number; sensitive_categories: Record<string, number>; inventory_truncated: boolean }; isolation_policy: { network: string; root_filesystem: string; workspace: string; environment_injection: string; privileged: boolean; capabilities: string; no_new_privileges: boolean; host_sockets: string; resource_limits: Record<string, string | number> }; checks: AgentRuntimeCheck[]; summary: Record<string, number | boolean>; candidate_dataflow_paths: AgentRuntimePath[]; evidence_template: { status: string; observations: Record<string, unknown[]>; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; redaction: { applied: boolean; secret_values_stored: boolean } }; next_action: string; limitations: string[] };
+type AgentRuntimePlan = { schema: string; mode: string; execution_enabled: boolean; decision: "blocked" | "awaiting_explicit_execution_approval"; plan_sha256: string; source_path: string | null; proposed_command: string | null; proposed_image: string | null; timeout_seconds: number; staging: { status: string; path: string; source_mode: string; container_mount: string; sensitive_file_count: number; sensitive_categories: Record<string, number>; inventory_truncated: boolean }; isolation_policy: { network: string; root_filesystem: string; workspace: string; environment_injection: string; privileged: boolean; capabilities: string; no_new_privileges: boolean; host_sockets: string; resource_limits: Record<string, string | number> }; checks: AgentRuntimeCheck[]; summary: Record<string, number | boolean>; candidate_dataflow_paths: AgentRuntimePath[]; evidence_template: { status: string; observations: Record<string, unknown[]>; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; redaction: { applied: boolean; secret_values_stored: boolean } }; evidence?: AgentTargetEvidence; next_action: string; limitations: string[] };
 type AgentStagingResult = { schema: string; status: string; execution_enabled: boolean; runtime_status: string; plan_sha256: string; staging: { build_id: string; destination_path: string; staging_sha256: string; manifest_sha256: string; summary: { copied_file_count: number; copied_bytes: number; excluded_count: number; exclusion_records_truncated: boolean; runtime_executed: boolean }; verification: { status: string; file_count: number; total_bytes: number; staging_sha256: string; manifest_sha256: string; runtime_executed: boolean }; security: { links_followed: boolean; secret_values_returned: boolean; existing_destination_overwritten: boolean; container_or_agent_executed: boolean } }; next_action: string };
 type AgentFixtureStatus = { available: boolean; images: { reference: string; repository: string; digest: string; image_id: string; size: string }[]; download_performed: boolean; recommended_image: string | null; message: string };
 type AgentFixtureEvidence = { schema: string; scope: string; decision: "pass" | "block"; execution_enabled_for_real_agents: boolean; run_id: string; started_at: string; elapsed_ms: number; evidence_sha256: string; evidence_path: string; image: { reference: string; digest: string; local_image_id: string; download_performed: boolean }; staging: { path: string; staging_sha256: string; manifest_sha256: string }; container: { command: string[]; exit_code: number | null; timed_out: boolean; removed_after_run: boolean }; policy_checks: Record<string, boolean>; limitations: string[] };
+type AgentTargetBuild = { build_id: string; created_at: string; destination_path: string; staging_sha256: string; manifest_sha256: string; scan_task_id: string; plan_sha256: string; command_sha256: string; image: string; timeout_seconds: number; file_count: number };
+type AgentTargetStatus = { schema: string; execution_enabled_by_project_policy: boolean; authorization_phrase: string; current_scan_task_id: string | null; builds: AgentTargetBuild[]; download_performed: boolean; message: string };
+type AgentTargetEvidence = { schema: string; scope: string; status: string; decision: "pass" | "attention"; execution_id: string; started_at: string; finished_at: string; elapsed_ms: number; policy_verified: boolean; behavioral_telemetry_complete: boolean; evidence_sha256: string; evidence_path: string; image: { reference: string; digest: string; local_image_id: string; download_performed: boolean }; staging: { build_id: string; path: string; staging_sha256: string; manifest_sha256: string; unchanged_after_run: boolean }; container: { command_sha256: string; command_preview: string; exit_code: number | null; timed_out: boolean; removed_after_run: boolean }; policy_checks: Record<string, boolean>; telemetry_coverage: Record<string, string>; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; output: { stdout_char_count: number; stderr_char_count: number; stdout_sha256: string; stderr_sha256: string; truncated: boolean; redacted_before_hashing: boolean; content_stored: boolean }; limitations: string[]; trust_score?: AgentTrustScore };
 type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[]; quality_gate?: AgentQualityGate; intelligence?: AgentIntelligence; dataflow?: AgentDataflow; runtime_validation?: AgentRuntimePlan; trust_score?: AgentTrustScore };
 type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
 type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
@@ -2190,9 +2193,9 @@ function AgentGovernanceConsole({ project, snapshot }: { project: Project; snaps
   async function saveProfile(nextProfile = profile) {
     if (!nextProfile) return;
     try {
-      const payload = { actor, disabled_rule_ids: nextProfile.disabled_rule_ids, excluded_paths: nextProfile.excluded_paths, permission_allowlist: nextProfile.permission_allowlist, required_approval_capabilities: nextProfile.required_approval_capabilities, quality_gate: nextProfile.quality_gate };
+      const payload = { actor, disabled_rule_ids: nextProfile.disabled_rule_ids, excluded_paths: nextProfile.excluded_paths, permission_allowlist: nextProfile.permission_allowlist, required_approval_capabilities: nextProfile.required_approval_capabilities, target_runtime_execution_enabled: nextProfile.target_runtime_execution_enabled, quality_gate: nextProfile.quality_gate };
       setProfile(await request<AgentProfile>(`/agent/projects/${project.id}/profile`, { method: "PATCH", body: JSON.stringify(payload) }));
-      setMessage("治理策略已保存；规则停用、路径排除、Allowlist 和门禁配置从下一次扫描开始生效。");
+      setMessage("治理策略已保存；扫描规则从下一次扫描生效，真实目标执行开关立即生效但仍需独立确认。");
     } catch (error) { setMessage(`策略保存失败：${errorMessage(error)}`); }
   }
 
@@ -2235,7 +2238,7 @@ function AgentGovernanceConsole({ project, snapshot }: { project: Project; snaps
   if (!profile) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 治理与交付</h3><span>正在加载策略</span></div><p>该区域只管理本地静态扫描策略，不会连接或执行 Agent、MCP Server、插件或工具。</p></section>;
   const policy = profile.quality_gate;
   return <details className="advanced-details governance-advanced-details" open><summary>AGENT 策略、例外审批、质量门禁与交付</summary><div className="advanced-details-body"><section className="content-grid">
-    <div className="panel full"><div className="panel-header"><h2>项目扫描策略</h2><span>{message || `配置 v${profile.profile_version} · 规则 ${profile.rule_version}`}</span></div><p>保存后从下一次扫描生效；历史扫描与原始 Finding 不会被重写。操作人用于本项目策略审计，不等同于平台身份认证。</p><div className="filter-grid"><label>操作人<input value={actor} onChange={(event) => setActor(event.target.value)} /></label><label>停用规则 ID（每行一个）<textarea rows={4} value={profile.disabled_rule_ids.join("\n")} onChange={(event) => setProfile({ ...profile, disabled_rule_ids: splitLines(event.target.value) })} /></label><label>排除路径 glob（每行一个）<textarea rows={4} value={profile.excluded_paths.join("\n")} onChange={(event) => setProfile({ ...profile, excluded_paths: splitLines(event.target.value) })} placeholder="例如 fixtures/**" /></label><label>强制审批能力（每行一个）<textarea rows={4} value={profile.required_approval_capabilities.join("\n")} onChange={(event) => setProfile({ ...profile, required_approval_capabilities: splitLines(event.target.value) })} /></label><button className="primary-action" onClick={() => void saveProfile()}>保存项目策略</button></div></div>
+    <div className="panel full"><div className="panel-header"><h2>项目扫描策略</h2><span>{message || `配置 v${profile.profile_version} · 规则 ${profile.rule_version}`}</span></div><p>保存后从下一次扫描生效；历史扫描与原始 Finding 不会被重写。操作人用于本项目策略审计，不等同于平台身份认证。</p><div className="filter-grid"><label>操作人<input value={actor} onChange={(event) => setActor(event.target.value)} /></label><label>停用规则 ID（每行一个）<textarea rows={4} value={profile.disabled_rule_ids.join("\n")} onChange={(event) => setProfile({ ...profile, disabled_rule_ids: splitLines(event.target.value) })} /></label><label>排除路径 glob（每行一个）<textarea rows={4} value={profile.excluded_paths.join("\n")} onChange={(event) => setProfile({ ...profile, excluded_paths: splitLines(event.target.value) })} placeholder="例如 fixtures/**" /></label><label>强制审批能力（每行一个）<textarea rows={4} value={profile.required_approval_capabilities.join("\n")} onChange={(event) => setProfile({ ...profile, required_approval_capabilities: splitLines(event.target.value) })} /></label><label className="inline-check"><input type="checkbox" checked={profile.target_runtime_execution_enabled} onChange={(event) => setProfile({ ...profile, target_runtime_execution_enabled: event.target.checked })} />允许本项目显示真实目标执行入口（默认关闭；仍需精确 staging、固定镜像和二次确认）</label><button className="primary-action" onClick={() => void saveProfile()}>保存项目策略</button></div></div>
     <div className="panel full">
       <div className="panel-header"><h2>质量门禁</h2><span className={`severity ${gate?.decision === "block" ? "high" : "info"}`}>{gate?.decision === "block" ? "阻断" : gate?.decision === "pass" ? "通过" : "等待扫描"}</span></div>
       <div className="filter-grid">
@@ -2351,7 +2354,7 @@ function AgentTrustScorePanel({ snapshot }: { snapshot: AgentScanSnapshot | null
   if (!trust) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 可解释信任评分</h3><span>等待新扫描</span></div><p>完成一次新版本 AGENT 扫描后，这里会根据来源、哈希、情报、权限、数据流和运行证据给出可解释评分。</p></section>;
   const gradeLabels: Record<string, string> = { "provisional-high": "静态证据较完整", guarded: "需带控制使用", low: "低信任", untrusted: "不可信", "insufficient-evidence": "证据不足" };
   const confidenceLabels = { low: "低", medium: "中", high: "高" };
-  const statusLabels: Record<string, string> = { complete: "证据完整", partial: "证据部分完整", insufficient_evidence: "证据不足", not_applicable: "不适用", missing: "证据缺失", risk_detected: "发现风险路径", preflight_only: "仅完成预检", not_run: "未运行", observed: "已观察" };
+  const statusLabels: Record<string, string> = { complete: "证据完整", partial: "证据部分完整", insufficient_evidence: "证据不足", not_applicable: "不适用", missing: "证据缺失", risk_detected: "发现风险路径", preflight_only: "仅完成预检", not_run: "未运行", observed: "已观察", limited_observation: "有限运行观测" };
   const runtimeObserved = Boolean(trust.evidence_summary.target_runtime_observed);
   return <section className="retest-panel">
     <div className="panel-header"><h3>AGENT 可解释信任评分</h3><span className={`severity ${trust.score < 50 ? "high" : trust.score < 75 ? "medium" : "info"}`}>{trust.score} / 100 · {gradeLabels[trust.grade] ?? trust.grade}</span></div>
@@ -2376,6 +2379,11 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
   const [fixtureImage, setFixtureImage] = useState("");
   const [fixtureConfirmed, setFixtureConfirmed] = useState(false);
   const [fixtureEvidence, setFixtureEvidence] = useState<AgentFixtureEvidence | null>(null);
+  const [targetStatus, setTargetStatus] = useState<AgentTargetStatus | null>(null);
+  const [targetBuildId, setTargetBuildId] = useState("");
+  const [targetConfirmed, setTargetConfirmed] = useState(false);
+  const [targetPhrase, setTargetPhrase] = useState("");
+  const [targetEvidence, setTargetEvidence] = useState<AgentTargetEvidence | null>(savedPlan?.evidence ?? null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
@@ -2387,13 +2395,20 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     setStagingConfirmed(false);
     setStagingResult(null);
     setFixtureConfirmed(false);
+    setTargetConfirmed(false);
+    setTargetPhrase("");
     void Promise.all([
       request<AgentFixtureStatus>(`/agent/projects/${project.id}/runtime-fixture-status`).catch(() => null),
       request<AgentFixtureEvidence[]>(`/agent/projects/${project.id}/runtime-fixture-evidence`).catch(() => []),
-    ]).then(([status, evidence]) => {
+      request<AgentTargetStatus>(`/agent/projects/${project.id}/runtime-target-status`).catch(() => null),
+      request<AgentTargetEvidence[]>(`/agent/projects/${project.id}/runtime-target-evidence`).catch(() => []),
+    ]).then(([status, evidence, nextTargetStatus, targetEvidenceItems]) => {
       setFixtureStatus(status);
       setFixtureImage(status?.recommended_image ?? "");
       setFixtureEvidence(evidence[0] ?? null);
+      setTargetStatus(nextTargetStatus);
+      setTargetBuildId(nextTargetStatus?.builds[0]?.build_id ?? "");
+      setTargetEvidence(savedPlan?.evidence ?? targetEvidenceItems[0] ?? null);
     });
   }, [snapshot?.scan_task_id, project.id]);
 
@@ -2421,6 +2436,9 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
       });
       setStagingResult(result);
       setStagingConfirmed(false);
+      const nextTargetStatus = await request<AgentTargetStatus>(`/agent/projects/${project.id}/runtime-target-status`).catch(() => null);
+      setTargetStatus(nextTargetStatus);
+      setTargetBuildId(result.staging.build_id);
       setMessage("过滤副本已在 D 盘生成并完成哈希复核；没有运行 Agent、容器或工具。");
     } catch (error) { setMessage(`过滤副本生成失败：${errorMessage(error)}`); }
     finally { setLoading(false); }
@@ -2436,17 +2454,46 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
       });
       setFixtureEvidence(result);
       setFixtureConfirmed(false);
-      setMessage(`无害夹具策略验收完成：${result.decision === "pass" ? "全部检查通过" : "存在阻断项"}。真实 Agent 执行仍未启用。`);
+      setMessage(`无害夹具策略验收完成：${result.decision === "pass" ? "全部检查通过" : "存在阻断项"}。本次没有运行任何项目 Agent。`);
     } catch (error) { setMessage(`无害夹具验收失败：${errorMessage(error)}`); }
+    finally { setLoading(false); }
+  }
+
+  async function refreshTargetRuntime() {
+    const next = await request<AgentTargetStatus>(`/agent/projects/${project.id}/runtime-target-status`).catch(() => null);
+    setTargetStatus(next);
+    if (next && !next.builds.some((item) => item.build_id === targetBuildId)) setTargetBuildId(next.builds[0]?.build_id ?? "");
+  }
+
+  async function validateTargetAgent() {
+    const selected = targetStatus?.builds.find((item) => item.build_id === targetBuildId);
+    if (!selected || !targetConfirmed || targetPhrase !== targetStatus?.authorization_phrase) return;
+    setLoading(true); setMessage("");
+    try {
+      const result = await request<AgentTargetEvidence>(`/agent/projects/${project.id}/runtime-target-validation`, {
+        method: "POST",
+        body: JSON.stringify({
+          command, image, timeout_seconds: timeoutSeconds,
+          plan_sha256: selected.plan_sha256, staging_build_id: selected.build_id,
+          staging_sha256: selected.staging_sha256, manifest_sha256: selected.manifest_sha256,
+          authorization_phrase: targetPhrase, operator_confirmed: true,
+        }),
+      });
+      setTargetEvidence(result);
+      setTargetConfirmed(false);
+      setTargetPhrase("");
+      setMessage("指定 Agent 受控运行证据已保存；刷新项目数据后，信任评分会显示本次有限运行观测。");
+    } catch (error) { setMessage(`指定 Agent 受控运行失败：${errorMessage(error)}`); }
     finally { setLoading(false); }
   }
 
   if (!plan) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 受控运行预检</h3><span>等待 AGENT 扫描</span></div><p>先执行一次 AGENT 扫描，系统才会将高风险静态路径带入预检计划。本区域不会运行任何命令。</p></section>;
   const summary = plan.summary ?? {};
   const exactPlanConfirmed = plan.checks.some((item) => item.id === "operator-confirmation" && item.status === "pass");
+  const selectedTargetBuild = targetStatus?.builds.find((item) => item.build_id === targetBuildId);
   return <section className="retest-panel">
-    <div className="panel-header"><h3>AGENT 受控运行预检</h3><span className={`severity ${plan.decision === "blocked" ? "high" : "info"}`}>{plan.decision === "blocked" ? "尚未允许执行" : "等待单独执行批准"}</span></div>
-    <div className="retest-summary"><Metric label="通过 / 阻断检查" value={`${Number(summary.pass_count ?? 0)} / ${Number(summary.blocking_count ?? 0)}`} /><Metric label="候选高风险路径" value={Number(summary.candidate_path_count ?? 0)} /><Metric label="敏感文件名命中" value={Number(summary.sensitive_file_count ?? 0)} /><Metric label="执行已启用" value={plan.execution_enabled ? "是" : "否"} /></div>
+    <div className="panel-header"><h3>AGENT 受控运行预检</h3><span className={`severity ${targetEvidence?.policy_verified ? "info" : plan.decision === "blocked" ? "high" : "info"}`}>{targetEvidence?.policy_verified ? "已有有限目标运行证据" : plan.decision === "blocked" ? "预检尚未通过" : "等待单独执行批准"}</span></div>
+    <div className="retest-summary"><Metric label="通过 / 阻断检查" value={`${Number(summary.pass_count ?? 0)} / ${Number(summary.blocking_count ?? 0)}`} /><Metric label="候选高风险路径" value={Number(summary.candidate_path_count ?? 0)} /><Metric label="敏感文件名命中" value={Number(summary.sensitive_file_count ?? 0)} /><Metric label="预检自身会执行" value={plan.execution_enabled ? "是" : "否"} /></div>
     <p className="retest-note">“只执行安全预检”不会复制文件或联系 Docker。下方只有在你单独勾选确认后，才会把普通文件复制到 D 盘唯一目录并生成哈希清单；它会排除 `.env`、凭据、私钥信号、链接和版本库/构建元数据，绝不直接挂载项目源码。</p>
     <div className="filter-grid"><label>拟执行命令<input value={command} onChange={(event) => { setCommand(event.target.value); setConfirmed(false); setStagingConfirmed(false); }} placeholder="必须由操作人明确选择，不自动推断" /></label><label>本地镜像（必须固定 digest）<input value={image} onChange={(event) => { setImage(event.target.value); setConfirmed(false); setStagingConfirmed(false); }} placeholder="name@sha256:...；预检不会下载" /></label><label>超时秒数<input type="number" min={1} max={30} value={timeoutSeconds} onChange={(event) => { setTimeoutSeconds(Math.max(1, Math.min(30, Number(event.target.value)))); setConfirmed(false); setStagingConfirmed(false); }} /></label><label className="inline-check"><input type="checkbox" checked={confirmed} onChange={(event) => { setConfirmed(event.target.checked); setStagingConfirmed(false); }} />我只确认预检这组命令、镜像和目标；不授权执行</label><button className="primary-action" disabled={loading} onClick={() => void runPreflight()}>{loading ? "预检中" : "只执行安全预检"}</button></div>
     {message ? <p>{message}</p> : null}
@@ -2456,6 +2503,14 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     <div className="kv-list"><div><span>过滤工作副本</span><strong>{plan.staging.status === "not_created" ? "未创建" : plan.staging.status === "unverified_existing" ? "检测到未绑定副本" : plan.staging.status}</strong><span>{plan.staging.path}</span></div><div><span>未来容器策略</span><strong>禁网 · 只读 · drop-all</strong><span>无宿主环境变量、无宿主控制 Socket</span></div><div><span>计划 SHA-256</span><strong>{truncateText(plan.plan_sha256, 20)}</strong><span>用于未来证据关联</span></div></div>
     <table className="compact-table"><thead><tr><th>状态</th><th>检查</th><th>结果</th><th>处理建议</th></tr></thead><tbody>{plan.checks.map((item) => <tr key={item.id}><td><span className={`severity ${item.status === "block" ? "high" : item.status === "warn" ? "medium" : "info"}`}>{item.status === "pass" ? "通过" : item.status === "warn" ? "警告" : "阻断"}</span></td><td>{item.id}</td><td>{item.detail}</td><td>{item.remediation ?? "-"}</td></tr>)}</tbody></table>
     {plan.candidate_dataflow_paths.length ? <details className="advanced-details"><summary>查看计划验证的 {plan.candidate_dataflow_paths.length} 条静态路径</summary><table className="compact-table"><thead><tr><th>风险</th><th>路径</th><th>能力 / 资源</th></tr></thead><tbody>{plan.candidate_dataflow_paths.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{severityLabel(item.severity)}</span><span className="cell-subtext">{agentDataflowConfidenceLabel(item.confidence)}</span></td><td>{item.title}<span className="cell-subtext">{item.asset_path}{item.tool_asset_path ? ` → ${item.tool_asset_path}` : ""}</span></td><td>{agentCapabilityLabel(item.capability)}<span className="cell-subtext">{item.resource_type}: {item.resource_scope}</span></td></tr>)}</tbody></table></details> : null}
+    <details className="advanced-details"><summary>指定项目 Agent 受控运行（高风险，默认关闭）</summary>
+      <p className="retest-note">这里会真实启动所选 staging 中的 Agent。服务器会重新核验扫描批次、计划、命令指纹、镜像 digest、staging/manifest 哈希和 Docker 隔离配置；使用 `--pull=never`，不会下载镜像。当前只观察主进程和工作区前后完整性，子进程、逐文件访问、网络尝试目的地和工具调用尚未完整插桩。</p>
+      <div className="retest-summary"><Metric label="项目执行开关" value={targetStatus?.execution_enabled_by_project_policy ? "已启用" : "默认关闭"} /><Metric label="可执行绑定副本" value={targetStatus?.builds.length ?? 0} /><Metric label="最近策略验证" value={targetEvidence?.policy_verified ? "通过" : targetEvidence ? "需关注" : "尚未运行"} /><Metric label="行为插桩" value={targetEvidence?.behavioral_telemetry_complete ? "完整" : "有限"} /></div>
+      <div className="filter-grid"><label>绑定的 D 盘 staging<select value={targetBuildId} onChange={(event) => { setTargetBuildId(event.target.value); setTargetConfirmed(false); setTargetPhrase(""); }}><option value="">选择已验证副本</option>{(targetStatus?.builds ?? []).map((item) => <option key={item.build_id} value={item.build_id}>{item.build_id} · {item.file_count} 文件 · {formatDateTime(item.created_at)}</option>)}</select></label><label>固定绑定镜像<input value={selectedTargetBuild?.image ?? ""} readOnly placeholder="由 staging 清单绑定" /></label><label>输入确认短语 <code>{targetStatus?.authorization_phrase ?? "RUN ISOLATED AGENT"}</code><input value={targetPhrase} onChange={(event) => { setTargetPhrase(event.target.value); setTargetConfirmed(false); }} /></label><label className="inline-check"><input type="checkbox" disabled={!selectedTargetBuild || targetPhrase !== targetStatus?.authorization_phrase || !targetStatus?.execution_enabled_by_project_policy} checked={targetConfirmed} onChange={(event) => setTargetConfirmed(event.target.checked)} />我确认真实运行这个精确副本、命令和镜像；理解当前插桩仍有限</label><button className="secondary-action" disabled={loading || !targetConfirmed || !selectedTargetBuild || targetPhrase !== targetStatus?.authorization_phrase || !targetStatus?.execution_enabled_by_project_policy} onClick={() => void validateTargetAgent()}>{loading ? "运行中" : "运行所选真实 Agent"}</button><button className="secondary-action" disabled={loading} onClick={() => void refreshTargetRuntime()}>刷新执行状态</button></div>
+      {!targetStatus?.execution_enabled_by_project_policy ? <p>项目策略仍保持默认关闭。只有在上方“项目扫描策略”明确开启并保存后，本按钮才可能使用；开启策略本身不会运行 Agent。</p> : null}
+      {selectedTargetBuild && (command.trim() !== plan.proposed_command?.trim() || image.trim() !== selectedTargetBuild.image || timeoutSeconds !== selectedTargetBuild.timeout_seconds) ? <p className="report-error">当前命令、镜像或超时与所选 staging 的绑定可能不同，服务器将拒绝执行。请重新预检并创建新副本。</p> : null}
+      {targetEvidence ? <><div className="kv-list"><div><span>最近目标证据</span><strong>{targetEvidence.decision === "pass" ? "策略通过" : "需要关注"}</strong><span>{targetEvidence.execution_id} · {targetEvidence.elapsed_ms} ms</span></div><div><span>退出 / 超时 / 清理</span><strong>{targetEvidence.container.exit_code ?? "无"} / {targetEvidence.container.timed_out ? "是" : "否"} / {targetEvidence.container.removed_after_run ? "已删除" : "失败"}</strong><span>工作区保持不变：{targetEvidence.staging.unchanged_after_run ? "是" : "否"}</span></div><div><span>证据 SHA-256</span><strong>{truncateText(targetEvidence.evidence_sha256, 20)}</strong><span>{targetEvidence.evidence_path}</span></div></div><details><summary>查看运行观测覆盖</summary><div className="kv-list">{Object.entries(targetEvidence.telemetry_coverage).map(([key, value]) => <div key={key}><span>{key}</span><strong>{value}</strong></div>)}</div><p>“未观察”不代表行为不可能发生；当前没有展示 Agent 标准输出，以降低敏感信息二次暴露风险。</p></details></> : null}
+    </details>
     <p>{plan.next_action}</p>
     <details className="advanced-details"><summary>查看未来运行证据模型</summary><p>当前状态：{plan.evidence_template.status}。未来证据会分别记录进程、文件访问、网络尝试和工具调用，并把每条静态路径标记为“已观察”“被策略阻断”“未观察”或“未插桩”，不会把“未观察”写成“不可利用”。</p><p>证据脱敏：{plan.evidence_template.redaction.applied ? "启用" : "未启用"}；保存密钥值：{plan.evidence_template.redaction.secret_values_stored ? "是" : "否"}。</p></details>
   </section>;
@@ -2523,7 +2578,7 @@ function FindingModuleGovernance({ project, moduleKey, findings, validations, ev
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
     {moduleKey === "agent" ? <>{project ? <AgentGovernanceConsole project={project} snapshot={agentSnapshot} /> : null}<AgentScanCoveragePanel history={scanHistory} /><AgentAssetInventoryPanel snapshot={agentSnapshot} /><AgentProvenancePanel snapshot={agentSnapshot} /><AgentIntelligencePanel snapshot={agentSnapshot} /><AgentDataflowPanel snapshot={agentSnapshot} /><AgentTrustScorePanel snapshot={agentSnapshot} />{project ? <AgentRuntimePreflightPanel project={project} snapshot={agentSnapshot} /> : null}<AgentPermissionMatrixPanel snapshot={agentSnapshot} /><AgentSemanticDiffPanel diff={agentScanDiff} /></> : null}
     <RetestComparisonPanel comparison={comparison} />
-    <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} formatKey={moduleKey === "agent" ? agentCategoryLabel : (value) => value} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>SAST Agent 复核</strong><span>启用 DeepSeek 后执行真实七角色审计；未启用时使用本地规则化复核。修复内容始终只保存为人工评审草案，不会直接修改源码。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>当前仅执行本地只读规则检查；不会连接或执行 Agent、MCP Server 或插件，也不代表已经完成人工或 AI 复核。</span></div></section>}</div></details>
+    <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} formatKey={moduleKey === "agent" ? agentCategoryLabel : (value) => value} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>SAST Agent 复核</strong><span>启用 DeepSeek 后执行真实七角色审计；未启用时使用本地规则化复核。修复内容始终只保存为人工评审草案，不会直接修改源码。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>默认扫描仍是本地只读；指定目标只有在项目开关、精确绑定和二次确认全部满足后才会受控运行。当前仍未实现 AGENT 专用人工或 AI 复核。</span></div></section>}</div></details>
   </ModuleGovernanceShell>;
 }
 

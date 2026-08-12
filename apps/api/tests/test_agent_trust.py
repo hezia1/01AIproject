@@ -56,6 +56,27 @@ def test_static_clean_evidence_is_capped_and_explained() -> None:
     assert any(item["id"] == "target-runtime-not-observed" for item in result["top_deductions"])
 
 
+def test_limited_target_observation_scores_seven_and_caps_at_95() -> None:
+    result = score(runtime_validation={
+        "schema": "runtime/v1",
+        "isolation_policy": {"network": "none"},
+        "evidence": {
+            "status": "completed",
+            "execution_id": "target-1",
+            "policy_verified": True,
+            "behavioral_telemetry_complete": False,
+        },
+    })
+    runtime = next(item for item in result["dimensions"] if item["id"] == "runtime_assurance")
+
+    assert runtime["score"] == 7
+    assert runtime["status"] == "limited_observation"
+    assert result["score"] == 95
+    assert result["score_cap"] == 95
+    assert result["confidence"] == "medium"
+    assert any(item["id"] == "limited-runtime-telemetry" for item in result["score_caps"])
+
+
 def test_empty_inventory_never_produces_a_trust_claim() -> None:
     result = score(
         assets=[],
@@ -134,6 +155,25 @@ def test_html_report_includes_escaped_trust_evidence() -> None:
     assert "Review &lt;script&gt;" in html
     assert "Use &lt;control&gt;" in html
     assert "<script>" not in html
+
+
+def test_html_report_summarizes_target_evidence_without_output() -> None:
+    trust = score()
+    html = build_agent_html_report({
+        "summary": {}, "assets": [], "findings": [], "quality_gate": {}, "trust_score": trust,
+        "runtime_validation": {"evidence": {
+            "status": "completed", "execution_id": "target-1", "policy_verified": True,
+            "behavioral_telemetry_complete": False, "evidence_sha256": "f" * 64,
+            "telemetry_coverage": {"main_process": "observed", "tool_calls": "not-instrumented"},
+            "output": {"stdout": "SECRET-MUST-NOT-RENDER"},
+        }},
+    })
+
+    assert "指定 Agent 受控运行证据" in html
+    assert "target-1" in html
+    assert "not-instrumented" in html
+    assert "SECRET-MUST-NOT-RENDER" not in html
+    assert "行为插桩不完整时总分最高 95" in html
 
 
 def test_quality_gate_can_optionally_block_low_trust_without_changing_default() -> None:
