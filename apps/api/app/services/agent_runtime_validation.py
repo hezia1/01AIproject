@@ -22,7 +22,9 @@ SENSITIVE_NAMES = {
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".kdbx"}
 EXCLUDED_DIRECTORY_NAMES = {
     ".git", ".svn", ".hg", ".ssh", ".aws", ".azure", ".kube",
-    "node_modules", ".venv", "venv", "__pycache__",
+    "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache",
+    ".mypy_cache", ".ruff_cache", ".cache", "dist", "build", "coverage",
+    "outputs", "artifacts",
 }
 UNSAFE_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("shell-control-operator", re.compile(r"(?:[;&|`]|\$\(|(?:^|\s)[<>])")),
@@ -84,7 +86,7 @@ def build_agent_runtime_plan(
         "proposed_image": redact_image_reference(normalized_image) if normalized_image else None,
         "timeout_seconds": max(1, min(30, int(timeout_seconds))),
         "staging": {
-            "status": "not_created",
+            "status": "unverified_existing" if staging_path.exists() else "not_created",
             "path": str(staging_path),
             "source_mode": "filtered-copy",
             "container_mount": "/workspace:ro",
@@ -117,9 +119,9 @@ def build_agent_runtime_plan(
         },
         "candidate_dataflow_paths": selected_paths,
         "next_action": (
-            "Resolve every blocking preflight check. This phase never creates the staging copy or runs the container."
+            "Resolve every blocking preflight check. Preflight itself never creates staging or runs a container; the separately confirmed staging action only creates a filtered copy."
             if blockers
-            else "Preflight passed, but execution remains disabled until a separate user-approved implementation stage creates the filtered copy and runs one reviewed target."
+            else "Preflight passed. Create and review a filtered staging copy through the separate confirmation action; Agent execution still requires another approval."
         ),
         "limitations": [
             "This plan performs no container execution, image pull, package installation, network request or staging copy.",
@@ -390,7 +392,7 @@ def staging_check(root: Path | None, staging: Path, inventory: dict[str, object]
     if root is None:
         return check_result("filtered-staging", "block", "Filtered staging cannot be planned without a valid source directory.", "Configure the project source directory.")
     if staging.exists():
-        return check_result("filtered-staging", "block", "A staging path exists but was not created, filtered or hash-verified by this preflight.", "Recreate and hash a filtered staging copy in the future execution stage.")
+        return check_result("filtered-staging", "block", "One or more staging builds exist, but this preflight has not selected and hash-verified a specific build.", "Select and re-verify one immutable staging build in the separately approved execution stage.")
     count = int(inventory.get("sensitive_file_count") or 0)
     links = int(inventory.get("linked_directory_count") or 0)
     detail = f"Future filtered staging must exclude {count} detected sensitive-name files and {links} linked directories; values were not read."

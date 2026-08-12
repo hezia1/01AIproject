@@ -92,6 +92,7 @@ type AgentDataflow = { schema: string; mode: string; summary: Record<string, num
 type AgentRuntimeCheck = { id: string; status: "pass" | "warn" | "block"; detail: string; remediation: string | null };
 type AgentRuntimePath = { id: string; kind: string; title: string; severity: Severity; confidence: string; asset_path: string; tool_asset_path?: string | null; capability: string; resource_type: string; resource_scope: string };
 type AgentRuntimePlan = { schema: string; mode: string; execution_enabled: boolean; decision: "blocked" | "awaiting_explicit_execution_approval"; plan_sha256: string; source_path: string | null; proposed_command: string | null; proposed_image: string | null; timeout_seconds: number; staging: { status: string; path: string; source_mode: string; container_mount: string; sensitive_file_count: number; sensitive_categories: Record<string, number>; inventory_truncated: boolean }; isolation_policy: { network: string; root_filesystem: string; workspace: string; environment_injection: string; privileged: boolean; capabilities: string; no_new_privileges: boolean; host_sockets: string; resource_limits: Record<string, string | number> }; checks: AgentRuntimeCheck[]; summary: Record<string, number | boolean>; candidate_dataflow_paths: AgentRuntimePath[]; evidence_template: { status: string; observations: Record<string, unknown[]>; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; redaction: { applied: boolean; secret_values_stored: boolean } }; next_action: string; limitations: string[] };
+type AgentStagingResult = { schema: string; status: string; execution_enabled: boolean; runtime_status: string; plan_sha256: string; staging: { build_id: string; destination_path: string; staging_sha256: string; manifest_sha256: string; summary: { copied_file_count: number; copied_bytes: number; excluded_count: number; exclusion_records_truncated: boolean; runtime_executed: boolean }; verification: { status: string; file_count: number; total_bytes: number; staging_sha256: string; manifest_sha256: string; runtime_executed: boolean }; security: { links_followed: boolean; secret_values_returned: boolean; existing_destination_overwritten: boolean; container_or_agent_executed: boolean } }; next_action: string };
 type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[]; quality_gate?: AgentQualityGate; intelligence?: AgentIntelligence; dataflow?: AgentDataflow; runtime_validation?: AgentRuntimePlan };
 type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
 type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
@@ -2346,6 +2347,8 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
   const [image, setImage] = useState(savedPlan?.proposed_image ?? project.sandbox_image ?? "");
   const [timeoutSeconds, setTimeoutSeconds] = useState(savedPlan?.timeout_seconds ?? 10);
   const [confirmed, setConfirmed] = useState(false);
+  const [stagingConfirmed, setStagingConfirmed] = useState(false);
+  const [stagingResult, setStagingResult] = useState<AgentStagingResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
@@ -2354,6 +2357,8 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     setImage(savedPlan?.proposed_image ?? project.sandbox_image ?? "");
     setTimeoutSeconds(savedPlan?.timeout_seconds ?? 10);
     setConfirmed(false);
+    setStagingConfirmed(false);
+    setStagingResult(null);
   }, [snapshot?.scan_task_id, project.id]);
 
   async function runPreflight() {
@@ -2364,20 +2369,39 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
         body: JSON.stringify({ command, image, timeout_seconds: timeoutSeconds, operator_confirmed: confirmed }),
       });
       setPlan(next);
+      setStagingConfirmed(false);
       setMessage("预检已刷新；没有创建工作副本、拉取镜像或运行容器。");
     } catch (error) { setMessage(`预检失败：${errorMessage(error)}`); }
     finally { setLoading(false); }
   }
 
+  async function buildStaging() {
+    if (!plan || !stagingConfirmed) return;
+    setLoading(true); setMessage("");
+    try {
+      const result = await request<AgentStagingResult>(`/agent/projects/${project.id}/runtime-staging`, {
+        method: "POST",
+        body: JSON.stringify({ command, image, timeout_seconds: timeoutSeconds, plan_sha256: plan.plan_sha256, operator_confirmed: true }),
+      });
+      setStagingResult(result);
+      setStagingConfirmed(false);
+      setMessage("过滤副本已在 D 盘生成并完成哈希复核；没有运行 Agent、容器或工具。");
+    } catch (error) { setMessage(`过滤副本生成失败：${errorMessage(error)}`); }
+    finally { setLoading(false); }
+  }
+
   if (!plan) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 受控运行预检</h3><span>等待 AGENT 扫描</span></div><p>先执行一次 AGENT 扫描，系统才会将高风险静态路径带入预检计划。本区域不会运行任何命令。</p></section>;
   const summary = plan.summary ?? {};
+  const exactPlanConfirmed = plan.checks.some((item) => item.id === "operator-confirmation" && item.status === "pass");
   return <section className="retest-panel">
     <div className="panel-header"><h3>AGENT 受控运行预检</h3><span className={`severity ${plan.decision === "blocked" ? "high" : "info"}`}>{plan.decision === "blocked" ? "尚未允许执行" : "等待单独执行批准"}</span></div>
     <div className="retest-summary"><Metric label="通过 / 阻断检查" value={`${Number(summary.pass_count ?? 0)} / ${Number(summary.blocking_count ?? 0)}`} /><Metric label="候选高风险路径" value={Number(summary.candidate_path_count ?? 0)} /><Metric label="敏感文件名命中" value={Number(summary.sensitive_file_count ?? 0)} /><Metric label="执行已启用" value={plan.execution_enabled ? "是" : "否"} /></div>
-    <p className="retest-note">本阶段仅生成计划并检查配置。不会复制文件、联系 Docker daemon、拉取镜像或运行 Agent。未来必须先在 D 盘生成排除 `.env`、凭据、私钥和版本库元数据的过滤副本，不能直接挂载项目源码目录。</p>
-    <div className="filter-grid"><label>拟执行命令<input value={command} onChange={(event) => { setCommand(event.target.value); setConfirmed(false); }} placeholder="必须由操作人明确选择，不自动推断" /></label><label>本地镜像（必须固定 digest）<input value={image} onChange={(event) => { setImage(event.target.value); setConfirmed(false); }} placeholder="name@sha256:...；预检不会下载" /></label><label>超时秒数<input type="number" min={1} max={30} value={timeoutSeconds} onChange={(event) => { setTimeoutSeconds(Math.max(1, Math.min(30, Number(event.target.value)))); setConfirmed(false); }} /></label><label className="inline-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />我只确认预检这组命令、镜像和目标；不授权执行</label><button className="primary-action" disabled={loading} onClick={() => void runPreflight()}>{loading ? "预检中" : "只执行安全预检"}</button></div>
+    <p className="retest-note">“只执行安全预检”不会复制文件或联系 Docker。下方只有在你单独勾选确认后，才会把普通文件复制到 D 盘唯一目录并生成哈希清单；它会排除 `.env`、凭据、私钥信号、链接和版本库/构建元数据，绝不直接挂载项目源码。</p>
+    <div className="filter-grid"><label>拟执行命令<input value={command} onChange={(event) => { setCommand(event.target.value); setConfirmed(false); setStagingConfirmed(false); }} placeholder="必须由操作人明确选择，不自动推断" /></label><label>本地镜像（必须固定 digest）<input value={image} onChange={(event) => { setImage(event.target.value); setConfirmed(false); setStagingConfirmed(false); }} placeholder="name@sha256:...；预检不会下载" /></label><label>超时秒数<input type="number" min={1} max={30} value={timeoutSeconds} onChange={(event) => { setTimeoutSeconds(Math.max(1, Math.min(30, Number(event.target.value)))); setConfirmed(false); setStagingConfirmed(false); }} /></label><label className="inline-check"><input type="checkbox" checked={confirmed} onChange={(event) => { setConfirmed(event.target.checked); setStagingConfirmed(false); }} />我只确认预检这组命令、镜像和目标；不授权执行</label><button className="primary-action" disabled={loading} onClick={() => void runPreflight()}>{loading ? "预检中" : "只执行安全预检"}</button></div>
     {message ? <p>{message}</p> : null}
-    <div className="kv-list"><div><span>过滤工作副本</span><strong>{plan.staging.status === "not_created" ? "未创建" : plan.staging.status}</strong><span>{plan.staging.path}</span></div><div><span>未来容器策略</span><strong>禁网 · 只读 · drop-all</strong><span>无宿主环境变量、无宿主控制 Socket</span></div><div><span>计划 SHA-256</span><strong>{truncateText(plan.plan_sha256, 20)}</strong><span>用于未来证据关联</span></div></div>
+    <div className="filter-grid"><label className="inline-check"><input type="checkbox" disabled={!exactPlanConfirmed} checked={stagingConfirmed} onChange={(event) => setStagingConfirmed(event.target.checked)} />我确认创建本计划对应的 D 盘过滤副本；不授权运行 Agent 或容器</label><button className="secondary-action" disabled={loading || !stagingConfirmed || !exactPlanConfirmed} onClick={() => void buildStaging()}>{loading ? "处理中" : "创建并校验过滤副本"}</button>{!exactPlanConfirmed ? <span>请先勾选上方目标确认并重新执行安全预检。</span> : null}</div>
+    {stagingResult ? <div className="kv-list"><div><span>过滤副本状态</span><strong>{stagingResult.staging.verification.status === "verified" ? "已校验" : stagingResult.staging.verification.status}</strong><span>{stagingResult.staging.destination_path}</span></div><div><span>复制 / 排除文件</span><strong>{stagingResult.staging.summary.copied_file_count} / {stagingResult.staging.summary.excluded_count}</strong><span>{stagingResult.staging.summary.copied_bytes} 字节；未执行运行时</span></div><div><span>Staging SHA-256</span><strong>{truncateText(stagingResult.staging.staging_sha256, 20)}</strong><span>Manifest：{truncateText(stagingResult.staging.manifest_sha256, 20)}</span></div></div> : null}
+    <div className="kv-list"><div><span>过滤工作副本</span><strong>{plan.staging.status === "not_created" ? "未创建" : plan.staging.status === "unverified_existing" ? "检测到未绑定副本" : plan.staging.status}</strong><span>{plan.staging.path}</span></div><div><span>未来容器策略</span><strong>禁网 · 只读 · drop-all</strong><span>无宿主环境变量、无宿主控制 Socket</span></div><div><span>计划 SHA-256</span><strong>{truncateText(plan.plan_sha256, 20)}</strong><span>用于未来证据关联</span></div></div>
     <table className="compact-table"><thead><tr><th>状态</th><th>检查</th><th>结果</th><th>处理建议</th></tr></thead><tbody>{plan.checks.map((item) => <tr key={item.id}><td><span className={`severity ${item.status === "block" ? "high" : item.status === "warn" ? "medium" : "info"}`}>{item.status === "pass" ? "通过" : item.status === "warn" ? "警告" : "阻断"}</span></td><td>{item.id}</td><td>{item.detail}</td><td>{item.remediation ?? "-"}</td></tr>)}</tbody></table>
     {plan.candidate_dataflow_paths.length ? <details className="advanced-details"><summary>查看计划验证的 {plan.candidate_dataflow_paths.length} 条静态路径</summary><table className="compact-table"><thead><tr><th>风险</th><th>路径</th><th>能力 / 资源</th></tr></thead><tbody>{plan.candidate_dataflow_paths.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{severityLabel(item.severity)}</span><span className="cell-subtext">{agentDataflowConfidenceLabel(item.confidence)}</span></td><td>{item.title}<span className="cell-subtext">{item.asset_path}{item.tool_asset_path ? ` → ${item.tool_asset_path}` : ""}</span></td><td>{agentCapabilityLabel(item.capability)}<span className="cell-subtext">{item.resource_type}: {item.resource_scope}</span></td></tr>)}</tbody></table></details> : null}
     <p>{plan.next_action}</p>

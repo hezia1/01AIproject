@@ -1,4 +1,6 @@
 from datetime import datetime
+import hmac
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -22,6 +24,7 @@ from app.models import (
     AgentScanResult,
     AgentScanSnapshot,
     AgentRuntimePreflightRequest,
+    AgentStagingBuildRequest,
     Finding,
     ModuleKey,
     ScanStatus,
@@ -44,7 +47,8 @@ from app.services.agent_governance import (
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree
 from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
-from app.services.agent_runtime_validation import build_agent_runtime_plan
+from app.services.agent_runtime_validation import build_agent_runtime_plan, staging_workspace_path
+from app.services.agent_staging import build_filtered_staging
 
 router = APIRouter()
 
@@ -375,6 +379,72 @@ def preflight_project_agent_runtime(
         operator_confirmed=payload.operator_confirmed,
         timeout_seconds=payload.timeout_seconds,
     )
+
+
+@router.post("/projects/{project_id}/runtime-staging", status_code=201)
+def build_project_agent_runtime_staging(
+    project_id: UUID,
+    payload: AgentStagingBuildRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    enabled_agent_module(db, project_id)
+    sandbox_module = db.scalar(
+        select(ProjectModuleRecord).where(
+            ProjectModuleRecord.project_id == str(project_id),
+            ProjectModuleRecord.module_key == ModuleKey.sandbox.value,
+            ProjectModuleRecord.enabled.is_(True),
+        )
+    )
+    scan = latest_completed_agent_scan(db, str(project_id))
+    metadata = scan.scan_metadata if scan and isinstance(scan.scan_metadata, dict) else {}
+    dataflow = metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {}
+    plan = build_agent_runtime_plan(
+        project_id=str(project_id),
+        source_path=project.source_path,
+        command=payload.command if payload.command is not None else project.sandbox_command,
+        image=payload.image if payload.image is not None else project.sandbox_image,
+        dataflow=dataflow,
+        sandbox_enabled=sandbox_module is not None,
+        operator_confirmed=payload.operator_confirmed,
+        timeout_seconds=payload.timeout_seconds,
+    )
+    if not payload.operator_confirmed:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required to create a filtered D-drive copy.")
+    if not hmac.compare_digest(str(plan.get("plan_sha256") or ""), payload.plan_sha256):
+        raise HTTPException(status_code=409, detail="The preflight plan changed; run preflight again before creating staging.")
+    required_checks = {
+        "sandbox-module", "source-directory", "source-link-boundary", "explicit-command",
+        "command-policy", "explicit-image", "image-reference-policy", "digest-pinned-image",
+        "operator-confirmation",
+    }
+    blocking = [
+        str(item.get("id") or "") for item in plan.get("checks", [])
+        if isinstance(item, dict) and item.get("id") in required_checks and item.get("status") != "pass"
+    ]
+    if blocking:
+        raise HTTPException(status_code=400, detail=f"Required staging checks did not pass: {', '.join(blocking)}")
+    if not project.source_path:
+        raise HTTPException(status_code=400, detail="Project source directory is not configured")
+    try:
+        staging = build_filtered_staging(
+            source_path=project.source_path,
+            project_id=str(project_id),
+            destination_root=staging_workspace_path(str(project_id)),
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "schema": staging.get("schema"),
+        "status": staging.get("status"),
+        "execution_enabled": False,
+        "runtime_status": "not_run",
+        "plan_sha256": plan.get("plan_sha256"),
+        "staging": staging,
+        "next_action": "Review the staging manifest and digest. Agent execution remains disabled and requires separate approval.",
+    }
 
 
 @router.get("/projects/{project_id}/scan-diff", response_model=AgentScanDiff)

@@ -448,6 +448,14 @@ class AgentRuntimePreflightRequest(BaseModel):
     operator_confirmed: bool = False
 
 
+class AgentStagingBuildRequest(BaseModel):
+    command: str | None = Field(default=None, max_length=1000)
+    image: str | None = Field(default=None, max_length=300)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+    plan_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    operator_confirmed: bool = False
+
+
 class AgentPermissionResult(BaseModel):
     asset_path: str
     subject: str

@@ -1,0 +1,4 @@
+{
+  "message": "offline fixture input",
+  "expected_action": "echo metadata only"
+}

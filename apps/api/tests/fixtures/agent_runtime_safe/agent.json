@@ -1,0 +1,8 @@
+{
+  "name": "harmless-offline-fixture",
+  "version": "1.0.0",
+  "entrypoint": ["python", "runner.py"],
+  "network": false,
+  "tools": [],
+  "writes": []
+}

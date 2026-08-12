@@ -83,8 +83,9 @@ def test_existing_unverified_staging_remains_blocked(tmp_path: Path, monkeypatch
     staging_result = checks_by_id(plan)["filtered-staging"]
     assert plan["execution_enabled"] is False
     assert plan["decision"] == "blocked"
+    assert plan["staging"]["status"] == "unverified_existing"
     assert staging_result["status"] == "block"
-    assert "not created, filtered or hash-verified" in staging_result["detail"]
+    assert "not selected and hash-verified" in staging_result["detail"]
 
 
 def test_sensitive_inventory_reads_names_not_values(tmp_path: Path) -> None:
