@@ -21,6 +21,7 @@ from app.models import (
     AgentScanRequest,
     AgentScanResult,
     AgentScanSnapshot,
+    AgentRuntimePreflightRequest,
     Finding,
     ModuleKey,
     ScanStatus,
@@ -43,6 +44,7 @@ from app.services.agent_governance import (
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree
 from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
+from app.services.agent_runtime_validation import build_agent_runtime_plan
 
 router = APIRouter()
 
@@ -83,6 +85,21 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             parsed.assets,
             [*parsed.findings, *intelligence_output.findings],
             profile,
+        )
+        sandbox_module = db.scalar(
+            select(ProjectModuleRecord).where(
+                ProjectModuleRecord.project_id == str(payload.project_id),
+                ProjectModuleRecord.module_key == ModuleKey.sandbox.value,
+                ProjectModuleRecord.enabled.is_(True),
+            )
+        )
+        runtime_validation = build_agent_runtime_plan(
+            project_id=str(payload.project_id),
+            source_path=source_path,
+            command=project.sandbox_command,
+            image=project.sandbox_image,
+            dataflow=dataflow_output.report,
+            sandbox_enabled=sandbox_module is not None,
         )
         governed_findings = filter_agent_findings(
             [*parsed.findings, *intelligence_output.findings, *dataflow_output.findings], profile
@@ -185,6 +202,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             "quality_gate": quality_gate,
             "intelligence": intelligence_output.report,
             "dataflow": dataflow_output.report,
+            "runtime_validation": runtime_validation,
         }
         db.commit()
         for record in records:
@@ -214,6 +232,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         quality_gate=quality_gate,
         intelligence=intelligence_output.report,
         dataflow=dataflow_output.report,
+        runtime_validation=runtime_validation,
     )
 
 
@@ -324,6 +343,38 @@ def get_project_agent_snapshot(project_id: UUID, db: Session = Depends(get_db)) 
     if scan is None:
         raise HTTPException(status_code=404, detail="No completed AGENT scan found")
     return agent_scan_snapshot(project_id, scan)
+
+
+@router.post("/projects/{project_id}/runtime-preflight")
+def preflight_project_agent_runtime(
+    project_id: UUID,
+    payload: AgentRuntimePreflightRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    project = db.get(ProjectRecord, str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    enabled_agent_module(db, project_id)
+    sandbox_module = db.scalar(
+        select(ProjectModuleRecord).where(
+            ProjectModuleRecord.project_id == str(project_id),
+            ProjectModuleRecord.module_key == ModuleKey.sandbox.value,
+            ProjectModuleRecord.enabled.is_(True),
+        )
+    )
+    scan = latest_completed_agent_scan(db, str(project_id))
+    metadata = scan.scan_metadata if scan and isinstance(scan.scan_metadata, dict) else {}
+    dataflow = metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {}
+    return build_agent_runtime_plan(
+        project_id=str(project_id),
+        source_path=project.source_path,
+        command=payload.command if payload.command is not None else project.sandbox_command,
+        image=payload.image if payload.image is not None else project.sandbox_image,
+        dataflow=dataflow,
+        sandbox_enabled=sandbox_module is not None,
+        operator_confirmed=payload.operator_confirmed,
+        timeout_seconds=payload.timeout_seconds,
+    )
 
 
 @router.get("/projects/{project_id}/scan-diff", response_model=AgentScanDiff)
@@ -617,6 +668,7 @@ def agent_scan_snapshot(project_id: UUID, scan: ScanTaskRecord) -> AgentScanSnap
         quality_gate=metadata.get("quality_gate") if isinstance(metadata.get("quality_gate"), dict) else {},
         intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
         dataflow=metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {},
+        runtime_validation=metadata.get("runtime_validation") if isinstance(metadata.get("runtime_validation"), dict) else {},
     )
 
 
@@ -882,6 +934,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "quality_gate": metadata.get("quality_gate") or {},
         "intelligence": metadata.get("intelligence") or {},
         "dataflow": metadata.get("dataflow") or {},
+        "runtime_validation": metadata.get("runtime_validation") or {},
         "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
         "profile": report_profile_summary(metadata.get("agent_profile")),
         "skipped_files": metadata.get("skipped_files") or [],
@@ -892,6 +945,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
             "SHA-256 values prove only that local bytes were stable between scans; they do not authenticate a publisher or remote package.",
             "Offline intelligence results are limited to configured local sources; checked-no-match is not proof that a package is vulnerability-free.",
             "Data-flow paths are static, confidence-labelled relationships and are not proof of observed runtime execution.",
+            "The Agent runtime plan is preflight-only: it does not create staging files, pull images or run containers.",
         ],
     }
 

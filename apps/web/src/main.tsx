@@ -89,7 +89,10 @@ type AgentDataflowNode = { id: string; kind: string; label: string; asset_path: 
 type AgentDataflowEdge = { id: string; source: string; target: string; relation: string; confidence: "low" | "medium" | "high"; evidence: string; basis: string };
 type AgentDataflowPath = { id: string; kind: string; title: string; severity: Severity; confidence: "low" | "medium" | "high"; asset_path: string; tool_asset_path?: string; source_trust: string; capability: string; resource_type: string; resource_scope: string; approval: string; node_ids: string[]; edge_ids: string[]; controls: { type: string; reference?: string; runtime_verified?: boolean }[]; missing_controls: string[]; evidence: string[] };
 type AgentDataflow = { schema: string; mode: string; summary: Record<string, number>; nodes: AgentDataflowNode[]; edges: AgentDataflowEdge[]; paths: AgentDataflowPath[]; limitations: string[] };
-type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[]; quality_gate?: AgentQualityGate; intelligence?: AgentIntelligence; dataflow?: AgentDataflow };
+type AgentRuntimeCheck = { id: string; status: "pass" | "warn" | "block"; detail: string; remediation: string | null };
+type AgentRuntimePath = { id: string; kind: string; title: string; severity: Severity; confidence: string; asset_path: string; tool_asset_path?: string | null; capability: string; resource_type: string; resource_scope: string };
+type AgentRuntimePlan = { schema: string; mode: string; execution_enabled: boolean; decision: "blocked" | "awaiting_explicit_execution_approval"; plan_sha256: string; source_path: string | null; proposed_command: string | null; proposed_image: string | null; timeout_seconds: number; staging: { status: string; path: string; source_mode: string; container_mount: string; sensitive_file_count: number; sensitive_categories: Record<string, number>; inventory_truncated: boolean }; isolation_policy: { network: string; root_filesystem: string; workspace: string; environment_injection: string; privileged: boolean; capabilities: string; no_new_privileges: boolean; host_sockets: string; resource_limits: Record<string, string | number> }; checks: AgentRuntimeCheck[]; summary: Record<string, number | boolean>; candidate_dataflow_paths: AgentRuntimePath[]; evidence_template: { status: string; observations: Record<string, unknown[]>; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; redaction: { applied: boolean; secret_values_stored: boolean } }; next_action: string; limitations: string[] };
+type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[]; quality_gate?: AgentQualityGate; intelligence?: AgentIntelligence; dataflow?: AgentDataflow; runtime_validation?: AgentRuntimePlan };
 type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
 type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
 type AgentScanDiff = { project_id: string; target_scan_id: string; base_scan_id: string | null; has_comparison: boolean; summary: { assets_added: number; assets_removed: number; assets_changed: number; permissions_added: number; permissions_removed: number; permissions_changed: number; source_changes: number; integrity_changes: number }; assets: AgentAssetDiffItem[]; permissions: AgentPermissionDiffItem[] };
@@ -2336,6 +2339,52 @@ function AgentDataflowPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }
   </section>;
 }
 
+function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; snapshot: AgentScanSnapshot | null }) {
+  const savedPlan = snapshot?.runtime_validation?.schema ? snapshot.runtime_validation : undefined;
+  const [plan, setPlan] = useState<AgentRuntimePlan | null>(savedPlan ?? null);
+  const [command, setCommand] = useState(savedPlan?.proposed_command ?? project.sandbox_command ?? "");
+  const [image, setImage] = useState(savedPlan?.proposed_image ?? project.sandbox_image ?? "");
+  const [timeoutSeconds, setTimeoutSeconds] = useState(savedPlan?.timeout_seconds ?? 10);
+  const [confirmed, setConfirmed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    setPlan(savedPlan ?? null);
+    setCommand(savedPlan?.proposed_command ?? project.sandbox_command ?? "");
+    setImage(savedPlan?.proposed_image ?? project.sandbox_image ?? "");
+    setTimeoutSeconds(savedPlan?.timeout_seconds ?? 10);
+    setConfirmed(false);
+  }, [snapshot?.scan_task_id, project.id]);
+
+  async function runPreflight() {
+    setLoading(true); setMessage("");
+    try {
+      const next = await request<AgentRuntimePlan>(`/agent/projects/${project.id}/runtime-preflight`, {
+        method: "POST",
+        body: JSON.stringify({ command, image, timeout_seconds: timeoutSeconds, operator_confirmed: confirmed }),
+      });
+      setPlan(next);
+      setMessage("预检已刷新；没有创建工作副本、拉取镜像或运行容器。");
+    } catch (error) { setMessage(`预检失败：${errorMessage(error)}`); }
+    finally { setLoading(false); }
+  }
+
+  if (!plan) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 受控运行预检</h3><span>等待 AGENT 扫描</span></div><p>先执行一次 AGENT 扫描，系统才会将高风险静态路径带入预检计划。本区域不会运行任何命令。</p></section>;
+  const summary = plan.summary ?? {};
+  return <section className="retest-panel">
+    <div className="panel-header"><h3>AGENT 受控运行预检</h3><span className={`severity ${plan.decision === "blocked" ? "high" : "info"}`}>{plan.decision === "blocked" ? "尚未允许执行" : "等待单独执行批准"}</span></div>
+    <div className="retest-summary"><Metric label="通过 / 阻断检查" value={`${Number(summary.pass_count ?? 0)} / ${Number(summary.blocking_count ?? 0)}`} /><Metric label="候选高风险路径" value={Number(summary.candidate_path_count ?? 0)} /><Metric label="敏感文件名命中" value={Number(summary.sensitive_file_count ?? 0)} /><Metric label="执行已启用" value={plan.execution_enabled ? "是" : "否"} /></div>
+    <p className="retest-note">本阶段仅生成计划并检查配置。不会复制文件、联系 Docker daemon、拉取镜像或运行 Agent。未来必须先在 D 盘生成排除 `.env`、凭据、私钥和版本库元数据的过滤副本，不能直接挂载项目源码目录。</p>
+    <div className="filter-grid"><label>拟执行命令<input value={command} onChange={(event) => { setCommand(event.target.value); setConfirmed(false); }} placeholder="必须由操作人明确选择，不自动推断" /></label><label>本地镜像（必须固定 digest）<input value={image} onChange={(event) => { setImage(event.target.value); setConfirmed(false); }} placeholder="name@sha256:...；预检不会下载" /></label><label>超时秒数<input type="number" min={1} max={30} value={timeoutSeconds} onChange={(event) => { setTimeoutSeconds(Math.max(1, Math.min(30, Number(event.target.value)))); setConfirmed(false); }} /></label><label className="inline-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />我只确认预检这组命令、镜像和目标；不授权执行</label><button className="primary-action" disabled={loading} onClick={() => void runPreflight()}>{loading ? "预检中" : "只执行安全预检"}</button></div>
+    {message ? <p>{message}</p> : null}
+    <div className="kv-list"><div><span>过滤工作副本</span><strong>{plan.staging.status === "not_created" ? "未创建" : plan.staging.status}</strong><span>{plan.staging.path}</span></div><div><span>未来容器策略</span><strong>禁网 · 只读 · drop-all</strong><span>无宿主环境变量、无宿主控制 Socket</span></div><div><span>计划 SHA-256</span><strong>{truncateText(plan.plan_sha256, 20)}</strong><span>用于未来证据关联</span></div></div>
+    <table className="compact-table"><thead><tr><th>状态</th><th>检查</th><th>结果</th><th>处理建议</th></tr></thead><tbody>{plan.checks.map((item) => <tr key={item.id}><td><span className={`severity ${item.status === "block" ? "high" : item.status === "warn" ? "medium" : "info"}`}>{item.status === "pass" ? "通过" : item.status === "warn" ? "警告" : "阻断"}</span></td><td>{item.id}</td><td>{item.detail}</td><td>{item.remediation ?? "-"}</td></tr>)}</tbody></table>
+    {plan.candidate_dataflow_paths.length ? <details className="advanced-details"><summary>查看计划验证的 {plan.candidate_dataflow_paths.length} 条静态路径</summary><table className="compact-table"><thead><tr><th>风险</th><th>路径</th><th>能力 / 资源</th></tr></thead><tbody>{plan.candidate_dataflow_paths.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{severityLabel(item.severity)}</span><span className="cell-subtext">{agentDataflowConfidenceLabel(item.confidence)}</span></td><td>{item.title}<span className="cell-subtext">{item.asset_path}{item.tool_asset_path ? ` → ${item.tool_asset_path}` : ""}</span></td><td>{agentCapabilityLabel(item.capability)}<span className="cell-subtext">{item.resource_type}: {item.resource_scope}</span></td></tr>)}</tbody></table></details> : null}
+    <p>{plan.next_action}</p>
+    <details className="advanced-details"><summary>查看未来运行证据模型</summary><p>当前状态：{plan.evidence_template.status}。未来证据会分别记录进程、文件访问、网络尝试和工具调用，并把每条静态路径标记为“已观察”“被策略阻断”“未观察”或“未插桩”，不会把“未观察”写成“不可利用”。</p><p>证据脱敏：{plan.evidence_template.redaction.applied ? "启用" : "未启用"}；保存密钥值：{plan.evidence_template.redaction.secret_values_stored ? "是" : "否"}。</p></details>
+  </section>;
+}
+
 function AgentPermissionMatrixPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
   const [filters, setFilters] = useState({ keyword: "", capability: "all", risk: "all", approval: "all" });
   const [page, setPage] = useState(1);
@@ -2396,7 +2445,7 @@ function FindingModuleGovernance({ project, moduleKey, findings, validations, ev
     <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} format={moduleKey === "agent" ? agentCategoryLabel : (value) => value} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
     <ConciseFindingTable findings={pagination.items} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} />
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
-    {moduleKey === "agent" ? <>{project ? <AgentGovernanceConsole project={project} snapshot={agentSnapshot} /> : null}<AgentScanCoveragePanel history={scanHistory} /><AgentAssetInventoryPanel snapshot={agentSnapshot} /><AgentProvenancePanel snapshot={agentSnapshot} /><AgentIntelligencePanel snapshot={agentSnapshot} /><AgentDataflowPanel snapshot={agentSnapshot} /><AgentPermissionMatrixPanel snapshot={agentSnapshot} /><AgentSemanticDiffPanel diff={agentScanDiff} /></> : null}
+    {moduleKey === "agent" ? <>{project ? <AgentGovernanceConsole project={project} snapshot={agentSnapshot} /> : null}<AgentScanCoveragePanel history={scanHistory} /><AgentAssetInventoryPanel snapshot={agentSnapshot} /><AgentProvenancePanel snapshot={agentSnapshot} /><AgentIntelligencePanel snapshot={agentSnapshot} /><AgentDataflowPanel snapshot={agentSnapshot} />{project ? <AgentRuntimePreflightPanel project={project} snapshot={agentSnapshot} /> : null}<AgentPermissionMatrixPanel snapshot={agentSnapshot} /><AgentSemanticDiffPanel diff={agentScanDiff} /></> : null}
     <RetestComparisonPanel comparison={comparison} />
     <details className="advanced-details"><summary>查看高级分析与复核信息</summary><div className="advanced-details-body"><div className="advanced-summary-grid"><div><span>风险分类</span><KeyValue data={countBy(findings.map((item) => ({ category: item.ai_review?.category ?? "unknown" })), "category")} formatKey={moduleKey === "agent" ? agentCategoryLabel : (value) => value} /></div><div><span>严重等级</span><KeyValue data={countBy(findings, "severity")} formatKey={severityLabel} /></div></div>{moduleKey === "sast" ? <section className="advanced-inline-action"><div><strong>SAST Agent 复核</strong><span>启用 DeepSeek 后执行真实七角色审计；未启用时使用本地规则化复核。修复内容始终只保存为人工评审草案，不会直接修改源码。</span></div><button className="secondary-action" disabled={loading || findings.length === 0} onClick={() => void onRunReview?.()}>{loading ? "复核中" : "执行 Agent 复核"}</button></section> : <section className="advanced-inline-action"><div><strong>Agent 安全能力边界</strong><span>当前仅执行本地只读规则检查；不会连接或执行 Agent、MCP Server 或插件，也不代表已经完成人工或 AI 复核。</span></div></section>}</div></details>
   </ModuleGovernanceShell>;

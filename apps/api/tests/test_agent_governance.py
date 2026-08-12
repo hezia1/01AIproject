@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from app.db_models import ScanTaskRecord
-from app.routers.agent import build_agent_scan_diff
+from app.routers.agent import agent_scan_snapshot, build_agent_scan_diff
 
 
 def scan(metadata: dict, created_at: datetime) -> ScanTaskRecord:
@@ -90,3 +90,22 @@ def test_agent_scan_diff_counts_source_and_integrity_changes() -> None:
     assert result.summary.source_changes == 1
     assert result.summary.integrity_changes == 1
     assert {"provenance", "file_sha256"} <= set(result.assets[0].changes)
+
+
+def test_agent_snapshot_exposes_runtime_preflight_without_execution_claims() -> None:
+    project_id = uuid4()
+    target = scan({
+        "assets": [],
+        "permissions": [],
+        "runtime_validation": {
+            "schema": "ai-security-platform.agent-runtime-plan/v1",
+            "mode": "preflight-only",
+            "execution_enabled": False,
+            "decision": "blocked",
+        },
+    }, datetime(2026, 8, 12, 12, 0, 0))
+
+    snapshot = agent_scan_snapshot(project_id, target)
+
+    assert snapshot.runtime_validation["mode"] == "preflight-only"
+    assert snapshot.runtime_validation["execution_enabled"] is False

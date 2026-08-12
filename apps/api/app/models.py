@@ -441,6 +441,13 @@ class AgentScanRequest(BaseModel):
     clear_previous: bool = True
 
 
+class AgentRuntimePreflightRequest(BaseModel):
+    command: str | None = Field(default=None, max_length=1000)
+    image: str | None = Field(default=None, max_length=300)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+    operator_confirmed: bool = False
+
+
 class AgentPermissionResult(BaseModel):
     asset_path: str
     subject: str
@@ -516,6 +523,7 @@ class AgentScanResult(BaseModel):
     quality_gate: dict[str, object] = Field(default_factory=dict)
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
+    runtime_validation: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentScanHistoryItem(BaseModel):
@@ -543,6 +551,7 @@ class AgentScanSnapshot(BaseModel):
     quality_gate: dict[str, object] = Field(default_factory=dict)
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
+    runtime_validation: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentAssetDiffItem(BaseModel):

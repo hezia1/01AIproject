@@ -26,6 +26,7 @@ from app.services.agent_governance import (  # noqa: E402
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree  # noqa: E402
 from app.services.agent_intelligence import analyze_agent_intelligence  # noqa: E402
 from app.services.agent_dataflow import analyze_agent_dataflow  # noqa: E402
+from app.services.agent_runtime_validation import build_agent_runtime_plan  # noqa: E402
 
 
 def main() -> int:
@@ -38,6 +39,8 @@ def main() -> int:
     parser.add_argument("--html", dest="html_path", default="agent-result.html")
     parser.add_argument("--fail-on-block", action="store_true", help="Return exit code 1 when the project quality gate blocks")
     parser.add_argument("--offline", action="store_true", help="Document that no network-backed enrichment was requested")
+    parser.add_argument("--runtime-command", default="", help="Optional command to statically preflight; it is never executed")
+    parser.add_argument("--runtime-image", default="", help="Optional digest-pinned local image to statically preflight; it is never pulled")
     args = parser.parse_args()
 
     try:
@@ -56,6 +59,14 @@ def main() -> int:
     )
     findings = filter_agent_findings(
         [*output.findings, *intelligence_output.findings, *dataflow_output.findings], profile
+    )
+    runtime_validation = build_agent_runtime_plan(
+        project_id="local-ci",
+        source_path=str(source),
+        command=args.runtime_command,
+        image=args.runtime_image,
+        dataflow=dataflow_output.report,
+        sandbox_enabled=True,
     )
     finding_payloads = []
     suppressed_count = 0
@@ -112,6 +123,7 @@ def main() -> int:
         "quality_gate": gate,
         "intelligence": intelligence_output.report,
         "dataflow": dataflow_output.report,
+        "runtime_validation": runtime_validation,
         "profile": profile,
         "skipped_files": output.skipped_files,
         "baseline": {"provided": bool(args.baseline), "path": str(Path(args.baseline).resolve()) if args.baseline else None},
@@ -121,6 +133,7 @@ def main() -> int:
             "All evidence emitted by the scanner uses its credential-redaction path.",
             "Offline intelligence checks use only bundled rules and explicitly configured local files; checked-no-match is not a clean bill of health.",
             "Data-flow paths are static, confidence-labelled relationships and do not prove observed runtime behavior.",
+            "Runtime validation is preflight-only; this command does not create staging files, pull images or run the proposed Agent command.",
         ],
     }
     write_text(args.json_path, json.dumps(report, ensure_ascii=False, indent=2))
@@ -136,6 +149,7 @@ def main() -> int:
             int((dataflow_output.report.get("summary") or {}).get(key) or 0)
             for key in ("critical_path_count", "high_path_count")
         ),
+        "runtime_preflight": runtime_validation.get("decision"),
         "suppressed_count": suppressed_count,
         "quality_gate": gate.get("decision"),
         "failed": gate.get("decision") == "block",
