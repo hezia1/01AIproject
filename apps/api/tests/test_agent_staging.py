@@ -41,13 +41,11 @@ def test_harmless_fixture_build_is_verified_without_execution(tmp_path: Path) ->
     result = build_fixture_staging(tmp_path)
 
     assert result["status"] == "ready"
-    assert result["summary"] == {
-        "copied_file_count": 4,
-        "copied_bytes": sum(path.stat().st_size for path in FIXTURE.iterdir()),
-        "excluded_count": 0,
-        "exclusion_records_truncated": False,
-        "runtime_executed": False,
-    }
+    assert result["summary"]["copied_file_count"] == 5
+    assert result["summary"]["copied_bytes"] == sum(path.stat().st_size for path in FIXTURE.iterdir() if path.is_file())
+    assert result["summary"]["runtime_executed"] is False
+    assert result["summary"]["exclusion_records_truncated"] is False
+    assert all(item["reason"] == "excluded-directory" for item in result["exclusions"])
     assert result["security"] == {
         "links_followed": False,
         "secret_values_returned": False,
@@ -59,7 +57,7 @@ def test_harmless_fixture_build_is_verified_without_execution(tmp_path: Path) ->
     assert destination.parent == tmp_path / "staging" / "harmless-fixture"
     assert (destination / agent_staging.MANIFEST_NAME).is_file()
     assert sorted(item["path"] for item in result["files"]) == [
-        "README.md", "agent.json", "request.json", "runner.py",
+        "README.md", "agent.json", "policy_probe.py", "request.json", "runner.py",
     ]
 
 

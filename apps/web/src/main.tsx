@@ -93,6 +93,8 @@ type AgentRuntimeCheck = { id: string; status: "pass" | "warn" | "block"; detail
 type AgentRuntimePath = { id: string; kind: string; title: string; severity: Severity; confidence: string; asset_path: string; tool_asset_path?: string | null; capability: string; resource_type: string; resource_scope: string };
 type AgentRuntimePlan = { schema: string; mode: string; execution_enabled: boolean; decision: "blocked" | "awaiting_explicit_execution_approval"; plan_sha256: string; source_path: string | null; proposed_command: string | null; proposed_image: string | null; timeout_seconds: number; staging: { status: string; path: string; source_mode: string; container_mount: string; sensitive_file_count: number; sensitive_categories: Record<string, number>; inventory_truncated: boolean }; isolation_policy: { network: string; root_filesystem: string; workspace: string; environment_injection: string; privileged: boolean; capabilities: string; no_new_privileges: boolean; host_sockets: string; resource_limits: Record<string, string | number> }; checks: AgentRuntimeCheck[]; summary: Record<string, number | boolean>; candidate_dataflow_paths: AgentRuntimePath[]; evidence_template: { status: string; observations: Record<string, unknown[]>; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; redaction: { applied: boolean; secret_values_stored: boolean } }; next_action: string; limitations: string[] };
 type AgentStagingResult = { schema: string; status: string; execution_enabled: boolean; runtime_status: string; plan_sha256: string; staging: { build_id: string; destination_path: string; staging_sha256: string; manifest_sha256: string; summary: { copied_file_count: number; copied_bytes: number; excluded_count: number; exclusion_records_truncated: boolean; runtime_executed: boolean }; verification: { status: string; file_count: number; total_bytes: number; staging_sha256: string; manifest_sha256: string; runtime_executed: boolean }; security: { links_followed: boolean; secret_values_returned: boolean; existing_destination_overwritten: boolean; container_or_agent_executed: boolean } }; next_action: string };
+type AgentFixtureStatus = { available: boolean; images: { reference: string; repository: string; digest: string; image_id: string; size: string }[]; download_performed: boolean; recommended_image: string | null; message: string };
+type AgentFixtureEvidence = { schema: string; scope: string; decision: "pass" | "block"; execution_enabled_for_real_agents: boolean; run_id: string; started_at: string; elapsed_ms: number; evidence_sha256: string; evidence_path: string; image: { reference: string; digest: string; local_image_id: string; download_performed: boolean }; staging: { path: string; staging_sha256: string; manifest_sha256: string }; container: { command: string[]; exit_code: number | null; timed_out: boolean; removed_after_run: boolean }; policy_checks: Record<string, boolean>; limitations: string[] };
 type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[]; quality_gate?: AgentQualityGate; intelligence?: AgentIntelligence; dataflow?: AgentDataflow; runtime_validation?: AgentRuntimePlan };
 type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
 type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
@@ -2349,6 +2351,10 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
   const [confirmed, setConfirmed] = useState(false);
   const [stagingConfirmed, setStagingConfirmed] = useState(false);
   const [stagingResult, setStagingResult] = useState<AgentStagingResult | null>(null);
+  const [fixtureStatus, setFixtureStatus] = useState<AgentFixtureStatus | null>(null);
+  const [fixtureImage, setFixtureImage] = useState("");
+  const [fixtureConfirmed, setFixtureConfirmed] = useState(false);
+  const [fixtureEvidence, setFixtureEvidence] = useState<AgentFixtureEvidence | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
@@ -2359,6 +2365,15 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     setConfirmed(false);
     setStagingConfirmed(false);
     setStagingResult(null);
+    setFixtureConfirmed(false);
+    void Promise.all([
+      request<AgentFixtureStatus>(`/agent/projects/${project.id}/runtime-fixture-status`).catch(() => null),
+      request<AgentFixtureEvidence[]>(`/agent/projects/${project.id}/runtime-fixture-evidence`).catch(() => []),
+    ]).then(([status, evidence]) => {
+      setFixtureStatus(status);
+      setFixtureImage(status?.recommended_image ?? "");
+      setFixtureEvidence(evidence[0] ?? null);
+    });
   }, [snapshot?.scan_task_id, project.id]);
 
   async function runPreflight() {
@@ -2390,6 +2405,21 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     finally { setLoading(false); }
   }
 
+  async function validateHarmlessFixture() {
+    if (!fixtureConfirmed || !fixtureImage) return;
+    setLoading(true); setMessage("");
+    try {
+      const result = await request<AgentFixtureEvidence>(`/agent/projects/${project.id}/runtime-fixture-validation`, {
+        method: "POST",
+        body: JSON.stringify({ image: fixtureImage, timeout_seconds: Math.min(15, timeoutSeconds), operator_confirmed: true }),
+      });
+      setFixtureEvidence(result);
+      setFixtureConfirmed(false);
+      setMessage(`无害夹具策略验收完成：${result.decision === "pass" ? "全部检查通过" : "存在阻断项"}。真实 Agent 执行仍未启用。`);
+    } catch (error) { setMessage(`无害夹具验收失败：${errorMessage(error)}`); }
+    finally { setLoading(false); }
+  }
+
   if (!plan) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 受控运行预检</h3><span>等待 AGENT 扫描</span></div><p>先执行一次 AGENT 扫描，系统才会将高风险静态路径带入预检计划。本区域不会运行任何命令。</p></section>;
   const summary = plan.summary ?? {};
   const exactPlanConfirmed = plan.checks.some((item) => item.id === "operator-confirmation" && item.status === "pass");
@@ -2401,6 +2431,7 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     {message ? <p>{message}</p> : null}
     <div className="filter-grid"><label className="inline-check"><input type="checkbox" disabled={!exactPlanConfirmed} checked={stagingConfirmed} onChange={(event) => setStagingConfirmed(event.target.checked)} />我确认创建本计划对应的 D 盘过滤副本；不授权运行 Agent 或容器</label><button className="secondary-action" disabled={loading || !stagingConfirmed || !exactPlanConfirmed} onClick={() => void buildStaging()}>{loading ? "处理中" : "创建并校验过滤副本"}</button>{!exactPlanConfirmed ? <span>请先勾选上方目标确认并重新执行安全预检。</span> : null}</div>
     {stagingResult ? <div className="kv-list"><div><span>过滤副本状态</span><strong>{stagingResult.staging.verification.status === "verified" ? "已校验" : stagingResult.staging.verification.status}</strong><span>{stagingResult.staging.destination_path}</span></div><div><span>复制 / 排除文件</span><strong>{stagingResult.staging.summary.copied_file_count} / {stagingResult.staging.summary.excluded_count}</strong><span>{stagingResult.staging.summary.copied_bytes} 字节；未执行运行时</span></div><div><span>Staging SHA-256</span><strong>{truncateText(stagingResult.staging.staging_sha256, 20)}</strong><span>Manifest：{truncateText(stagingResult.staging.manifest_sha256, 20)}</span></div></div> : null}
+    <details className="advanced-details"><summary>无害夹具容器策略验收</summary><p className="retest-note">该操作会真实启动一次仓库自带的固定无害夹具，但不会使用项目源码或运行真实 Agent。镜像必须已在本地且固定 digest，Docker 使用 `--pull=never`；容器结束后会删除，仅在 D 盘保留过滤副本和证据 JSON。</p><div className="filter-grid"><label>本地 Python digest 镜像<select value={fixtureImage} onChange={(event) => { setFixtureImage(event.target.value); setFixtureConfirmed(false); }}><option value="">{fixtureStatus?.available ? "选择本地镜像" : "没有可用的本地 digest 镜像"}</option>{(fixtureStatus?.images ?? []).map((item) => <option key={item.reference} value={item.reference}>{item.reference}（{item.size}）</option>)}</select></label><label className="inline-check"><input type="checkbox" disabled={!fixtureImage} checked={fixtureConfirmed} onChange={(event) => setFixtureConfirmed(event.target.checked)} />我确认只运行仓库无害夹具并验证固定隔离策略</label><button className="secondary-action" disabled={loading || !fixtureConfirmed || !fixtureImage} onClick={() => void validateHarmlessFixture()}>{loading ? "验收中" : "运行无害夹具策略验收"}</button></div>{fixtureStatus ? <p>{fixtureStatus.message} 未执行任何下载。</p> : <p>正在检查本地镜像；不会自动下载。</p>}{fixtureEvidence ? <div className="kv-list"><div><span>最近验收</span><strong>{fixtureEvidence.decision === "pass" ? "通过" : "阻断"}</strong><span>{fixtureEvidence.run_id} · {fixtureEvidence.elapsed_ms} ms</span></div><div><span>策略检查</span><strong>{Object.values(fixtureEvidence.policy_checks).filter(Boolean).length} / {Object.keys(fixtureEvidence.policy_checks).length}</strong><span>真实 Agent 执行：未启用</span></div><div><span>证据 SHA-256</span><strong>{truncateText(fixtureEvidence.evidence_sha256, 20)}</strong><span>{fixtureEvidence.evidence_path}</span></div></div> : null}</details>
     <div className="kv-list"><div><span>过滤工作副本</span><strong>{plan.staging.status === "not_created" ? "未创建" : plan.staging.status === "unverified_existing" ? "检测到未绑定副本" : plan.staging.status}</strong><span>{plan.staging.path}</span></div><div><span>未来容器策略</span><strong>禁网 · 只读 · drop-all</strong><span>无宿主环境变量、无宿主控制 Socket</span></div><div><span>计划 SHA-256</span><strong>{truncateText(plan.plan_sha256, 20)}</strong><span>用于未来证据关联</span></div></div>
     <table className="compact-table"><thead><tr><th>状态</th><th>检查</th><th>结果</th><th>处理建议</th></tr></thead><tbody>{plan.checks.map((item) => <tr key={item.id}><td><span className={`severity ${item.status === "block" ? "high" : item.status === "warn" ? "medium" : "info"}`}>{item.status === "pass" ? "通过" : item.status === "warn" ? "警告" : "阻断"}</span></td><td>{item.id}</td><td>{item.detail}</td><td>{item.remediation ?? "-"}</td></tr>)}</tbody></table>
     {plan.candidate_dataflow_paths.length ? <details className="advanced-details"><summary>查看计划验证的 {plan.candidate_dataflow_paths.length} 条静态路径</summary><table className="compact-table"><thead><tr><th>风险</th><th>路径</th><th>能力 / 资源</th></tr></thead><tbody>{plan.candidate_dataflow_paths.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{severityLabel(item.severity)}</span><span className="cell-subtext">{agentDataflowConfidenceLabel(item.confidence)}</span></td><td>{item.title}<span className="cell-subtext">{item.asset_path}{item.tool_asset_path ? ` → ${item.tool_asset_path}` : ""}</span></td><td>{agentCapabilityLabel(item.capability)}<span className="cell-subtext">{item.resource_type}: {item.resource_scope}</span></td></tr>)}</tbody></table></details> : null}

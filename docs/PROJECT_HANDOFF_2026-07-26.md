@@ -137,6 +137,7 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 - `apps/api/app/services/agent_dataflow.py`
 - `apps/api/app/services/agent_runtime_validation.py`
 - `apps/api/app/services/agent_staging.py`
+- `apps/api/app/services/agent_fixture_runtime.py`
 - `apps/web/src/main.tsx` 中当前实际渲染的 `FindingModuleGovernance` 与 Agent 扫描覆盖面板
 - 通用 Finding、DAST/SANDBOX 关联和 ASPM 展示代码
 
@@ -174,7 +175,10 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 - 已定义运行证据模板与纯函数关联：计划/镜像/staging 摘要，进程、文件、网络、工具调用，以及静态路径的 observed / blocked_by_policy / not_observed / not_run 状态；测试使用合成事件，不执行目标程序。
 - 已实现二次确认保护的过滤 staging 构建：绑定精确预检 SHA-256，在 D 盘唯一目录原子创建且不覆盖，排除敏感命名/内容信号、链接、VCS/依赖/缓存/构建与 artifacts，拒绝越界、非普通文件、源文件竞态和数量/字节超限。
 - staging manifest 记录逐文件/整体/manifest SHA-256、复制与排除清单；落盘后重新验证全部清单文件并拒绝额外、缺失或篡改内容。该动作不联系 Docker，也不产生运行证据。
-- 仓库包含 `apps/api/tests/fixtures/agent_runtime_safe` 无害离线夹具；当前只验证复制、排除、摘要、防覆盖和防篡改，没有执行它。
+- 仓库包含 `apps/api/tests/fixtures/agent_runtime_safe` 无害离线夹具；复制层测试覆盖排除、摘要、防覆盖和防篡改，运行层只执行固定 `policy_probe.py`。
+- 已实现固定无害夹具容器策略验收：只发现本地 Python digest 镜像，强制 `--pull=never` 和固定参数数组；Docker 配置与容器内探针共同验证禁网、根/工作区只读、非 root、drop-all、no-new-privileges、无宿主环境/Socket、tmpfs、CPU/内存/PID 和超时。
+- 2026-08-12 最终真实夹具验收使用本地 `python@sha256:423ed6ab…` 和本机 named-pipe Docker Context，未下载；30/30 检查通过，退出码 0、未超时、临时容器已删除。staging SHA-256 `c4488238e024…`，证据 SHA-256 `12b6ba8666b6…`；证据位于 D 盘忽略目录，不提交生成物。
+- fixture evidence 明确标记 `scope=repository-harmless-fixture-only` 和 `execution_enabled_for_real_agents=false`，不能作为真实 Agent、MCP 或插件的运行证明。
 
 ### 已在前端可见
 
@@ -187,6 +191,7 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 - AGENT 治理页已显示 Prompt→工具→资源路径序列、等级、置信度、证据、Prompt/工具资产位置、已声明控制和缺失控制，并明确区分静态声明与运行时事实。
 - AGENT 治理页已显示受控运行预检、阻断原因、拟定命令/镜像（敏感参数脱敏）、D 盘过滤 staging 位置、隔离策略、高风险候选路径和未来证据模型；“只执行安全预检”按钮不会运行命令。
 - 同一面板已提供独立二次确认的“创建并校验过滤副本”入口，显示唯一 D 盘目录、复制/排除数量、staging/manifest SHA-256；页面明确说明该动作不授权 Agent 或容器执行。
+- 折叠的“无害夹具容器策略验收”区显示本地 digest 镜像、真实运行确认、最近结果、策略通过数、证据 SHA-256 和 D 盘位置，并明确限定为仓库夹具。
 - 列表展示等级、分类、标题、文件/行号、证据、修复建议和信任影响，支持每页 10 条分页。
 - 单独执行 AGENT 时只锁定 AGENT 模块，不应导致其他模块置灰或触发扫描。
 
@@ -215,7 +220,7 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 7. **Prompt → 工具 → 资源数据流建模（已完成静态基础）**：已建立带依据/置信度的节点、边、风险路径、控制缺口、Finding、门禁、报告和前端；它不是运行时传播证明。
 8. **受控沙箱预检与证据模型（已完成第一阶段）**：已完成强制不执行的计划、敏感文件名清点、隔离策略、D 盘 staging 要求、静态路径候选和证据结构；预检自身不复制、不拉取镜像、不运行目标。
 9. **过滤 staging 与无害夹具（已完成构建基础）**：可审计复制、排除规则、链接/越界拒绝、竞态检查、字节/文件上限、唯一构建、摘要与复核已完成；无害夹具已入库但未执行。
-10. **无害夹具容器策略验收（推荐下一子阶段，需再次确认）**：只使用仓库夹具和本地已有 digest 镜像，验证禁网、只读、drop-all、无宿主环境/Socket、资源上限和超时；如果缺少镜像，下载前必须说明用途、体积和 D 盘位置。
+10. **无害夹具容器策略验收（已完成）**：固定夹具、本地 digest 镜像、禁拉取、双重策略证据、超时和临时容器清理均已实现并完成一次 30/30 真实验收；这不证明真实 Agent 安全。
 11. **指定 Agent 运行时验证（单独批准）**：只有用户明确批准具体目标、digest 镜像、命令和资源边界，且如需下载已提前说明后，才可采集真实进程/文件/网络/工具调用证据。
 12. **可选真实 AI 分析**：只有用户批准代码/配置发送边界和 API 费用后，才可设计 AGENT 专用模型复核；它不能复用文案冒充已实现能力。
 

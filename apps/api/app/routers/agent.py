@@ -25,6 +25,7 @@ from app.models import (
     AgentScanSnapshot,
     AgentRuntimePreflightRequest,
     AgentStagingBuildRequest,
+    AgentFixtureRuntimeRequest,
     Finding,
     ModuleKey,
     ScanStatus,
@@ -49,6 +50,12 @@ from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
 from app.services.agent_runtime_validation import build_agent_runtime_plan, staging_workspace_path
 from app.services.agent_staging import build_filtered_staging
+from app.services.agent_fixture_runtime import (
+    FixtureRuntimeRejected,
+    list_fixture_evidence,
+    list_local_fixture_images,
+    run_harmless_fixture_validation,
+)
 
 router = APIRouter()
 
@@ -445,6 +452,49 @@ def build_project_agent_runtime_staging(
         "staging": staging,
         "next_action": "Review the staging manifest and digest. Agent execution remains disabled and requires separate approval.",
     }
+
+
+@router.get("/projects/{project_id}/runtime-fixture-status")
+def get_project_agent_fixture_status(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_agent_fixture_modules(db, project_id)
+    try:
+        return list_local_fixture_images()
+    except FixtureRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/runtime-fixture-evidence")
+def get_project_agent_fixture_evidence(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[dict[str, object]]:
+    require_agent_fixture_modules(db, project_id)
+    try:
+        return list_fixture_evidence(str(project_id))
+    except FixtureRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/runtime-fixture-validation", status_code=201)
+def validate_project_agent_runtime_fixture(
+    project_id: UUID,
+    payload: AgentFixtureRuntimeRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_agent_fixture_modules(db, project_id)
+    if not payload.operator_confirmed:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required to run the bundled harmless fixture.")
+    try:
+        return run_harmless_fixture_validation(
+            project_id=str(project_id),
+            image=payload.image,
+            timeout_seconds=payload.timeout_seconds,
+        )
+    except FixtureRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/projects/{project_id}/scan-diff", response_model=AgentScanDiff)
@@ -934,6 +984,19 @@ def enabled_agent_module(db: Session, project_id: UUID) -> ProjectModuleRecord:
     if module is None:
         raise HTTPException(status_code=400, detail="AGENT module is not enabled for this project")
     return module
+
+
+def require_agent_fixture_modules(db: Session, project_id: UUID) -> None:
+    enabled_agent_module(db, project_id)
+    sandbox = db.scalar(
+        select(ProjectModuleRecord).where(
+            ProjectModuleRecord.project_id == str(project_id),
+            ProjectModuleRecord.module_key == ModuleKey.sandbox.value,
+            ProjectModuleRecord.enabled.is_(True),
+        )
+    )
+    if sandbox is None:
+        raise HTTPException(status_code=400, detail="SANDBOX module is not enabled for this project")
 
 
 def mutation_actor(request: Request, payload: dict[str, object]) -> str:

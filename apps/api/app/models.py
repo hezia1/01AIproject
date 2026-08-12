@@ -456,6 +456,12 @@ class AgentStagingBuildRequest(BaseModel):
     operator_confirmed: bool = False
 
 
+class AgentFixtureRuntimeRequest(BaseModel):
+    image: str = Field(min_length=1, max_length=300)
+    timeout_seconds: int = Field(default=5, ge=1, le=15)
+    operator_confirmed: bool = False
+
+
 class AgentPermissionResult(BaseModel):
     asset_path: str
     subject: str
