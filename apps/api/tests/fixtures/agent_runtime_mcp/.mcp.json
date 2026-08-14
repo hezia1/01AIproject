@@ -1,0 +1,20 @@
+{
+  "name": "bounded-mcp-integration",
+  "version": "1.0.0",
+  "publisher": "ai-security-platform-tests",
+  "mcpServers": {
+    "bounded-calculator": {
+      "command": "python",
+      "args": ["-I", "-B", "mcp_server.py"],
+      "transport": "stdio",
+      "version": "1.0.0",
+      "tools": ["bounded_add"],
+      "resources": ["fixture://status"],
+      "prompts": ["add-two-integers"],
+      "requireApproval": true,
+      "inputValidation": "integer-only",
+      "networkPolicy": "none",
+      "filesystemPolicy": "read-only"
+    }
+  }
+}

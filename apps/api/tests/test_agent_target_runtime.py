@@ -66,7 +66,10 @@ def inspect_payload(staging: Path, *, workspace_writable: bool = False) -> dict[
             "Tmpfs": {"/tmp": "rw,noexec,nosuid,size=32m"},
             "IpcMode": "none",
             "PidMode": "",
-            "LogConfig": {"Type": "local", "Config": {"max-size": "1m", "max-file": "1"}},
+            "LogConfig": {
+                "Type": "local",
+                "Config": {"max-size": "1m", "max-file": "1", "compress": "false"},
+            },
         },
         "Mounts": [{
             "Type": "bind", "Source": str(staging), "Destination": "/workspace",
@@ -106,6 +109,7 @@ def test_target_command_has_fixed_isolation_and_no_shell(tmp_path: Path) -> None
     assert ["--network", "none"] == command[command.index("--network"):command.index("--network") + 2]
     assert "--read-only" in command
     assert ["--cap-drop", "ALL"] == command[command.index("--cap-drop"):command.index("--cap-drop") + 2]
+    assert ["--log-opt", "compress=false"] == command[command.index("compress=false") - 1:command.index("compress=false") + 1]
     assert ["--entrypoint", "python"] == command[command.index("--entrypoint"):command.index("--entrypoint") + 2]
     assert command[-2:] == [IMAGE, "main.py"]
     assert not any(value in {"sh", "bash", "cmd", "powershell", "-e", "--env"} for value in command)

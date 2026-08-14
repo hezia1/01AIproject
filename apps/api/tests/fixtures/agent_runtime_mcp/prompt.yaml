@@ -1,0 +1,14 @@
+name: bounded-calculation-prompt
+version: 1.0.0
+publisher: ai-security-platform-tests
+prompts:
+  - name: add-two-integers
+    description: Add two fixed integers through the bounded tool.
+tools:
+  - bounded_add
+resources:
+  - fixture://status
+permissions:
+  - bounded_add
+requireApproval: true
+inputValidation: integer-only

@@ -1,0 +1,11 @@
+{
+  "name": "bounded-calculator-plugin",
+  "version": "1.0.0",
+  "publisher": "ai-security-platform-tests",
+  "entrypoint": "mcp_server.py",
+  "tools": ["bounded_add"],
+  "resources": ["fixture://status"],
+  "permissions": ["bounded_add"],
+  "requireApproval": true,
+  "sandbox": "required"
+}

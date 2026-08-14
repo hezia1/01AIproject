@@ -1,0 +1,30 @@
+{
+  "name": "bounded-calculator-tools",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "name": "bounded_add",
+      "description": "Add two bounded integers without external side effects.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": {"type": "integer", "minimum": -1000, "maximum": 1000},
+          "b": {"type": "integer", "minimum": -1000, "maximum": 1000}
+        },
+        "required": ["a", "b"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {"sum": {"type": "integer"}},
+        "required": ["sum"],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    }
+  ]
+}

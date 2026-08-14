@@ -322,7 +322,7 @@ def build_target_container_command(
         "--security-opt", "no-new-privileges:true", "--user", "65534:65534",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--ipc", "none",
         "--no-healthcheck", "--log-driver", "local", "--log-opt", "max-size=1m",
-        "--log-opt", "max-file=1",
+        "--log-opt", "max-file=1", "--log-opt", "compress=false",
         "--mount", f"type=bind,src={staging_path},dst=/workspace,readonly",
         "--workdir", "/workspace", "--entrypoint", command_tokens[0],
         image, *command_tokens[1:],
@@ -383,7 +383,12 @@ def configured_policy_checks(
         "ipc_isolated": str(host.get("IpcMode") or "") == "none",
         "pid_namespace_isolated": str(host.get("PidMode") or "") in {"", "private"},
         "healthcheck_disabled": healthcheck.get("Test") == ["NONE"],
-        "bounded_local_logs": log_config.get("Type") == "local" and str((log_config.get("Config") or {}).get("max-size")) == "1m" and str((log_config.get("Config") or {}).get("max-file")) == "1",
+        "bounded_local_logs": (
+            log_config.get("Type") == "local"
+            and str((log_config.get("Config") or {}).get("max-size")) == "1m"
+            and str((log_config.get("Config") or {}).get("max-file")) == "1"
+            and str((log_config.get("Config") or {}).get("compress")).lower() == "false"
+        ),
         "host_environment_not_injected": not any(
             str(value).startswith("AGENT_HOST_CANARY=") for value in config.get("Env", [])
         ) if isinstance(config.get("Env"), list) else True,
