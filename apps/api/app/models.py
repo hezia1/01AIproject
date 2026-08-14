@@ -520,6 +520,10 @@ class AgentProvenanceResult(BaseModel):
     version_status: str
     publisher_claim: str | None = None
     publisher_status: str
+    source_visibility: str = "not-declared"
+    authentication_status: str = "not-declared"
+    onboarding_status: str = "not-applicable"
+    connection_status: str = "not-attempted"
     issues: list[str] = Field(default_factory=list)
 
 

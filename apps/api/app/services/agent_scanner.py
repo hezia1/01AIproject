@@ -66,6 +66,10 @@ class AgentProvenance:
     version_status: str
     publisher_claim: str | None
     publisher_status: str
+    source_visibility: str = "not-declared"
+    authentication_status: str = "not-declared"
+    onboarding_status: str = "not-applicable"
+    connection_status: str = "not-attempted"
     issues: list[str] = field(default_factory=list)
 
 
@@ -200,7 +204,7 @@ AGENT_RULES = [
     ),
 ]
 
-AGENT_RULE_VERSION = "agent-rules-2026.08.14-v6"
+AGENT_RULE_VERSION = "agent-rules-2026.08.14-v7"
 INSTRUCTION_FILE_NAMES = {
     "agents.md",
     "claude.md",
@@ -797,6 +801,7 @@ def provenance_from_node(
     args = direct_string_list(node, {"args", "arguments"})
     image = direct_scalar(node, {"image", "containerimage", "container_image"})
     repository = direct_reference(node, {"repository", "source", "sourceurl", "source_url", "git", "giturl", "git_url"})
+    registry = direct_reference(node, {"registry", "registryurl", "registry_url", "indexurl", "index_url"})
     endpoint = direct_reference(node, {"url", "endpoint"})
     declared_package = direct_scalar(node, {"package", "packagename", "package_name", "distribution"})
     declared_version = direct_scalar(node, {"version", "packageversion", "package_version"})
@@ -806,6 +811,7 @@ def provenance_from_node(
     package_name: str | None = safe_metadata_value(declared_package)
     package_version: str | None = safe_metadata_value(declared_version)
     raw_source: str | None = None
+    declared_source_kind = source_declaration_kind(node)
 
     command_name = Path(str(command or "").strip('"\'')).name.lower()
     if command_name in {"npx", "npm", "pnpm", "pnpx", "yarn", "bunx"}:
@@ -835,6 +841,22 @@ def provenance_from_node(
         raw_source = container_ref
         source_ref = safe_scope(container_ref) if container_ref else None
         package_name, package_version = split_container_ref(container_ref) if container_ref else (package_name, package_version)
+    elif repository and declared_source_kind in {"registry", "npm", "pypi", "packageregistry"}:
+        installation_method = "declared-registry"
+        source_type = "registry"
+        raw_source = repository
+        source_ref = safe_scope(repository)
+    elif repository and declared_source_kind in {"container", "oci", "image"}:
+        installation_method = "declared-container"
+        source_type = "container"
+        raw_source = repository
+        source_ref = safe_scope(repository)
+        package_name, package_version = split_container_ref(repository)
+    elif repository and declared_source_kind in {"remoteurl", "remote", "mcp", "http", "https"}:
+        installation_method = "declared-remote-endpoint"
+        source_type = "remote-url"
+        raw_source = repository
+        source_ref = safe_scope(repository)
     elif repository:
         installation_method = "git"
         source_type = "git"
@@ -842,6 +864,11 @@ def provenance_from_node(
         source_ref = safe_scope(repository)
         package_name = package_name or repository_name(repository)
         package_version = package_version or git_reference(repository)
+    elif registry:
+        installation_method = "declared-registry"
+        source_type = "registry"
+        raw_source = registry
+        source_ref = safe_scope(registry)
     elif endpoint:
         installation_method = "remote-endpoint"
         source_type = "remote-url"
@@ -874,6 +901,9 @@ def provenance_from_node(
     local_candidates = [item for item in [source_ref, *args] if isinstance(item, str)]
     if source_type == "local" and any(local_reference_escapes(item, file_path.parent, project_root) for item in local_candidates):
         issues.append("local-path-escape")
+    source_visibility, authentication_status, onboarding_status = private_source_preflight(
+        node, source_type, source_ref, issues,
+    )
     return AgentProvenance(
         subject=redact_evidence(subject)[:240],
         package_name=package_name,
@@ -884,6 +914,9 @@ def provenance_from_node(
         version_status=version_status,
         publisher_claim=safe_metadata_value(publisher),
         publisher_status="claim-only" if publisher else "not-declared",
+        source_visibility=source_visibility,
+        authentication_status=authentication_status,
+        onboarding_status=onboarding_status,
         issues=sorted(set(issues)),
     )
 
@@ -1028,6 +1061,65 @@ def direct_reference(data: dict[str, Any], keys: set[str]) -> str | None:
             if nested:
                 return nested
     return None
+
+
+def source_declaration_kind(data: dict[str, Any]) -> str:
+    for key, value in data.items():
+        if normalize_key(str(key)) not in {"source", "repository", "registry"} or not isinstance(value, dict):
+            continue
+        kind = direct_scalar(value, {"type", "kind", "source_type"})
+        if kind:
+            return normalize_key(kind)
+    return ""
+
+
+def private_source_preflight(
+    node: dict[str, Any],
+    source_type: str,
+    source_ref: str | None,
+    issues: list[str],
+) -> tuple[str, str, str]:
+    """Describe only declared private-source onboarding inputs; never connect."""
+    declarations = [node, *direct_mappings(node, {"source", "repository", "registry"})]
+    visibility_values = [
+        value for declaration in declarations
+        for key, value in declaration.items()
+        if normalize_key(str(key)) in {"private", "isprivate", "visibility", "access"}
+    ]
+    private_declared = any(
+        value is True or (isinstance(value, str) and value.strip().lower() in {"private", "internal"})
+        for value in visibility_values
+    )
+    public_declared = any(
+        isinstance(value, str) and value.strip().lower() == "public"
+        for value in visibility_values
+    )
+    visibility = "private-declared" if private_declared else "public-declared" if public_declared else "not-declared"
+    auth_values = [
+        value for declaration in declarations
+        for key, value in declaration.items()
+        if normalize_key(str(key)) in {"auth", "authentication", "credentials", "credentialref", "secretref", "tokenenv"}
+    ]
+    auth_keys = {
+        normalize_key(str(key)) for declaration in declarations for key in declaration
+    }
+    reference_declared = bool(auth_values) or bool(auth_keys & {"env", "environment", "credentialref", "secretref", "tokenenv"})
+    inline_declared = bool(auth_keys & {"token", "password", "apikey", "apikey", "credential"})
+    authentication = "inline-value-declared" if inline_declared else "reference-declared" if reference_declared else "not-declared"
+    if visibility != "private-declared":
+        return visibility, authentication, "not-applicable"
+    if source_type == "unknown" or not source_ref:
+        return visibility, authentication, "source-not-declared"
+    if "embedded-source-credentials" in issues or authentication == "inline-value-declared":
+        return visibility, authentication, "blocked-inline-credentials"
+    if authentication == "reference-declared":
+        return visibility, authentication, "preflight-ready"
+    return visibility, authentication, "credentials-not-declared"
+
+
+def direct_mappings(data: dict[str, Any], keys: set[str]) -> list[dict[str, Any]]:
+    normalized = {normalize_key(item) for item in keys}
+    return [value for key, value in data.items() if normalize_key(str(key)) in normalized and isinstance(value, dict)]
 
 
 def first_package_argument(args: list[str]) -> str | None:

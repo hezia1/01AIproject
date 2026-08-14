@@ -1090,6 +1090,10 @@ def provenance_to_dict(item) -> dict[str, object]:
         "version_status": item.version_status,
         "publisher_claim": item.publisher_claim,
         "publisher_status": item.publisher_status,
+        "source_visibility": item.source_visibility,
+        "authentication_status": item.authentication_status,
+        "onboarding_status": item.onboarding_status,
+        "connection_status": item.connection_status,
         "issues": item.issues,
     }
 

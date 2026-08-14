@@ -330,6 +330,55 @@ def test_mcp_npx_package_provenance_and_file_hash_are_recorded(tmp_path):
     assert "AGENT.SUPPLY.UNPINNED_VERSION" not in rule_ids(result)
 
 
+def test_declared_private_registry_source_has_offline_preflight_only(tmp_path):
+    config = {
+        "package": "internal-agent",
+        "version": "1.2.3",
+        "source": {
+            "type": "registry",
+            "url": "https://packages.example.invalid/simple",
+            "visibility": "private",
+            "auth": {"env": "PRIVATE_REGISTRY_TOKEN"},
+        },
+    }
+    (tmp_path / "agent.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+    provenance = result.assets[0].provenance[0]
+
+    assert provenance.source_type == "registry"
+    assert provenance.source_visibility == "private-declared"
+    assert provenance.authentication_status == "reference-declared"
+    assert provenance.onboarding_status == "preflight-ready"
+    assert provenance.connection_status == "not-attempted"
+    assert "PRIVATE_REGISTRY_TOKEN" not in str(provenance)
+
+
+def test_declared_source_type_does_not_misclassify_private_mcp_as_git(tmp_path):
+    config = {
+        "mcpServers": {
+            "private": {
+                "source": {
+                    "type": "mcp",
+                    "url": "https://mcp.example.invalid/api",
+                    "visibility": "private",
+                    "auth": {"secretRef": "MCP_ACCESS_TOKEN"},
+                },
+            },
+        },
+    }
+    (tmp_path / "mcp.json").write_text(json.dumps(config), encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+    provenance = result.assets[0].provenance[0]
+
+    assert provenance.source_type == "remote-url"
+    assert provenance.installation_method == "declared-remote-endpoint"
+    assert provenance.source_visibility == "private-declared"
+    assert provenance.onboarding_status == "preflight-ready"
+    assert "MCP_ACCESS_TOKEN" not in str(provenance)
+
+
 def test_unpinned_and_insecure_sources_are_reported_without_credentials(tmp_path):
     config = {
         "mcpServers": {
