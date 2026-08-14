@@ -34,6 +34,22 @@ def test_only_recognized_agent_assets_are_scanned(tmp_path):
     assert result.rule_version == AGENT_RULE_VERSION
 
 
+def test_plugin_and_tool_directory_conventions_are_classified(tmp_path):
+    plugin_dir = tmp_path / "plugins" / "bounded"
+    tool_dir = tmp_path / "tools"
+    plugin_dir.mkdir(parents=True)
+    tool_dir.mkdir()
+    (plugin_dir / "manifest.json").write_text('{"name":"bounded","permissions":[]}', encoding="utf-8")
+    (tool_dir / "tool.yaml").write_text("name: bounded_add\ntools: []\n", encoding="utf-8")
+
+    result = scan_agent_tree(str(tmp_path))
+
+    assert sorted((asset.path, asset.asset_type) for asset in result.assets) == [
+        ("plugins/bounded/manifest.json", "plugin-manifest"),
+        ("tools/tool.yaml", "tool-schema"),
+    ]
+
+
 def test_negative_instructions_do_not_create_capability_findings(tmp_path):
     (tmp_path / "AGENTS.md").write_text(
         "Do not execute shell commands.\n"

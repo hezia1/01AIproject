@@ -200,7 +200,7 @@ AGENT_RULES = [
     ),
 ]
 
-AGENT_RULE_VERSION = "agent-rules-2026.08.14-v5"
+AGENT_RULE_VERSION = "agent-rules-2026.08.14-v6"
 INSTRUCTION_FILE_NAMES = {
     "agents.md",
     "claude.md",
@@ -229,6 +229,8 @@ MCP_CONFIG_NAMES = {
 }
 PLUGIN_CONFIG_NAMES = {"plugin.json", "plugin.yaml", "plugin.yml", "plugin.toml"}
 TOOL_CONFIG_NAMES = {"tools.json", "tools.yaml", "tools.yml", "tools.toml"}
+PLUGIN_MANIFEST_NAMES = {"manifest.json", "manifest.yaml", "manifest.yml", "manifest.toml"}
+TOOL_DEFINITION_NAMES = {"tool.json", "tool.yaml", "tool.yml", "tool.toml"}
 AGENT_DIR_MARKERS = {".agents", ".agent", ".claude", ".codex", ".cursor", "agents", "skills", "prompts", "plugins", "mcp"}
 IGNORED_DIRS = {
     ".git",
@@ -351,9 +353,9 @@ def classify_agent_asset(path: Path, root: Path) -> str | None:
         return "mcp-config"
     if name in INSTRUCTION_FILE_NAMES:
         return "instruction"
-    if name in PLUGIN_CONFIG_NAMES:
+    if name in PLUGIN_CONFIG_NAMES or (name in PLUGIN_MANIFEST_NAMES and "plugins" in relative_parts):
         return "plugin-manifest"
-    if name in TOOL_CONFIG_NAMES:
+    if name in TOOL_CONFIG_NAMES or (name in TOOL_DEFINITION_NAMES and "tools" in relative_parts):
         return "tool-schema"
     if name in PROMPT_CONFIG_NAMES:
         return "prompt"

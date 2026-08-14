@@ -218,3 +218,28 @@ def test_gate_blocks_unpinned_source_and_integrity_change() -> None:
         }], permissions=[], coverage=coverage(), profile=profile, assets=[asset],
     )
     assert accepted["decision"] == "pass"
+
+
+def test_config_coverage_gates_are_opt_in_and_report_the_gap_count() -> None:
+    profile = effective_agent_profile({})
+    assert profile["quality_gate"]["block_generic_config_validation"] is False
+    assert profile["quality_gate"]["block_unvalidated_schema_references"] is False
+
+    coverage_gap = coverage(generic_parser_asset_count=2, schema_references_not_validated=1)
+    default_result = evaluate_agent_quality_gate(
+        findings=[], permissions=[], coverage=coverage_gap, profile=profile,
+    )
+    assert default_result["decision"] == "pass"
+
+    profile = update_agent_profile({}, {"quality_gate": {
+        "block_generic_config_validation": True,
+        "block_unvalidated_schema_references": True,
+    }}, actor="security-owner")
+    blocking_result = evaluate_agent_quality_gate(
+        findings=[], permissions=[], coverage=coverage_gap, profile=profile,
+    )
+
+    assert blocking_result["decision"] == "block"
+    assert blocking_result["blocking_coverage_count"] == 3
+    assert any("generic configuration parsing" in reason for reason in blocking_result["reasons"])
+    assert any("schema references were not validated" in reason for reason in blocking_result["reasons"])

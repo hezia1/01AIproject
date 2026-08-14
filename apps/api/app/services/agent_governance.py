@@ -34,6 +34,8 @@ DEFAULT_AGENT_PROFILE: dict[str, object] = {
         "block_wildcard_permissions": True,
         "block_parse_failures": True,
         "block_skipped_files": False,
+        "block_generic_config_validation": False,
+        "block_unvalidated_schema_references": False,
         "block_permission_expansion": True,
         "require_approval_for_high_risk": True,
         "block_unpinned_sources": True,
@@ -248,6 +250,15 @@ def evaluate_agent_quality_gate(
         reasons.append(f"{int(coverage.get('failed_asset_count') or 0)} Agent assets failed structured parsing")
     if gate.get("block_skipped_files") and int(coverage.get("skipped_file_count") or 0) > 0:
         reasons.append(f"{int(coverage.get('skipped_file_count') or 0)} Agent files were skipped")
+    coverage_block_count = 0
+    generic_config_count = int(coverage.get("generic_parser_asset_count") or 0)
+    if gate.get("block_generic_config_validation") and generic_config_count > 0:
+        coverage_block_count += generic_config_count
+        reasons.append(f"{generic_config_count} Agent assets use generic configuration parsing")
+    unvalidated_schema_count = int(coverage.get("schema_references_not_validated") or 0)
+    if gate.get("block_unvalidated_schema_references") and unvalidated_schema_count > 0:
+        coverage_block_count += unvalidated_schema_count
+        reasons.append(f"{unvalidated_schema_count} declared Agent schema references were not validated")
 
     intelligence_rule_policy = {
         "AGENT.INTEL.KNOWN_VULNERABILITY": "block_known_vulnerabilities",
@@ -409,6 +420,7 @@ def evaluate_agent_quality_gate(
         blocking_dataflow,
         dataflow.get("summary") if isinstance(dataflow, dict) and isinstance(dataflow.get("summary"), dict) else {},
         trust_score,
+        coverage_block_count,
     )
 
 
@@ -424,6 +436,7 @@ def gate_result(
     dataflow_findings: list[dict[str, object]] | None = None,
     dataflow_summary: dict[str, object] | None = None,
     trust_score: dict[str, object] | None = None,
+    coverage_block_count: int = 0,
 ) -> dict[str, object]:
     deduped_permissions = {permission_identity(item): item for item in permissions}
     return {
@@ -435,6 +448,7 @@ def gate_result(
         "blocking_asset_count": len(assets or []),
         "blocking_intelligence_count": len(intelligence_findings or []),
         "blocking_dataflow_count": len(dataflow_findings or []),
+        "blocking_coverage_count": coverage_block_count,
         "blocked_findings": findings[:100],
         "blocked_permissions": list(deduped_permissions.values())[:100],
         "blocked_assets": (assets or [])[:100],
@@ -808,6 +822,8 @@ def normalize_quality_gate(value: object, strict: bool = False) -> dict[str, obj
         "block_wildcard_permissions",
         "block_parse_failures",
         "block_skipped_files",
+        "block_generic_config_validation",
+        "block_unvalidated_schema_references",
         "block_permission_expansion",
         "require_approval_for_high_risk",
         "block_unpinned_sources",
