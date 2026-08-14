@@ -4,6 +4,14 @@
 
 本文档反映 **2026-08-14** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
+## 2026-08-14 AGENT staging 绑定的 stdio MCP 自动能力探测
+
+- 新增独立的 stdio MCP Server 能力探测流程。平台从当前扫描批次对应的已验证 staging 中解析 JSON/YAML/TOML `mcpServers` 声明，展示候选配置、Server、脱敏命令、资格检查和阻断原因；不再要求项目客户端主动检测平台观察器。
+- 候选必须是本地 stdio 命令，且不能包含配置环境变量、远程 URL、Shell、内联代码、危险参数、疑似凭据或绝对宿主可执行路径。执行仍要求项目策略已开启、选择精确 staging/候选、输入独立确认短语，并使用已有本地 digest 镜像和 `--pull=never`。
+- 固定探测客户端只执行 `initialize`、`notifications/initialized`、`tools/list`、`resources/list` 和 `prompts/list`；不会调用工具、执行资源读取或获取 Prompt 内容。结果只保存 Server 身份声明、工具/Prompt 名称和资源 URI scheme，不保存响应正文。
+- 真实验收直接从 staging 中的 `.mcp.json` 识别 `bounded-calculator` 并成功启动，无需 `test_client.py` 适配：27/27 项策略检查通过，5 条请求（含 1 条 notification）、4 条响应、1 个 MCP Server 子进程、0 条拒绝事件；发现工具 `bounded_add`、资源 scheme `fixture` 和 Prompt `add-two-integers`，容器已删除且 staging 未变化。
+- 本次能力探测证据 SHA-256 为 `694424c6e444…`，内容动作明确为 `false`，输出内容不保存。信任算法升级为 `agent-trust-static-1.2`，但 Server 能力清单不等于整个 Agent 运行证明，因此实测信任分仍为 82。
+
 ## 2026-08-14 AGENT stdio MCP 调用账本与代表性目标真实验收
 
 - 新增离线、零第三方依赖的代表性 MCP 集成夹具 `apps/api/tests/fixtures/agent_runtime_mcp`。它同时包含指令文件、MCP 配置、插件清单、工具 Schema 和 Prompt，服务端以 stdio JSON-RPC 提供初始化、工具发现/调用、资源发现/读取和 Prompt 发现/获取；客户端只调用边界受控的整数加法工具，不读环境变量、不联网、不写文件。
@@ -244,7 +252,7 @@ Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、
 ## 其他模块的接口与实际边界
 
 - SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET /api/sast/ai-health`、`POST /api/sast/ai-health/test`、`GET /api/sast/projects/{project_id}/agent-runs`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`GET/POST/PATCH /api/sast/projects/{project_id}/rules`、`POST /api/sast/rules/validate`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/projects/{project_id}/ci-config`、`GET /api/sast/tool-health`。基础扫描使用本地规则/静态分析；项目启用 AI 后，Agent 复核会真实调用 DeepSeek 七个角色，并按证据与置信度门槛写回结果。
-- AGENT：`POST /api/agent/scan`；`GET /api/agent/projects/{project_id}/findings|scan-history|snapshot|scan-diff|gate|report|sarif|report.html|ci-config`；`POST /api/agent/projects/{project_id}/runtime-preflight|runtime-staging|runtime-fixture-validation|runtime-target-validation`；`GET /api/agent/projects/{project_id}/runtime-fixture-status|runtime-fixture-evidence|runtime-target-status|runtime-target-evidence`；`GET/PATCH /api/agent/projects/{project_id}/profile`；`POST /api/agent/projects/{project_id}/exceptions`；`PATCH /api/agent/projects/{project_id}/exceptions/{exception_id}`。预检不复制或执行；staging 只创建过滤副本；fixture validation 只运行固定仓库夹具。指定目标执行默认关闭，要求扫描/计划/命令/镜像/超时/staging/manifest 精确绑定、固定确认短语和本地 digest 镜像，全部使用 `--pull=never`；静态规则、夹具或一次目标运行通过都不等于项目安全。
+- AGENT：`POST /api/agent/scan`；`GET /api/agent/projects/{project_id}/findings|scan-history|snapshot|scan-diff|gate|report|sarif|report.html|ci-config`；`POST /api/agent/projects/{project_id}/runtime-preflight|runtime-staging|runtime-fixture-validation|runtime-target-validation|runtime-mcp-probe-validation`；`GET /api/agent/projects/{project_id}/runtime-fixture-status|runtime-fixture-evidence|runtime-target-status|runtime-target-evidence|runtime-mcp-probe-status|runtime-mcp-probe-evidence`；`GET/PATCH /api/agent/projects/{project_id}/profile`；`POST /api/agent/projects/{project_id}/exceptions`；`PATCH /api/agent/projects/{project_id}/exceptions/{exception_id}`。预检不复制或执行；staging 只创建过滤副本；fixture validation 只运行固定仓库夹具。指定目标执行和 MCP 能力探测默认关闭，要求精确 staging/镜像/候选绑定、独立确认短语和本地 digest 镜像，全部使用 `--pull=never`；能力探测不调用工具或读取内容，静态规则、夹具或一次运行通过都不等于项目安全。
 - AGENT 单文件上限为 512 KiB，单资产最多持久化 500 条去重权限；超过上限会在快照元数据和前端资产结果中明确显示截断数量。
 - DAST：`POST /api/dast/probe`、`POST /api/dast/validations`、`GET /api/dast/projects/{project_id}/validations`。基础检查只验证 HTTP/HTTPS、状态、耗时、Server Header 和基础安全响应头；不能证明 SQL 注入、鉴权绕过等业务漏洞可利用。
 - SANDBOX：`POST /api/sandbox/run`、`POST /api/sandbox/evidence`、`GET /api/sandbox/projects/{project_id}/evidence`。默认使用受限 Docker 容器；执行摘要和隔离策略不等同系统级行为取证。

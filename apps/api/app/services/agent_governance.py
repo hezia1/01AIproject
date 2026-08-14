@@ -560,6 +560,27 @@ def build_agent_html_report(report: dict[str, object]) -> str:
             "<p>本节不展示 Agent 标准输出。未插桩或未观察不代表行为不可能发生，证据只覆盖该次精确副本、镜像、命令和超时。</p>"
         )
         html = html.replace("</body>", f"{target_section}</body>")
+    mcp_probe = runtime.get("mcp_probe_evidence") if isinstance(runtime.get("mcp_probe_evidence"), dict) else {}
+    probe_result = mcp_probe.get("capability_probe") if isinstance(mcp_probe.get("capability_probe"), dict) else {}
+    if mcp_probe:
+        method_outcomes = probe_result.get("method_outcomes") if isinstance(probe_result.get("method_outcomes"), dict) else {}
+        method_rows = "".join(
+            f"<tr><td>{escape(str(method))}</td><td>{escape(str(outcome))}</td></tr>"
+            for method, outcome in method_outcomes.items()
+        )
+        probe_section = (
+            "<h2>stdio MCP Server 只读能力探测</h2>"
+            f"<p>状态：{escape(str(probe_result.get('status') or '-'))}；策略验证：{escape(str(mcp_probe.get('policy_verified') is True))}；"
+            f"Server：{escape(str(probe_result.get('server_name') or '-'))}；协议：{escape(str(probe_result.get('protocol_version') or '-'))}</p>"
+            f"<p>工具：{escape(', '.join(str(item) for item in probe_result.get('tool_names', [])) or '-')}；"
+            f"资源 scheme：{escape(', '.join(str(item) for item in probe_result.get('resource_schemes', [])) or '-')}；"
+            f"Prompt：{escape(', '.join(str(item) for item in probe_result.get('prompt_names', [])) or '-')}</p>"
+            "<table><thead><tr><th>协议方法</th><th>结果</th></tr></thead>"
+            f"<tbody>{method_rows}</tbody></table>"
+            f"<p>证据 SHA-256：{escape(str(mcp_probe.get('evidence_sha256') or '-'))}。"
+            "该探测没有调用工具、读取资源或获取 Prompt 内容；Server 声明不等于整个 Agent 已通过运行验证。</p>"
+        )
+        html = html.replace("</body>", f"{probe_section}</body>")
     trust = report.get("trust_score") if isinstance(report.get("trust_score"), dict) else {}
     if not trust:
         return html

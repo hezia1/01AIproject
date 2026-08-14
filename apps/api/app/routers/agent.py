@@ -28,6 +28,7 @@ from app.models import (
     AgentRuntimePreflightRequest,
     AgentStagingBuildRequest,
     AgentFixtureRuntimeRequest,
+    AgentMcpProbeRuntimeRequest,
     AgentTargetRuntimeRequest,
     Finding,
     ModuleKey,
@@ -65,6 +66,11 @@ from app.services.agent_target_runtime import (
     list_target_evidence,
     list_target_runtime_status,
     run_target_agent_validation,
+)
+from app.services.agent_mcp_probe_runtime import (
+    list_mcp_probe_evidence,
+    list_mcp_probe_status,
+    run_mcp_probe_validation,
 )
 
 router = APIRouter()
@@ -563,6 +569,92 @@ def get_project_agent_target_runtime_evidence(
         return list_target_evidence(str(project_id))
     except TargetRuntimeRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/runtime-mcp-probe-status")
+def get_project_agent_mcp_probe_status(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_agent_fixture_modules(db, project_id)
+    module = enabled_agent_module(db, project_id)
+    profile = effective_agent_profile(module.config)
+    scan = latest_completed_agent_scan(db, str(project_id))
+    try:
+        return list_mcp_probe_status(
+            str(project_id), str(scan.id) if scan is not None else None,
+            bool(profile.get("target_runtime_execution_enabled")),
+        )
+    except TargetRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/runtime-mcp-probe-evidence")
+def get_project_agent_mcp_probe_evidence(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[dict[str, object]]:
+    require_agent_fixture_modules(db, project_id)
+    try:
+        return list_mcp_probe_evidence(str(project_id))
+    except TargetRuntimeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/runtime-mcp-probe-validation", status_code=201)
+def validate_project_agent_mcp_probe(
+    project_id: UUID,
+    payload: AgentMcpProbeRuntimeRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_agent_fixture_modules(db, project_id)
+    module = enabled_agent_module(db, project_id)
+    profile = effective_agent_profile(module.config)
+    if not profile.get("target_runtime_execution_enabled"):
+        raise HTTPException(status_code=403, detail="MCP server probing is disabled by the project target runtime policy.")
+    scan = latest_completed_agent_scan(db, str(project_id))
+    if scan is None:
+        raise HTTPException(status_code=400, detail="A completed AGENT scan is required before MCP probing.")
+    metadata = scan.scan_metadata if isinstance(scan.scan_metadata, dict) else {}
+    try:
+        evidence = run_mcp_probe_validation(
+            project_id=str(project_id), scan_task_id=str(scan.id), image=payload.image,
+            timeout_seconds=payload.timeout_seconds, plan_sha256=payload.plan_sha256,
+            staging_build_id=payload.staging_build_id, staging_sha256=payload.staging_sha256,
+            manifest_sha256=payload.manifest_sha256, candidate_id=payload.candidate_id,
+            authorization_phrase=payload.authorization_phrase,
+            operator_confirmed=payload.operator_confirmed,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=400, detail="A Docker control command timed out during MCP probing.") from exc
+    except (TargetRuntimeRejected, OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    runtime_validation = (
+        dict(metadata.get("runtime_validation"))
+        if isinstance(metadata.get("runtime_validation"), dict)
+        else {}
+    )
+    runtime_validation["mcp_probe_evidence"] = evidence
+    findings = db.scalars(
+        select(FindingRecord)
+        .where(FindingRecord.scan_task_id == scan.id, FindingRecord.source == "AGENT")
+        .order_by(FindingRecord.created_at.asc())
+    ).all()
+    trust_score = calculate_agent_trust_score(
+        assets=metadata_dict_list(metadata, "assets"),
+        permissions=metadata_dict_list(metadata, "permissions"),
+        findings=[finding_record_report_payload(item) for item in findings],
+        coverage=metadata.get("coverage") if isinstance(metadata.get("coverage"), dict) else {},
+        intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
+        dataflow=metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {},
+        runtime_validation=runtime_validation,
+    )
+    scan.scan_metadata = {
+        **metadata, "runtime_validation": runtime_validation, "trust_score": trust_score,
+    }
+    db.commit()
+    return {**evidence, "trust_score": trust_score}
 
 
 @router.post("/projects/{project_id}/runtime-target-validation", status_code=201)

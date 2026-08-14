@@ -103,6 +103,10 @@ type AgentTargetStatus = { schema: string; execution_enabled_by_project_policy: 
 type AgentMcpLedgerEvent = { event_id: string; event_type: string; method?: string; subject_kind?: string; subject?: string; outcome?: string; duration_ms?: number; payload_bytes?: number; phase?: string; executable?: string; exit_code?: number; event_sha256: string };
 type AgentMcpLedger = { schema: string; transport: string; source: string; observer_version: string; integrity: string; content_stored: boolean; rejected_event_count: number; summary: Record<string, number | Record<string, number>>; events: AgentMcpLedgerEvent[] };
 type AgentTargetEvidence = { schema: string; scope: string; status: string; decision: "pass" | "attention"; execution_id: string; started_at: string; finished_at: string; elapsed_ms: number; policy_verified: boolean; behavioral_telemetry_complete: boolean; evidence_sha256: string; evidence_path: string; image: { reference: string; digest: string; local_image_id: string; download_performed: boolean }; staging: { build_id: string; path: string; staging_sha256: string; manifest_sha256: string; unchanged_after_run: boolean }; container: { command_sha256: string; command_preview: string; exit_code: number | null; timed_out: boolean; removed_after_run: boolean }; policy_checks: Record<string, boolean>; telemetry_coverage: Record<string, string>; observations?: { processes?: Record<string, unknown>[]; tool_calls?: Record<string, unknown>[] }; mcp_ledger?: AgentMcpLedger; path_results: { dataflow_path_id: string; runtime_status: string; reason: string }[]; output: { stdout_char_count: number; stderr_char_count: number; stdout_sha256: string; stderr_sha256: string; truncated: boolean; redacted_before_hashing: boolean; content_stored: boolean }; limitations: string[]; trust_score?: AgentTrustScore };
+type AgentMcpProbeCandidate = { candidate_id: string; config_path: string; config_sha256: string; server_name: string; transport: string; command_preview: string | null; command_sha256: string | null; eligible: boolean; checks: Record<string, boolean>; rejection_reasons: string[] };
+type AgentMcpProbeBuild = { build_id: string; created_at: string; staging_sha256: string; manifest_sha256: string; scan_task_id: string; plan_sha256: string; image: string; timeout_seconds: number; candidates: AgentMcpProbeCandidate[] };
+type AgentMcpProbeStatus = { schema: string; execution_enabled_by_project_policy: boolean; authorization_phrase: string; current_scan_task_id: string | null; builds: AgentMcpProbeBuild[]; download_performed: boolean; limitations: string[] };
+type AgentMcpProbeEvidence = { schema: string; status: string; decision: "pass" | "attention"; execution_id: string; elapsed_ms: number; policy_verified: boolean; evidence_sha256: string; evidence_path: string; candidate: AgentMcpProbeCandidate; capability_probe: { status: string; protocol_version: string; server_name: string; server_version: string; tool_names: string[]; resource_schemes: string[]; prompt_names: string[]; method_outcomes: Record<string, string>; content_actions_performed: boolean; content_stored: boolean }; mcp_ledger: AgentMcpLedger; image: { reference: string; download_performed: boolean }; staging: { build_id: string; unchanged_after_run: boolean }; container: { exit_code: number | null; timed_out: boolean; removed_after_run: boolean }; limitations: string[]; trust_score?: AgentTrustScore };
 type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at: string; source_path: string | null; rule_version: string | null; assets: AgentAsset[]; permissions: AgentPermission[]; skipped_files: { path: string; reason: string }[]; quality_gate?: AgentQualityGate; intelligence?: AgentIntelligence; dataflow?: AgentDataflow; runtime_validation?: AgentRuntimePlan; trust_score?: AgentTrustScore };
 type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
 type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
@@ -2386,6 +2390,12 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
   const [targetConfirmed, setTargetConfirmed] = useState(false);
   const [targetPhrase, setTargetPhrase] = useState("");
   const [targetEvidence, setTargetEvidence] = useState<AgentTargetEvidence | null>(savedPlan?.evidence ?? null);
+  const [mcpProbeStatus, setMcpProbeStatus] = useState<AgentMcpProbeStatus | null>(null);
+  const [mcpProbeBuildId, setMcpProbeBuildId] = useState("");
+  const [mcpProbeCandidateId, setMcpProbeCandidateId] = useState("");
+  const [mcpProbePhrase, setMcpProbePhrase] = useState("");
+  const [mcpProbeConfirmed, setMcpProbeConfirmed] = useState(false);
+  const [mcpProbeEvidence, setMcpProbeEvidence] = useState<AgentMcpProbeEvidence | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
@@ -2399,18 +2409,27 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     setFixtureConfirmed(false);
     setTargetConfirmed(false);
     setTargetPhrase("");
+    setMcpProbeConfirmed(false);
+    setMcpProbePhrase("");
     void Promise.all([
       request<AgentFixtureStatus>(`/agent/projects/${project.id}/runtime-fixture-status`).catch(() => null),
       request<AgentFixtureEvidence[]>(`/agent/projects/${project.id}/runtime-fixture-evidence`).catch(() => []),
       request<AgentTargetStatus>(`/agent/projects/${project.id}/runtime-target-status`).catch(() => null),
       request<AgentTargetEvidence[]>(`/agent/projects/${project.id}/runtime-target-evidence`).catch(() => []),
-    ]).then(([status, evidence, nextTargetStatus, targetEvidenceItems]) => {
+      request<AgentMcpProbeStatus>(`/agent/projects/${project.id}/runtime-mcp-probe-status`).catch(() => null),
+      request<AgentMcpProbeEvidence[]>(`/agent/projects/${project.id}/runtime-mcp-probe-evidence`).catch(() => []),
+    ]).then(([status, evidence, nextTargetStatus, targetEvidenceItems, nextProbeStatus, probeEvidenceItems]) => {
       setFixtureStatus(status);
       setFixtureImage(status?.recommended_image ?? "");
       setFixtureEvidence(evidence[0] ?? null);
       setTargetStatus(nextTargetStatus);
       setTargetBuildId(nextTargetStatus?.builds[0]?.build_id ?? "");
       setTargetEvidence(savedPlan?.evidence ?? targetEvidenceItems[0] ?? null);
+      setMcpProbeStatus(nextProbeStatus);
+      const probeBuild = nextProbeStatus?.builds.find((item) => item.candidates.some((candidate) => candidate.eligible));
+      setMcpProbeBuildId(probeBuild?.build_id ?? "");
+      setMcpProbeCandidateId(probeBuild?.candidates.find((candidate) => candidate.eligible)?.candidate_id ?? "");
+      setMcpProbeEvidence(probeEvidenceItems[0] ?? null);
     });
   }, [snapshot?.scan_task_id, project.id]);
 
@@ -2441,6 +2460,11 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
       const nextTargetStatus = await request<AgentTargetStatus>(`/agent/projects/${project.id}/runtime-target-status`).catch(() => null);
       setTargetStatus(nextTargetStatus);
       setTargetBuildId(result.staging.build_id);
+      const nextProbeStatus = await request<AgentMcpProbeStatus>(`/agent/projects/${project.id}/runtime-mcp-probe-status`).catch(() => null);
+      setMcpProbeStatus(nextProbeStatus);
+      const probeBuild = nextProbeStatus?.builds.find((item) => item.build_id === result.staging.build_id);
+      setMcpProbeBuildId(probeBuild?.build_id ?? "");
+      setMcpProbeCandidateId(probeBuild?.candidates.find((candidate) => candidate.eligible)?.candidate_id ?? "");
       setMessage("过滤副本已在 D 盘生成并完成哈希复核；没有运行 Agent、容器或工具。");
     } catch (error) { setMessage(`过滤副本生成失败：${errorMessage(error)}`); }
     finally { setLoading(false); }
@@ -2465,6 +2489,37 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     const next = await request<AgentTargetStatus>(`/agent/projects/${project.id}/runtime-target-status`).catch(() => null);
     setTargetStatus(next);
     if (next && !next.builds.some((item) => item.build_id === targetBuildId)) setTargetBuildId(next.builds[0]?.build_id ?? "");
+    const nextProbe = await request<AgentMcpProbeStatus>(`/agent/projects/${project.id}/runtime-mcp-probe-status`).catch(() => null);
+    setMcpProbeStatus(nextProbe);
+    if (nextProbe && !nextProbe.builds.some((item) => item.build_id === mcpProbeBuildId)) {
+      const build = nextProbe.builds.find((item) => item.candidates.some((candidate) => candidate.eligible));
+      setMcpProbeBuildId(build?.build_id ?? "");
+      setMcpProbeCandidateId(build?.candidates.find((candidate) => candidate.eligible)?.candidate_id ?? "");
+    }
+  }
+
+  async function validateMcpProbe() {
+    const selectedBuild = mcpProbeStatus?.builds.find((item) => item.build_id === mcpProbeBuildId);
+    const selectedCandidate = selectedBuild?.candidates.find((item) => item.candidate_id === mcpProbeCandidateId);
+    if (!selectedBuild || !selectedCandidate?.eligible || !mcpProbeConfirmed || mcpProbePhrase !== mcpProbeStatus?.authorization_phrase) return;
+    setLoading(true); setMessage("");
+    try {
+      const result = await request<AgentMcpProbeEvidence>(`/agent/projects/${project.id}/runtime-mcp-probe-validation`, {
+        method: "POST",
+        body: JSON.stringify({
+          image: selectedBuild.image, timeout_seconds: selectedBuild.timeout_seconds,
+          plan_sha256: selectedBuild.plan_sha256, staging_build_id: selectedBuild.build_id,
+          staging_sha256: selectedBuild.staging_sha256, manifest_sha256: selectedBuild.manifest_sha256,
+          candidate_id: selectedCandidate.candidate_id, authorization_phrase: mcpProbePhrase,
+          operator_confirmed: true,
+        }),
+      });
+      setMcpProbeEvidence(result);
+      setMcpProbeConfirmed(false);
+      setMcpProbePhrase("");
+      setMessage("stdio MCP Server 能力探测已完成；只执行初始化和能力列表，没有调用工具或读取内容。");
+    } catch (error) { setMessage(`MCP Server 能力探测失败：${errorMessage(error)}`); }
+    finally { setLoading(false); }
   }
 
   async function validateTargetAgent() {
@@ -2493,6 +2548,8 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
   const summary = plan.summary ?? {};
   const exactPlanConfirmed = plan.checks.some((item) => item.id === "operator-confirmation" && item.status === "pass");
   const selectedTargetBuild = targetStatus?.builds.find((item) => item.build_id === targetBuildId);
+  const selectedMcpProbeBuild = mcpProbeStatus?.builds.find((item) => item.build_id === mcpProbeBuildId);
+  const selectedMcpProbeCandidate = selectedMcpProbeBuild?.candidates.find((item) => item.candidate_id === mcpProbeCandidateId);
   const mcpSummary = targetEvidence?.mcp_ledger?.summary;
   const mcpResponses = targetEvidence?.mcp_ledger?.events.filter((item) => item.event_type === "mcp_response") ?? [];
   return <section className="retest-panel">
@@ -2507,6 +2564,12 @@ function AgentRuntimePreflightPanel({ project, snapshot }: { project: Project; s
     <div className="kv-list"><div><span>过滤工作副本</span><strong>{plan.staging.status === "not_created" ? "未创建" : plan.staging.status === "unverified_existing" ? "检测到未绑定副本" : plan.staging.status}</strong><span>{plan.staging.path}</span></div><div><span>未来容器策略</span><strong>禁网 · 只读 · drop-all</strong><span>无宿主环境变量、无宿主控制 Socket</span></div><div><span>计划 SHA-256</span><strong>{truncateText(plan.plan_sha256, 20)}</strong><span>用于未来证据关联</span></div></div>
     <table className="compact-table"><thead><tr><th>状态</th><th>检查</th><th>结果</th><th>处理建议</th></tr></thead><tbody>{plan.checks.map((item) => <tr key={item.id}><td><span className={`severity ${item.status === "block" ? "high" : item.status === "warn" ? "medium" : "info"}`}>{item.status === "pass" ? "通过" : item.status === "warn" ? "警告" : "阻断"}</span></td><td>{item.id}</td><td>{item.detail}</td><td>{item.remediation ?? "-"}</td></tr>)}</tbody></table>
     {plan.candidate_dataflow_paths.length ? <details className="advanced-details"><summary>查看计划验证的 {plan.candidate_dataflow_paths.length} 条静态路径</summary><table className="compact-table"><thead><tr><th>风险</th><th>路径</th><th>能力 / 资源</th></tr></thead><tbody>{plan.candidate_dataflow_paths.map((item) => <tr key={item.id}><td><span className={`severity ${item.severity}`}>{severityLabel(item.severity)}</span><span className="cell-subtext">{agentDataflowConfidenceLabel(item.confidence)}</span></td><td>{item.title}<span className="cell-subtext">{item.asset_path}{item.tool_asset_path ? ` → ${item.tool_asset_path}` : ""}</span></td><td>{agentCapabilityLabel(item.capability)}<span className="cell-subtext">{item.resource_type}: {item.resource_scope}</span></td></tr>)}</tbody></table></details> : null}
+    <details className="advanced-details" open><summary>从已验证配置自动探测 stdio MCP Server</summary>
+      <p className="retest-note">平台直接读取所选 staging 中已哈希的 MCP 配置，并用固定探测客户端启动 Server，无需项目源码主动接入观察器。探测只执行 initialize、tools/list、resources/list 和 prompts/list；不会调用工具、读取资源或获取 Prompt 内容。</p>
+      <div className="filter-grid"><label>已验证 staging<select value={mcpProbeBuildId} onChange={(event) => { const build = mcpProbeStatus?.builds.find((item) => item.build_id === event.target.value); setMcpProbeBuildId(event.target.value); setMcpProbeCandidateId(build?.candidates.find((item) => item.eligible)?.candidate_id ?? build?.candidates[0]?.candidate_id ?? ""); setMcpProbeConfirmed(false); setMcpProbePhrase(""); }}><option value="">选择包含 MCP 配置的副本</option>{(mcpProbeStatus?.builds ?? []).filter((item) => item.candidates.length).map((item) => <option key={item.build_id} value={item.build_id}>{item.build_id} · {item.candidates.length} 个候选</option>)}</select></label><label>stdio MCP Server<select value={mcpProbeCandidateId} onChange={(event) => { setMcpProbeCandidateId(event.target.value); setMcpProbeConfirmed(false); setMcpProbePhrase(""); }}><option value="">选择 Server</option>{(selectedMcpProbeBuild?.candidates ?? []).map((item) => <option key={item.candidate_id} value={item.candidate_id}>{item.server_name} · {item.eligible ? "可探测" : `阻断：${item.rejection_reasons.join(", ")}`}</option>)}</select></label><label>输入确认短语 <code>{mcpProbeStatus?.authorization_phrase ?? "PROBE STDIO MCP SERVER"}</code><input value={mcpProbePhrase} onChange={(event) => { setMcpProbePhrase(event.target.value); setMcpProbeConfirmed(false); }} /></label><label className="inline-check"><input type="checkbox" disabled={!selectedMcpProbeCandidate?.eligible || mcpProbePhrase !== mcpProbeStatus?.authorization_phrase || !mcpProbeStatus?.execution_enabled_by_project_policy} checked={mcpProbeConfirmed} onChange={(event) => setMcpProbeConfirmed(event.target.checked)} />我确认只探测这个精确 Server 的公开能力，不调用工具或读取内容</label><button className="secondary-action" disabled={loading || !mcpProbeConfirmed || !selectedMcpProbeCandidate?.eligible || !mcpProbeStatus?.execution_enabled_by_project_policy || mcpProbePhrase !== mcpProbeStatus?.authorization_phrase} onClick={() => void validateMcpProbe()}>{loading ? "探测中" : "运行 MCP 能力探测"}</button></div>
+      {selectedMcpProbeCandidate ? <div className="kv-list"><div><span>配置 / Server</span><strong>{selectedMcpProbeCandidate.config_path} / {selectedMcpProbeCandidate.server_name}</strong><span>{selectedMcpProbeCandidate.command_preview ?? "没有可执行命令"}</span></div><div><span>安全资格</span><strong>{selectedMcpProbeCandidate.eligible ? "通过" : "不可探测"}</strong><span>{selectedMcpProbeCandidate.eligible ? "配置无环境注入、远程 URL、Shell 或危险参数" : selectedMcpProbeCandidate.rejection_reasons.join("、")}</span></div></div> : <p>当前 staging 没有可选择的 stdio MCP Server；请先创建包含受支持 MCP 配置的过滤副本。</p>}
+      {mcpProbeEvidence ? <><div className="retest-summary"><Metric label="探测结果" value={mcpProbeEvidence.capability_probe.status} /><Metric label="工具清单" value={mcpProbeEvidence.capability_probe.tool_names.length} /><Metric label="资源 Scheme" value={mcpProbeEvidence.capability_probe.resource_schemes.length} /><Metric label="Prompt 清单" value={mcpProbeEvidence.capability_probe.prompt_names.length} /></div><div className="kv-list"><div><span>Server 身份声明</span><strong>{mcpProbeEvidence.capability_probe.server_name || "未声明"} · {mcpProbeEvidence.capability_probe.server_version || "未声明版本"}</strong><span>协议：{mcpProbeEvidence.capability_probe.protocol_version || "未声明"}</span></div><div><span>工具</span><strong>{mcpProbeEvidence.capability_probe.tool_names.join("、") || "无"}</strong><span>仅列出名称，未调用</span></div><div><span>资源 / Prompt</span><strong>{mcpProbeEvidence.capability_probe.resource_schemes.join("、") || "无"} / {mcpProbeEvidence.capability_probe.prompt_names.join("、") || "无"}</strong><span>未读取资源或 Prompt 内容</span></div><div><span>证据 SHA-256</span><strong>{truncateText(mcpProbeEvidence.evidence_sha256, 20)}</strong><span>{mcpProbeEvidence.evidence_path}</span></div></div><p>这些名称是 Server 返回的声明；事件日志不是密码学认证通道，本次结果也不代表整个 Agent 的运行行为已经验证。</p></> : null}
+    </details>
     <details className="advanced-details"><summary>指定项目 Agent 受控运行（高风险，默认关闭）</summary>
       <p className="retest-note">这里会真实启动所选 staging 中的 Agent。服务器会重新核验扫描批次、计划、命令指纹、镜像 digest、staging/manifest 哈希和 Docker 隔离配置；使用 `--pull=never`，不会下载镜像。对于使用平台 stdio 观察器的 MCP 目标，可记录脱敏的方法调用账本及 MCP Server 子进程；逐文件访问、系统级子进程和网络尝试目的地仍未插桩。</p>
       <div className="retest-summary"><Metric label="项目执行开关" value={targetStatus?.execution_enabled_by_project_policy ? "已启用" : "默认关闭"} /><Metric label="可执行绑定副本" value={targetStatus?.builds.length ?? 0} /><Metric label="最近策略验证" value={targetEvidence?.policy_verified ? "通过" : targetEvidence ? "需关注" : "尚未运行"} /><Metric label="MCP 调用账本" value={Number(mcpSummary?.request_count ?? 0)} /></div>

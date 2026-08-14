@@ -77,7 +77,7 @@ def test_limited_target_observation_scores_seven_and_caps_at_95() -> None:
     assert result["score"] == 95
     assert result["score_cap"] == 95
     assert result["confidence"] == "medium"
-    assert result["algorithm_version"] == "agent-trust-static-1.1"
+    assert result["algorithm_version"] == "agent-trust-static-1.2"
     assert result["evidence_summary"]["mcp_request_count"] == 7
     assert result["evidence_summary"]["mcp_tool_call_count"] == 1
     assert result["evidence_summary"]["mcp_child_process_count"] == 1
@@ -94,6 +94,24 @@ def test_empty_inventory_never_produces_a_trust_claim() -> None:
     assert result["score"] == 0
     assert result["grade"] == "insufficient-evidence"
     assert result["dimensions"][0]["status"] == "insufficient_evidence"
+
+
+def test_mcp_capability_probe_is_summarized_without_claiming_whole_agent_runtime() -> None:
+    result = score(runtime_validation={
+        "schema": "runtime/v1", "isolation_policy": {"network": "none"},
+        "mcp_probe_evidence": {
+            "status": "completed", "execution_id": "mcp-probe-1", "policy_verified": True,
+            "capability_probe": {
+                "status": "success", "tool_names": ["bounded_add"],
+                "resource_schemes": ["fixture"], "prompt_names": ["add-two-integers"],
+            },
+        },
+    })
+
+    assert result["evidence_summary"]["mcp_capability_probe_observed"] is True
+    assert result["evidence_summary"]["mcp_discovered_tool_count"] == 1
+    assert result["evidence_summary"]["target_runtime_observed"] is False
+    assert result["score"] == 90
 
 
 def test_risk_evidence_reduces_the_relevant_dimensions() -> None:
@@ -181,6 +199,27 @@ def test_html_report_summarizes_target_evidence_without_output() -> None:
     assert "not-instrumented" in html
     assert "SECRET-MUST-NOT-RENDER" not in html
     assert "行为插桩不完整时总分最高 95" in html
+
+
+def test_html_report_summarizes_mcp_probe_without_content() -> None:
+    html = build_agent_html_report({
+        "summary": {}, "assets": [], "findings": [], "quality_gate": {},
+        "runtime_validation": {"mcp_probe_evidence": {
+            "policy_verified": True, "evidence_sha256": "a" * 64,
+            "capability_probe": {
+                "status": "success", "server_name": "bounded-server",
+                "protocol_version": "2025-06-18", "tool_names": ["bounded_add"],
+                "resource_schemes": ["fixture"], "prompt_names": ["add-two-integers"],
+                "method_outcomes": {"tools/list": "success"},
+                "secret_response_content": "MUST-NOT-RENDER",
+            },
+        }},
+    })
+
+    assert "stdio MCP Server 只读能力探测" in html
+    assert "bounded_add" in html
+    assert "MUST-NOT-RENDER" not in html
+    assert "没有调用工具、读取资源或获取 Prompt 内容" in html
 
 
 def test_quality_gate_can_optionally_block_low_trust_without_changing_default() -> None:

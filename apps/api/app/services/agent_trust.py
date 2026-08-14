@@ -6,7 +6,7 @@ from typing import Any
 
 
 TRUST_SCORE_SCHEMA = "ai-security-platform.agent-trust-score/v1"
-TRUST_SCORE_ALGORITHM = "agent-trust-static-1.1"
+TRUST_SCORE_ALGORITHM = "agent-trust-static-1.2"
 MAX_STATIC_SCORE = 90
 RESOLVED_FINDING_STATUSES = {"fixed", "closed", "false_positive"}
 
@@ -51,6 +51,7 @@ def calculate_agent_trust_score(
     target_runtime_observed = has_target_runtime_evidence(runtime)
     complete_runtime_telemetry = has_complete_runtime_telemetry(runtime)
     mcp_runtime = runtime_mcp_summary(runtime)
+    mcp_probe = runtime_mcp_probe_summary(runtime)
     confidence = confidence_label(evidence_completeness, target_runtime_observed, complete_runtime_telemetry)
     deductions = sorted(
         [
@@ -84,6 +85,10 @@ def calculate_agent_trust_score(
             "mcp_request_count": integer(mcp_runtime.get("request_count")),
             "mcp_tool_call_count": integer(mcp_runtime.get("tool_call_count")),
             "mcp_child_process_count": integer(mcp_runtime.get("child_process_count")),
+            "mcp_capability_probe_observed": bool(mcp_probe),
+            "mcp_discovered_tool_count": len(list_of_strings(mcp_probe.get("tool_names"))),
+            "mcp_discovered_resource_scheme_count": len(list_of_strings(mcp_probe.get("resource_schemes"))),
+            "mcp_discovered_prompt_count": len(list_of_strings(mcp_probe.get("prompt_names"))),
         },
         "limitations": [
             "The score summarizes current scanner evidence; it is not a security guarantee or publisher identity attestation.",
@@ -91,6 +96,7 @@ def calculate_agent_trust_score(
             "A local intelligence checked_no_match result means only that configured local sources did not match the exact version; it does not prove safety.",
             "Static data-flow paths are confidence-labelled inferences, not observed runtime calls or transfers.",
             "Validated stdio MCP ledger events improve runtime evidence, but their target-visible log channel is not cryptographically authenticated.",
+            "A read-only MCP capability probe validates one server startup and inventory response only; it does not increase whole-Agent runtime assurance.",
             "Harmless fixture validation tests the laboratory controls and never increases the scanned target's trust score.",
         ],
     }
@@ -370,6 +376,16 @@ def runtime_mcp_summary(runtime: dict[str, object]) -> dict[str, object]:
     return values if isinstance(values, dict) else {}
 
 
+def runtime_mcp_probe_summary(runtime: dict[str, object]) -> dict[str, object]:
+    evidence = runtime.get("mcp_probe_evidence")
+    if not isinstance(evidence, dict) or evidence.get("policy_verified") is not True:
+        return {}
+    probe = evidence.get("capability_probe")
+    if not isinstance(probe, dict) or probe.get("status") not in {"success", "partial"}:
+        return {}
+    return probe
+
+
 def has_complete_runtime_telemetry(runtime: dict[str, object]) -> bool:
     evidence = runtime.get("evidence")
     return bool(
@@ -467,6 +483,10 @@ def summary(report: dict[str, object]) -> dict[str, object]:
 
 def list_of_dicts(value: object) -> list[dict[str, object]]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def list_of_strings(value: object) -> list[str]:
+    return [str(item) for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def mapping(value: object) -> dict[str, object]:
