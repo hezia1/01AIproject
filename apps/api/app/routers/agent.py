@@ -952,9 +952,31 @@ def latest_completed_agent_scan(db: Session, project_id: str) -> ScanTaskRecord 
 def build_agent_coverage(assets: list[AgentAsset], skipped_file_count: int = 0) -> AgentScanCoverage:
     asset_types: dict[str, int] = {}
     findings_by_asset_type: dict[str, int] = {}
+    adapter_coverage: dict[str, dict[str, object]] = {}
     for asset in assets:
         asset_types[asset.asset_type] = asset_types.get(asset.asset_type, 0) + 1
         findings_by_asset_type[asset.asset_type] = findings_by_asset_type.get(asset.asset_type, 0) + asset.finding_count
+        adapter = asset.metadata.get("config_adapter") if isinstance(asset.metadata, dict) else None
+        adapter = adapter if isinstance(adapter, dict) else {}
+        adapter_id = str(adapter.get("id") or "unclassified")
+        item = adapter_coverage.setdefault(adapter_id, {
+            "asset_count": 0,
+            "parsed_asset_count": 0,
+            "failed_asset_count": 0,
+            "label": str(adapter.get("label") or "未分类配置"),
+            "validation_level": str(adapter.get("validation_level") or "unknown"),
+            "status": str(adapter.get("status") or "unknown"),
+            "schema_reference_count": 0,
+            "schema_references_not_validated": 0,
+            "limitation": str(adapter.get("limitation") or "未记录"),
+        })
+        item["asset_count"] = int(item["asset_count"]) + 1
+        item["parsed_asset_count"] = int(item["parsed_asset_count"]) + int(asset.status == "parsed")
+        item["failed_asset_count"] = int(item["failed_asset_count"]) + int(asset.status == "failed")
+        schema_declared = adapter.get("schema_reference_declared") is True
+        schema_not_validated = adapter.get("schema_reference_validation") == "not-fetched"
+        item["schema_reference_count"] = int(item["schema_reference_count"]) + int(schema_declared)
+        item["schema_references_not_validated"] = int(item["schema_references_not_validated"]) + int(schema_not_validated)
     return AgentScanCoverage(
         discovered_asset_count=len(assets),
         parsed_asset_count=sum(asset.status == "parsed" for asset in assets),
@@ -962,6 +984,16 @@ def build_agent_coverage(assets: list[AgentAsset], skipped_file_count: int = 0) 
         skipped_file_count=skipped_file_count,
         findings_by_asset_type=findings_by_asset_type,
         asset_types=asset_types,
+        adapter_coverage=adapter_coverage,
+        generic_parser_asset_count=sum(
+            int(item.get("asset_count") or 0)
+            for item in adapter_coverage.values()
+            if item.get("status") == "generic"
+        ),
+        schema_references_not_validated=sum(
+            int(item.get("schema_references_not_validated") or 0)
+            for item in adapter_coverage.values()
+        ),
     )
 
 

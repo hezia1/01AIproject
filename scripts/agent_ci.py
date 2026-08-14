@@ -300,10 +300,35 @@ def asset_identity(asset: dict[str, object]) -> str:
 def coverage_payload(assets: list[AgentAsset], skipped: list[dict[str, str]], payloads: list[dict[str, object]]) -> dict[str, object]:
     asset_types: dict[str, int] = {}
     findings_by_type: dict[str, int] = {}
+    adapter_coverage: dict[str, dict[str, object]] = {}
     for item in payloads:
         asset_type = str(item.get("asset_type") or "unknown")
         asset_types[asset_type] = asset_types.get(asset_type, 0) + 1
         findings_by_type[asset_type] = findings_by_type.get(asset_type, 0) + int(item.get("finding_count") or 0)
+    for asset in assets:
+        adapter = asset.metadata.get("config_adapter") if isinstance(asset.metadata, dict) else None
+        adapter = adapter if isinstance(adapter, dict) else {}
+        adapter_id = str(adapter.get("id") or "unclassified")
+        item = adapter_coverage.setdefault(adapter_id, {
+            "asset_count": 0,
+            "parsed_asset_count": 0,
+            "failed_asset_count": 0,
+            "label": str(adapter.get("label") or "未分类配置"),
+            "validation_level": str(adapter.get("validation_level") or "unknown"),
+            "status": str(adapter.get("status") or "unknown"),
+            "schema_reference_count": 0,
+            "schema_references_not_validated": 0,
+            "limitation": str(adapter.get("limitation") or "未记录"),
+        })
+        item["asset_count"] = int(item["asset_count"]) + 1
+        item["parsed_asset_count"] = int(item["parsed_asset_count"]) + int(asset.status == "parsed")
+        item["failed_asset_count"] = int(item["failed_asset_count"]) + int(asset.status == "failed")
+        item["schema_reference_count"] = int(item["schema_reference_count"]) + int(
+            adapter.get("schema_reference_declared") is True
+        )
+        item["schema_references_not_validated"] = int(item["schema_references_not_validated"]) + int(
+            adapter.get("schema_reference_validation") == "not-fetched"
+        )
     return {
         "discovered_asset_count": len(assets),
         "parsed_asset_count": sum(1 for item in assets if item.status == "parsed"),
@@ -311,6 +336,16 @@ def coverage_payload(assets: list[AgentAsset], skipped: list[dict[str, str]], pa
         "skipped_file_count": len(skipped),
         "findings_by_asset_type": findings_by_type,
         "asset_types": asset_types,
+        "adapter_coverage": adapter_coverage,
+        "generic_parser_asset_count": sum(
+            int(item.get("asset_count") or 0)
+            for item in adapter_coverage.values()
+            if item.get("status") == "generic"
+        ),
+        "schema_references_not_validated": sum(
+            int(item.get("schema_references_not_validated") or 0)
+            for item in adapter_coverage.values()
+        ),
     }
 
 

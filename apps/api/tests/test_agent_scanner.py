@@ -223,6 +223,26 @@ def test_yaml_plugin_and_toml_agent_config_are_structurally_parsed(tmp_path):
     assert {permission.capability for permission in assets[".agent/runtime.toml"].permissions} >= {"filesystem-write", "tool-invocation", "network-egress"}
 
 
+def test_config_adapter_metadata_distinguishes_structural_and_generic_parsing(tmp_path):
+    (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": {"safe": {"command": "python"}}}), encoding="utf-8")
+    plugin = tmp_path / "plugins" / "sample"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.json").write_text(json.dumps({
+        "$schema": "https://schemas.example.invalid/plugin.json",
+        "name": "sample",
+    }), encoding="utf-8")
+
+    assets = {asset.path: asset for asset in scan_agent_tree(str(tmp_path)).assets}
+
+    mcp_adapter = assets["mcp.json"].metadata["config_adapter"]
+    plugin_adapter = assets["plugins/sample/plugin.json"].metadata["config_adapter"]
+    assert mcp_adapter["id"] == "mcp-structural-v1"
+    assert mcp_adapter["validation_level"] == "structural"
+    assert plugin_adapter["status"] == "generic"
+    assert plugin_adapter["schema_reference_declared"] is True
+    assert plugin_adapter["schema_reference_validation"] == "not-fetched"
+
+
 def test_mcp_cli_secret_is_redacted_from_findings_and_snapshot(tmp_path):
     secret = "dummy-command-token-123456789"
     config = {

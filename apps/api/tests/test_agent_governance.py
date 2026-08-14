@@ -2,7 +2,8 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from app.db_models import ScanTaskRecord
-from app.routers.agent import agent_scan_snapshot, build_agent_scan_diff
+from app.routers.agent import agent_scan_snapshot, build_agent_coverage, build_agent_scan_diff
+from app.services.agent_scanner import AgentAsset
 
 
 def scan(metadata: dict, created_at: datetime) -> ScanTaskRecord:
@@ -30,6 +31,52 @@ def permission(scope: str, approval: str = "unknown") -> dict[str, str]:
         "risk_level": "high",
         "source": "mcpServers.filesystem.roots",
     }
+
+
+def test_adapter_coverage_records_generic_and_unvalidated_schema_gaps():
+    assets = [
+        AgentAsset(
+            path="mcp.json",
+            asset_type="mcp-config",
+            format="json",
+            parser="structured-json",
+            status="parsed",
+            checks=[],
+            metadata={"config_adapter": {
+                "id": "mcp-structural-v1",
+                "label": "MCP 结构化配置",
+                "validation_level": "structural",
+                "status": "supported",
+                "schema_reference_declared": False,
+                "schema_reference_validation": "not-declared",
+                "limitation": "结构化范围。",
+            }},
+        ),
+        AgentAsset(
+            path="plugins/plugin.json",
+            asset_type="plugin-manifest",
+            format="json",
+            parser="structured-json",
+            status="parsed",
+            checks=[],
+            metadata={"config_adapter": {
+                "id": "plugin-manifest-generic-v1",
+                "label": "插件清单通用配置",
+                "validation_level": "generic",
+                "status": "generic",
+                "schema_reference_declared": True,
+                "schema_reference_validation": "not-fetched",
+                "limitation": "不联网获取 Schema。",
+            }},
+        ),
+    ]
+
+    coverage = build_agent_coverage(assets)
+
+    assert coverage.adapter_coverage["mcp-structural-v1"].parsed_asset_count == 1
+    assert coverage.adapter_coverage["plugin-manifest-generic-v1"].schema_references_not_validated == 1
+    assert coverage.generic_parser_asset_count == 1
+    assert coverage.schema_references_not_validated == 1
 
 
 def test_agent_scan_diff_reports_asset_and_permission_semantics() -> None:

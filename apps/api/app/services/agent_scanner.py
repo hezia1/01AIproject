@@ -200,7 +200,7 @@ AGENT_RULES = [
     ),
 ]
 
-AGENT_RULE_VERSION = "agent-rules-2026.08.11-v4"
+AGENT_RULE_VERSION = "agent-rules-2026.08.14-v5"
 INSTRUCTION_FILE_NAMES = {
     "agents.md",
     "claude.md",
@@ -366,6 +366,71 @@ def classify_agent_asset(path: Path, root: Path) -> str | None:
     return None
 
 
+def config_adapter_metadata(
+    *, asset_type: str, parser: str, structured_data: Any, status: str
+) -> dict[str, str | bool]:
+    """Describe the parser contract actually applied to one discovered asset.
+
+    These are deliberately parser contracts, not claims of complete vendor-schema
+    validation.  Unknown schema references are never fetched during scanning.
+    """
+    adapter_id = "text-instruction-v1"
+    label = "文本指令规则"
+    validation_level = "text"
+    status_label = "supported"
+    limitation = "仅执行本地文本规则，不验证厂商配置 Schema。"
+    if asset_type == "mcp-config" and parser.startswith("structured-"):
+        adapter_id = "mcp-structural-v1"
+        label = "MCP 结构化配置"
+        validation_level = "structural"
+        limitation = "校验可识别的 MCP 结构和安全字段，不覆盖厂商扩展、引用或继承。"
+    elif asset_type == "plugin-manifest" and parser.startswith("structured-"):
+        adapter_id = "plugin-manifest-generic-v1"
+        label = "插件清单通用配置"
+        validation_level = "generic"
+        status_label = "generic"
+        limitation = "仅通用解析名称、权限和来源字段，不验证厂商插件 Schema。"
+    elif asset_type == "tool-schema" and parser.startswith("structured-"):
+        adapter_id = "tool-schema-generic-v1"
+        label = "工具定义通用配置"
+        validation_level = "generic"
+        status_label = "generic"
+        limitation = "仅通用解析工具和权限声明，不验证工具协议 Schema。"
+    elif asset_type in {"agent-config", "instruction", "skill", "prompt"} and parser.startswith("structured-"):
+        adapter_id = "agent-structured-generic-v1"
+        label = "Agent 通用结构化配置"
+        validation_level = "generic"
+        status_label = "generic"
+        limitation = "仅通用解析 JSON/YAML/TOML 字段，不验证厂商 Schema、引用或继承。"
+    elif parser == "markdown+yaml-frontmatter":
+        adapter_id = "markdown-frontmatter-v1"
+        label = "Markdown Frontmatter"
+        validation_level = "frontmatter"
+        limitation = "仅解析 YAML Frontmatter 和文本规则，不验证 Skill 或 Prompt 的厂商 Schema。"
+
+    schema_reference_declared = has_schema_reference(structured_data)
+    if status == "failed":
+        status_label = "failed"
+    return {
+        "id": adapter_id,
+        "label": label,
+        "validation_level": validation_level,
+        "status": status_label,
+        "schema_reference_declared": schema_reference_declared,
+        "schema_reference_validation": "not-fetched" if schema_reference_declared else "not-declared",
+        "limitation": limitation,
+    }
+
+
+def has_schema_reference(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return any(
+        isinstance(value.get(key), str) and bool(str(value.get(key)).strip())
+        for key in ("$schema", "schema_url", "schemaUri", "schema_uri")
+    )
+
+
 def scan_agent_file(
     file_path: Path,
     relative_path: str,
@@ -454,6 +519,12 @@ def scan_agent_file(
         "integrity_scope": "directory" if directory_sha256 else "file",
         "integrity_file_count": integrity_file_count,
         "publisher_verification": "claim-only" if asset_details.publisher else "not-declared",
+        "config_adapter": config_adapter_metadata(
+            asset_type=resolved_type,
+            parser=parser,
+            structured_data=structured_data,
+            status=status,
+        ),
     })
     return dedupe_findings(findings), AgentAsset(
         path=relative_path,

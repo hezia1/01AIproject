@@ -549,6 +549,18 @@ class AgentAssetResult(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class AgentConfigAdapterCoverage(BaseModel):
+    asset_count: int = 0
+    parsed_asset_count: int = 0
+    failed_asset_count: int = 0
+    label: str = "未分类"
+    validation_level: str = "unknown"
+    status: str = "unknown"
+    schema_reference_count: int = 0
+    schema_references_not_validated: int = 0
+    limitation: str = "未记录"
+
+
 class AgentScanCoverage(BaseModel):
     discovered_asset_count: int = 0
     parsed_asset_count: int = 0
@@ -556,6 +568,9 @@ class AgentScanCoverage(BaseModel):
     skipped_file_count: int = 0
     findings_by_asset_type: dict[str, int] = Field(default_factory=dict)
     asset_types: dict[str, int] = Field(default_factory=dict)
+    adapter_coverage: dict[str, AgentConfigAdapterCoverage] = Field(default_factory=dict)
+    generic_parser_asset_count: int = 0
+    schema_references_not_validated: int = 0
 
 
 class AgentScanResult(BaseModel):
