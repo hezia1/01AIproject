@@ -2,7 +2,7 @@
 from enum import Enum
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Severity(str, Enum):
@@ -608,6 +608,7 @@ class AgentScanHistoryItem(BaseModel):
     rule_version: str | None = None
     coverage: AgentScanCoverage = Field(default_factory=AgentScanCoverage)
     gate_decision: str | None = None
+    audit_summary: dict[str, object] = Field(default_factory=dict)
 
 
 class AgentScanSnapshot(BaseModel):
@@ -661,6 +662,40 @@ class AgentScanDiff(BaseModel):
     summary: AgentScanDiffSummary = Field(default_factory=AgentScanDiffSummary)
     assets: list[AgentAssetDiffItem] = Field(default_factory=list)
     permissions: list[AgentPermissionDiffItem] = Field(default_factory=list)
+
+
+class AgentOfflineAuditDiffSummary(BaseModel):
+    new_count: int = 0
+    still_pending_count: int = 0
+    not_current_candidate_count: int = 0
+
+
+class AgentOfflineAuditDiffItem(BaseModel):
+    id: str
+    result: str
+    kind: str
+    priority: str
+    title: str
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class AgentOfflineAuditDiff(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    schema_id: str = Field(
+        default="ai-security-platform.agent-offline-audit-comparison/v1",
+        validation_alias="schema",
+        serialization_alias="schema",
+    )
+    project_id: UUID
+    target_scan_id: UUID
+    base_scan_id: UUID | None = None
+    has_comparison: bool = False
+    comparison_status: str = "base-scan-not-available"
+    summary: AgentOfflineAuditDiffSummary = Field(default_factory=AgentOfflineAuditDiffSummary)
+    items: list[AgentOfflineAuditDiffItem] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
 
 class DastVerdict(str, Enum):
     exploitable = "exploitable"

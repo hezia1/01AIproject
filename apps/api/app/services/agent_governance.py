@@ -580,6 +580,31 @@ def build_agent_html_report(report: dict[str, object]) -> str:
             f"<ul>{audit_limitations}</ul>"
         )
         html = html.replace("</body>", f"{audit_section}</body>")
+    audit_comparison = report.get("audit_comparison") if isinstance(report.get("audit_comparison"), dict) else {}
+    if audit_comparison:
+        comparison_summary = audit_comparison.get("summary") if isinstance(audit_comparison.get("summary"), dict) else {}
+        comparison_items = audit_comparison.get("items") if isinstance(audit_comparison.get("items"), list) else []
+        comparison_rows = "".join(
+            f"<tr><td>{escape(str(item.get('result') or '-'))}</td>"
+            f"<td>{escape(str(item.get('priority') or '-'))}</td>"
+            f"<td>{escape(str(item.get('kind') or '-'))}</td>"
+            f"<td>{escape(str(item.get('title') or '-'))}</td></tr>"
+            for item in comparison_items if isinstance(item, dict)
+        ) or "<tr><td colspan='4'>No comparable review candidates are available.</td></tr>"
+        comparison_limitations = "".join(
+            f"<li>{escape(str(item))}</li>" for item in audit_comparison.get("limitations", []) if isinstance(item, str)
+        )
+        comparison_section = (
+            "<h2>AGENT offline audit history comparison</h2>"
+            f"<p>Status: {escape(str(audit_comparison.get('comparison_status') or '-'))}; comparable: "
+            f"{escape(str(audit_comparison.get('has_comparison') is True))}.</p>"
+            f"<p>New: {int(comparison_summary.get('new_count') or 0)}; still pending: "
+            f"{int(comparison_summary.get('still_pending_count') or 0)}; not current candidate: "
+            f"{int(comparison_summary.get('not_current_candidate_count') or 0)}.</p>"
+            "<table><thead><tr><th>Comparison</th><th>Priority</th><th>Kind</th><th>Review candidate</th></tr></thead>"
+            f"<tbody>{comparison_rows}</tbody></table><ul>{comparison_limitations}</ul>"
+        )
+        html = html.replace("</body>", f"{comparison_section}</body>")
     runtime = report.get("runtime_validation") if isinstance(report.get("runtime_validation"), dict) else {}
     target = runtime.get("evidence") if isinstance(runtime.get("evidence"), dict) else {}
     if target:

@@ -1,4 +1,4 @@
-from app.services.agent_audit import build_agent_offline_audit
+from app.services.agent_audit import build_agent_offline_audit, compare_agent_offline_audits
 from app.services.agent_governance import build_agent_html_report
 
 
@@ -86,9 +86,47 @@ def test_offline_agent_audit_is_included_in_html_report_without_a_model_claim() 
         trust_score={"score": 52, "grade": "guarded"},
     )
 
-    html = build_agent_html_report({"summary": {}, "audit": audit})
+    comparison = compare_agent_offline_audits(audit, audit)
+    html = build_agent_html_report({"summary": {}, "audit": audit, "audit_comparison": comparison})
 
     assert "AGENT offline review draft" in html
     assert "local-rule-based-draft" in html
     assert "external model invoked: False" in html
     assert "Agent exposes shell execution" in html
+    assert "AGENT offline audit history comparison" in html
+    assert "still-pending" in html
+
+
+def test_offline_agent_audit_comparison_labels_candidate_changes_without_remediation_claims() -> None:
+    base = {
+        "schema": "ai-security-platform.agent-offline-audit/v1",
+        "items": [
+            {"id": "audit-still", "kind": "finding", "priority": "high", "title": "Still pending", "evidence_refs": ["rule:A"]},
+            {"id": "audit-prior", "kind": "coverage-gap", "priority": "medium", "title": "Prior only", "evidence_refs": ["coverage:A"]},
+        ],
+    }
+    target = {
+        "schema": "ai-security-platform.agent-offline-audit/v1",
+        "items": [
+            {"id": "audit-still", "kind": "finding", "priority": "high", "title": "Still pending", "evidence_refs": ["rule:A"]},
+            {"id": "audit-new", "kind": "static-dataflow", "priority": "critical", "title": "New candidate", "evidence_refs": ["path:A"]},
+        ],
+    }
+
+    result = compare_agent_offline_audits(base, target)
+
+    assert result["has_comparison"] is True
+    assert result["comparison_status"] == "ready"
+    assert result["summary"] == {"new_count": 1, "still_pending_count": 1, "not_current_candidate_count": 1}
+    assert {item["result"] for item in result["items"]} == {"new", "still-pending", "not-current-candidate"}
+    assert "not proof of remediation" in " ".join(result["limitations"])
+
+
+def test_offline_agent_audit_comparison_does_not_label_candidates_new_without_a_compatible_baseline() -> None:
+    target = {"schema": "ai-security-platform.agent-offline-audit/v1", "items": []}
+
+    result = compare_agent_offline_audits(None, target)
+
+    assert result["has_comparison"] is False
+    assert result["comparison_status"] == "base-audit-not-available"
+    assert result["items"] == []

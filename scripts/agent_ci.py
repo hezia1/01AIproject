@@ -28,7 +28,7 @@ from app.services.agent_intelligence import analyze_agent_intelligence  # noqa: 
 from app.services.agent_dataflow import analyze_agent_dataflow  # noqa: E402
 from app.services.agent_runtime_validation import build_agent_runtime_plan  # noqa: E402
 from app.services.agent_trust import calculate_agent_trust_score  # noqa: E402
-from app.services.agent_audit import build_agent_offline_audit  # noqa: E402
+from app.services.agent_audit import build_agent_offline_audit, compare_agent_offline_audits  # noqa: E402
 
 
 def main() -> int:
@@ -97,6 +97,10 @@ def main() -> int:
         dataflow=dataflow_output.report,
         trust_score=trust_score,
     )
+    audit_comparison = compare_agent_offline_audits(
+        baseline.get("audit") if isinstance(baseline.get("audit"), dict) else None,
+        audit,
+    )
 
     baseline_findings = baseline.get("findings") if isinstance(baseline.get("findings"), list) else []
     baseline_permissions = baseline.get("permissions") if isinstance(baseline.get("permissions"), list) else []
@@ -144,6 +148,7 @@ def main() -> int:
         "intelligence": intelligence_output.report,
         "dataflow": dataflow_output.report,
         "audit": audit,
+        "audit_comparison": audit_comparison,
         "runtime_validation": runtime_validation,
         "trust_score": trust_score,
         "profile": profile,
@@ -156,6 +161,7 @@ def main() -> int:
             "Offline intelligence checks use only bundled rules and explicitly configured local files; checked-no-match is not a clean bill of health.",
             "Data-flow paths are static, confidence-labelled relationships and do not prove observed runtime behavior.",
             "The audit is a local rule-based review draft; it does not invoke an external model or change findings, gates, or trust scores.",
+            "Audit comparison labels only changes in local static review candidates; not-current-candidate is not a remediation or security conclusion.",
             "Runtime validation is preflight-only; this command does not create staging files, pull images or run the proposed Agent command.",
         ],
     }

@@ -20,6 +20,7 @@ from app.models import (
     AgentPermissionResult,
     AgentScanDiff,
     AgentScanDiffSummary,
+    AgentOfflineAuditDiff,
     AgentScanCoverage,
     AgentScanHistoryItem,
     AgentScanRequest,
@@ -53,7 +54,7 @@ from app.services.agent_governance import (
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree
 from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
-from app.services.agent_audit import build_agent_offline_audit
+from app.services.agent_audit import build_agent_offline_audit, compare_agent_offline_audits
 from app.services.agent_runtime_validation import build_agent_runtime_plan, staging_workspace_path
 from app.services.agent_trust import calculate_agent_trust_score
 from app.services.agent_staging import build_filtered_staging
@@ -855,6 +856,21 @@ def get_project_agent_scan_diff(
     return build_agent_scan_diff(project_id, target, base)
 
 
+@router.get("/projects/{project_id}/audit-diff", response_model=AgentOfflineAuditDiff)
+def get_project_agent_audit_diff(
+    project_id: UUID,
+    target_scan_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> AgentOfflineAuditDiff:
+    if db.get(ProjectRecord, str(project_id)) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    target = resolve_agent_scan(db, str(project_id), target_scan_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="No completed AGENT scan found")
+    base = previous_completed_agent_scan(db, project_id, target)
+    return build_agent_audit_diff(project_id, target, base)
+
+
 @router.get("/projects/{project_id}/gate")
 def get_project_agent_gate(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
     if db.get(ProjectRecord, str(project_id)) is None:
@@ -1137,6 +1153,7 @@ def agent_scan_history_item(scan: ScanTaskRecord) -> AgentScanHistoryItem:
         rule_version=metadata.get("rule_version"),
         coverage=AgentScanCoverage(**coverage),
         gate_decision=(metadata.get("quality_gate") or {}).get("decision") if isinstance(metadata.get("quality_gate"), dict) else None,
+        audit_summary=audit_history_summary(metadata.get("audit")),
     )
 
 
@@ -1217,6 +1234,56 @@ def build_agent_scan_diff(
         assets=asset_changes,
         permissions=permission_changes,
     )
+
+
+def previous_completed_agent_scan(
+    db: Session, project_id: UUID, target: ScanTaskRecord,
+) -> ScanTaskRecord | None:
+    return db.scalar(
+        select(ScanTaskRecord)
+        .where(
+            ScanTaskRecord.project_id == str(project_id),
+            ScanTaskRecord.scan_type == "agent",
+            ScanTaskRecord.status == ScanStatus.completed.value,
+            ScanTaskRecord.created_at < target.created_at,
+        )
+        .order_by(ScanTaskRecord.created_at.desc())
+        .limit(1)
+    )
+
+
+def build_agent_audit_diff(
+    project_id: UUID,
+    target: ScanTaskRecord,
+    base: ScanTaskRecord | None,
+) -> AgentOfflineAuditDiff:
+    target_metadata = target.scan_metadata or {}
+    base_metadata = base.scan_metadata or {} if base else {}
+    comparison = compare_agent_offline_audits(
+        base_metadata.get("audit") if isinstance(base_metadata.get("audit"), dict) else None,
+        target_metadata.get("audit") if isinstance(target_metadata.get("audit"), dict) else None,
+    )
+    return AgentOfflineAuditDiff(
+        project_id=project_id,
+        target_scan_id=UUID(str(target.id)),
+        base_scan_id=UUID(str(base.id)) if base else None,
+        **comparison,
+    )
+
+
+def audit_history_summary(value: object) -> dict[str, object]:
+    audit = value if isinstance(value, dict) else {}
+    summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
+    available = audit.get("schema") == "ai-security-platform.agent-offline-audit/v1"
+    return {
+        "available": available,
+        "schema": audit.get("schema") if available else None,
+        "mode": audit.get("mode") if available else None,
+        "model_status": audit.get("model_status") if available else None,
+        "external_model_invoked": audit.get("external_model_invoked") is True if available else False,
+        "review_item_count": int(summary.get("review_item_count") or 0) if available else 0,
+        "active_finding_count": int(summary.get("active_finding_count") or 0) if available else 0,
+    }
 
 
 def metadata_dict_list(metadata: dict, key: str) -> list[dict[str, object]]:
@@ -1441,6 +1508,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "intelligence": metadata.get("intelligence") or {},
         "dataflow": metadata.get("dataflow") or {},
         "audit": metadata.get("audit") or {},
+        "audit_comparison": build_agent_audit_diff(project_id, scan, base).model_dump(mode="json"),
         "runtime_validation": metadata.get("runtime_validation") or {},
         "trust_score": metadata.get("trust_score") or {},
         "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
@@ -1458,6 +1526,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
             "Offline intelligence results are limited to configured local sources; checked-no-match is not proof that a package is vulnerability-free.",
             "Data-flow paths are static, confidence-labelled relationships and are not proof of observed runtime execution.",
             "The offline audit is a local rule-based review draft. It does not invoke an external model or change findings, governance decisions, quality gates, or trust scores.",
+            "Audit comparison is limited to local static review candidates. A not-current-candidate label is not proof of remediation, safety, runtime absence, or non-exploitability.",
             "The Agent runtime plan remains preflight-only; any target evidence is separately bound to an exact D-drive staging digest and uses --pull=never.",
         ],
     }

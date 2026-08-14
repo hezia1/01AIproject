@@ -14,6 +14,7 @@ from typing import Any
 
 SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
 MAX_AUDIT_ITEMS = 100
+MAX_AUDIT_COMPARISON_ITEMS = MAX_AUDIT_ITEMS * 2
 
 
 def build_agent_offline_audit(
@@ -81,6 +82,99 @@ def build_agent_offline_audit(
     }
     report["audit_sha256"] = canonical_sha256(report)
     return report
+
+
+def compare_agent_offline_audits(
+    base_audit: dict[str, object] | None,
+    target_audit: dict[str, object] | None,
+) -> dict[str, object]:
+    """Compare two local review queues without making a remediation claim."""
+    target_items = comparable_audit_items(target_audit)
+    if target_items is None:
+        return audit_comparison(
+            has_comparison=False,
+            comparison_status="target-audit-not-available",
+            limitations=[
+                "The target scan has no compatible offline audit draft, so no review-candidate comparison was produced.",
+                "No comparison result is a statement about remediation, safety, runtime behavior, connectivity, or exploitability.",
+            ],
+        )
+    base_items = comparable_audit_items(base_audit)
+    if base_items is None:
+        return audit_comparison(
+            has_comparison=False,
+            comparison_status="base-audit-not-available",
+            limitations=[
+                "The previous scan has no compatible offline audit draft, so current review candidates are not labelled as new.",
+                "No comparison result is a statement about remediation, safety, runtime behavior, connectivity, or exploitability.",
+            ],
+        )
+    base_map = {str(item["id"]): item for item in base_items}
+    target_map = {str(item["id"]): item for item in target_items}
+    items: list[dict[str, object]] = []
+    for identity in sorted(target_map.keys() - base_map.keys()):
+        items.append(audit_comparison_item(target_map[identity], "new"))
+    for identity in sorted(target_map.keys() & base_map.keys()):
+        items.append(audit_comparison_item(target_map[identity], "still-pending"))
+    for identity in sorted(base_map.keys() - target_map.keys()):
+        items.append(audit_comparison_item(base_map[identity], "not-current-candidate"))
+    items.sort(key=lambda item: (
+        {"new": 0, "still-pending": 1, "not-current-candidate": 2}.get(str(item["result"]), 3),
+        -SEVERITY_RANK.get(str(item["priority"]), 0),
+        str(item["title"]),
+    ))
+    items = items[:MAX_AUDIT_COMPARISON_ITEMS]
+    return audit_comparison(
+        has_comparison=True,
+        comparison_status="ready",
+        items=items,
+        limitations=[
+            "The comparison uses stable local review-candidate identities from two static scan outputs; it does not execute or contact an Agent, MCP server, plugin, tool, or external model.",
+            "not-current-candidate means only that the latest static evidence did not generate the same review candidate. It is not proof of remediation, safety, runtime absence, connectivity, publisher verification, or non-exploitability.",
+            "A changed title or evidence reference produces a new candidate and a prior not-current-candidate entry; human review is required to interpret that change.",
+        ],
+    )
+
+
+def comparable_audit_items(audit: dict[str, object] | None) -> list[dict[str, object]] | None:
+    if not isinstance(audit, dict) or audit.get("schema") != "ai-security-platform.agent-offline-audit/v1":
+        return None
+    raw_items = audit.get("items")
+    if not isinstance(raw_items, list):
+        return None
+    return [
+        item for item in raw_items
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    ]
+
+
+def audit_comparison_item(item: dict[str, object], result: str) -> dict[str, object]:
+    return {
+        "id": str(item["id"]),
+        "result": result,
+        "kind": str(item.get("kind") or "unknown"),
+        "priority": str(item.get("priority") or "info"),
+        "title": str(item.get("title") or "Unnamed review candidate"),
+        "evidence_refs": [str(value) for value in item.get("evidence_refs", []) if isinstance(value, str)][:12],
+    }
+
+
+def audit_comparison(
+    *, has_comparison: bool, comparison_status: str, items: list[dict[str, object]] | None = None,
+    limitations: list[str],
+) -> dict[str, object]:
+    result_items = items or []
+    return {
+        "has_comparison": has_comparison,
+        "comparison_status": comparison_status,
+        "summary": {
+            "new_count": sum(item["result"] == "new" for item in result_items),
+            "still_pending_count": sum(item["result"] == "still-pending" for item in result_items),
+            "not_current_candidate_count": sum(item["result"] == "not-current-candidate" for item in result_items),
+        },
+        "items": result_items,
+        "limitations": limitations,
+    }
 
 
 def finding_review_item(item: dict[str, object]) -> dict[str, object]:

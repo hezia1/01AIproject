@@ -6,6 +6,12 @@
 - The same draft is included in AGENT snapshots, JSON and HTML reports, local `scripts/agent_ci.py` output, and the frontend review panel. It is a human-review queue only: it does not change finding severity, governance status, quality-gate decisions, or trust scores.
 - No external model, Agent, MCP server, plugin, tool, target, registry, or schema endpoint is contacted by this delivery. Static evidence is not represented as runtime observation, connectivity proof, publisher verification, or exploitability proof.
 
+## 2026-08-14 AGENT offline audit history comparison
+
+- AGENT history now records a compact offline-audit summary, and the API, JSON/HTML report, local CI baseline flow, and frontend compare the latest review-candidate queue with the preceding compatible scan.
+- Results are limited to `new`, `still-pending`, and `not-current-candidate`. The last label only means the latest static evidence did not produce the same candidate; it is not a remediation, safety, runtime, connectivity, publisher-verification, or exploitability conclusion.
+- Older scans without the compatible offline-audit schema are explicitly marked non-comparable rather than treating all current candidates as new.
+
 ## 2026-08-14 AGENT 私有来源离线预检
 
 - 对本地配置中明确声明为私有的 Git、Registry、镜像或远程来源，记录可见性、凭据是否以引用方式声明、接入前配置状态和固定的 `not-attempted` 连接状态；不保存凭据值。

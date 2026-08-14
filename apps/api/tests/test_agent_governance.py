@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from app.db_models import ScanTaskRecord
-from app.routers.agent import agent_scan_snapshot, build_agent_coverage, build_agent_scan_diff
+from app.routers.agent import agent_scan_history_item, agent_scan_snapshot, build_agent_audit_diff, build_agent_coverage, build_agent_scan_diff
 from app.services.agent_scanner import AgentAsset
 
 
@@ -124,6 +124,32 @@ def test_first_agent_scan_has_no_fabricated_comparison() -> None:
     assert result.base_scan_id is None
     assert result.assets == []
     assert result.permissions == []
+
+
+def test_agent_audit_diff_and_history_keep_old_scans_non_comparable() -> None:
+    now = datetime(2026, 8, 14, 12, 0, 0)
+    base = scan({"assets": [], "permissions": []}, now)
+    target = scan({
+        "assets": [], "permissions": [],
+        "audit": {
+            "schema": "ai-security-platform.agent-offline-audit/v1",
+            "mode": "local-rule-based-draft",
+            "model_status": "not-run",
+            "external_model_invoked": False,
+            "summary": {"review_item_count": 1, "active_finding_count": 1},
+            "items": [{"id": "audit-1", "kind": "finding", "priority": "high", "title": "Review", "evidence_refs": ["rule:AGENT.TEST"]}],
+        },
+    }, now + timedelta(minutes=5))
+
+    comparison = build_agent_audit_diff(uuid4(), target, base)
+    history = agent_scan_history_item(target)
+
+    assert comparison.has_comparison is False
+    assert comparison.comparison_status == "base-audit-not-available"
+    assert comparison.items == []
+    assert comparison.model_dump(mode="json")["schema"] == "ai-security-platform.agent-offline-audit-comparison/v1"
+    assert history.audit_summary["available"] is True
+    assert history.audit_summary["review_item_count"] == 1
 
 
 def test_agent_scan_diff_counts_source_and_integrity_changes() -> None:
