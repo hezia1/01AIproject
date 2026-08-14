@@ -65,6 +65,9 @@ def test_limited_target_observation_scores_seven_and_caps_at_95() -> None:
             "execution_id": "target-1",
             "policy_verified": True,
             "behavioral_telemetry_complete": False,
+            "mcp_ledger": {"summary": {
+                "request_count": 7, "tool_call_count": 1, "child_process_count": 1,
+            }},
         },
     })
     runtime = next(item for item in result["dimensions"] if item["id"] == "runtime_assurance")
@@ -74,6 +77,10 @@ def test_limited_target_observation_scores_seven_and_caps_at_95() -> None:
     assert result["score"] == 95
     assert result["score_cap"] == 95
     assert result["confidence"] == "medium"
+    assert result["algorithm_version"] == "agent-trust-static-1.1"
+    assert result["evidence_summary"]["mcp_request_count"] == 7
+    assert result["evidence_summary"]["mcp_tool_call_count"] == 1
+    assert result["evidence_summary"]["mcp_child_process_count"] == 1
     assert any(item["id"] == "limited-runtime-telemetry" for item in result["score_caps"])
 
 

@@ -26,6 +26,20 @@ def completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> Simple
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def audit_event(sequence: int, event_type: str, **values: object) -> dict[str, object]:
+    event: dict[str, object] = {
+        "schema": target_runtime.MCP_AUDIT_EVENT_SCHEMA,
+        "observer_version": "1.0.0",
+        "event_id": f"mcp-{sequence:04d}",
+        "sequence": sequence,
+        "occurred_at": "2026-08-14T00:00:00+00:00",
+        "event_type": event_type,
+        **values,
+    }
+    event["event_sha256"] = target_runtime.canonical_sha256(event)
+    return event
+
+
 def build_staging(tmp_path: Path) -> dict[str, object]:
     source = tmp_path / "source"
     source.mkdir()
@@ -45,6 +59,7 @@ def build_staging(tmp_path: Path) -> dict[str, object]:
 
 
 def inspect_payload(staging: Path, *, workspace_writable: bool = False) -> dict[str, object]:
+    observer_path, _ = target_runtime.resolve_observer_asset()
     return {
         "Config": {
             "Image": IMAGE,
@@ -71,10 +86,16 @@ def inspect_payload(staging: Path, *, workspace_writable: bool = False) -> dict[
                 "Config": {"max-size": "1m", "max-file": "1", "compress": "false"},
             },
         },
-        "Mounts": [{
-            "Type": "bind", "Source": str(staging), "Destination": "/workspace",
-            "RW": workspace_writable,
-        }],
+        "Mounts": [
+            {
+                "Type": "bind", "Source": str(staging), "Destination": "/workspace",
+                "RW": workspace_writable,
+            },
+            {
+                "Type": "bind", "Source": str(observer_path),
+                "Destination": "/opt/agent-observer", "RW": False,
+            },
+        ],
         "State": {"ExitCode": 0},
     }
 
@@ -102,6 +123,7 @@ def run_kwargs(staging: dict[str, object]) -> dict[str, object]:
 def test_target_command_has_fixed_isolation_and_no_shell(tmp_path: Path) -> None:
     command = target_runtime.build_target_container_command(
         docker="docker", container_name="target", staging_path=tmp_path,
+        observer_path=tmp_path / "observer",
         image=IMAGE, command_tokens=["python", "main.py"],
     )
 
@@ -111,6 +133,7 @@ def test_target_command_has_fixed_isolation_and_no_shell(tmp_path: Path) -> None
     assert ["--cap-drop", "ALL"] == command[command.index("--cap-drop"):command.index("--cap-drop") + 2]
     assert ["--log-opt", "compress=false"] == command[command.index("compress=false") - 1:command.index("compress=false") + 1]
     assert ["--entrypoint", "python"] == command[command.index("--entrypoint"):command.index("--entrypoint") + 2]
+    assert f"type=bind,src={tmp_path / 'observer'},dst=/opt/agent-observer,readonly" in command
     assert command[-2:] == [IMAGE, "main.py"]
     assert not any(value in {"sh", "bash", "cmd", "powershell", "-e", "--env"} for value in command)
 
@@ -159,9 +182,76 @@ def test_bound_target_validation_emits_limited_observation_evidence(tmp_path: Pa
     assert "stdout" not in result["output"]
     assert result["path_results"][0]["runtime_status"] == "observed"
     assert result["path_results"][1]["runtime_status"] == "not_instrumented"
+    assert result["mcp_ledger"]["summary"]["event_count"] == 0
+    assert result["telemetry_coverage"]["tool_calls"] == "not-instrumented"
     assert result["container"]["removed_after_run"] is True
     assert len(result["evidence_sha256"]) == 64
     assert not any(command[1:2] == ["pull"] for command in commands)
+
+
+def test_mcp_ledger_validates_and_correlates_tool_and_child_events() -> None:
+    pid_hash = "1" * 64
+    metadata_hash = "2" * 64
+    events = [
+        audit_event(
+            1, "child_process", phase="start", process_role="mcp-server",
+            executable="python", argument_count=1,
+            command_metadata_sha256="3" * 64, pid_sha256=pid_hash,
+        ),
+        audit_event(
+            2, "mcp_request", direction="client-to-server", method="tools/call",
+            subject_kind="tool", subject="sum", payload_bytes=91,
+            redacted_metadata_sha256=metadata_hash,
+        ),
+        audit_event(
+            3, "mcp_response", direction="server-to-client", method="tools/call",
+            subject_kind="tool", subject="sum", payload_bytes=80,
+            redacted_metadata_sha256="4" * 64, outcome="success", duration_ms=2,
+            request_event_id="mcp-0002",
+        ),
+        audit_event(
+            4, "child_process", phase="exit", process_role="mcp-server",
+            executable="python", argument_count=1,
+            command_metadata_sha256="3" * 64, pid_sha256=pid_hash,
+            exit_code=0, timed_out=False, stderr_bytes=0,
+        ),
+    ]
+    forged = {**events[1], "subject": "forged"}
+    stderr = "\n".join(
+        target_runtime.MCP_AUDIT_PREFIX + json.dumps(event) for event in [*events, forged]
+    )
+
+    ledger, clean_stdout, clean_stderr = target_runtime.extract_mcp_audit_ledger("visible", stderr)
+    observations = {
+        "processes": [{"id": "container-main-process"}, *target_runtime.mcp_child_process_observations(ledger)],
+        "tool_calls": target_runtime.mcp_tool_call_observations(ledger),
+    }
+    paths = target_runtime.limited_path_results([
+        {"id": "server", "capability": "server-process"},
+        {"id": "tool", "capability": "tool-invocation"},
+        {"id": "file", "capability": "file-access"},
+    ], observations)
+
+    assert clean_stdout == "visible"
+    assert clean_stderr == ""
+    assert ledger["summary"] == {
+        "event_count": 4,
+        "request_count": 1,
+        "response_count": 1,
+        "notification_count": 0,
+        "successful_response_count": 1,
+        "error_response_count": 0,
+        "method_counts": {"tools/call": 1},
+        "tool_call_count": 1,
+        "resource_read_count": 0,
+        "prompt_get_count": 0,
+        "child_process_count": 1,
+    }
+    assert ledger["rejected_event_count"] == 1
+    assert observations["tool_calls"][0]["subject"] == "sum"
+    assert paths[0]["runtime_status"] == "observed"
+    assert paths[1]["runtime_status"] == "observed"
+    assert paths[2]["runtime_status"] == "not_instrumented"
 
 
 def test_binding_change_is_rejected_before_docker(tmp_path: Path, monkeypatch) -> None:

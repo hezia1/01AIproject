@@ -29,10 +29,17 @@ from app.services.agent_staging import (
 
 
 TARGET_RUNTIME_SCHEMA = "ai-security-platform.agent-target-runtime-evidence/v1"
+MCP_LEDGER_SCHEMA = "ai-security-platform.agent-mcp-runtime-ledger/v1"
+MCP_AUDIT_EVENT_SCHEMA = "ai-security-platform.agent-mcp-stdio-event/v1"
+MCP_AUDIT_PREFIX = "@@AGENT_MCP_AUDIT@@"
 EVIDENCE_ROOT = Path(__file__).resolve().parents[4] / "artifacts" / "agent-sandbox" / "target-evidence"
+OBSERVER_ASSET_ROOT = Path(__file__).with_name("runtime_assets")
+OBSERVER_SCRIPT_NAME = "mcp_stdio_observer.py"
 AUTHORIZATION_PHRASE = "RUN ISOLATED AGENT"
 MAX_OUTPUT_CHARACTERS = 16_000
 MAX_COMMAND_TOKENS = 64
+MAX_MCP_AUDIT_LINE_CHARACTERS = 8_192
+MAX_MCP_AUDIT_EVENTS = 500
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -122,6 +129,7 @@ def run_target_agent_validation(
         staging_sha256=staging_sha256,
         manifest_sha256=manifest_sha256,
     )
+    observer_root, observer_sha256 = resolve_observer_asset()
 
     docker = docker_executable()
     docker_context = ensure_local_docker_context(docker, run_command)
@@ -132,6 +140,7 @@ def run_target_agent_validation(
         docker=docker,
         container_name=container_name,
         staging_path=staging_path,
+        observer_path=observer_root,
         image=normalized_image,
         command_tokens=command_tokens,
     )
@@ -158,7 +167,7 @@ def run_target_agent_validation(
             raise TargetRuntimeRejected("Docker returned an invalid target container identifier.")
         inspect_payload = inspect_container(docker, container_id, run_command)
         configured_checks = configured_policy_checks(
-            inspect_payload, staging_path, normalized_image, command_tokens
+            inspect_payload, staging_path, observer_root, normalized_image, command_tokens
         )
         if not configured_checks or not all(configured_checks.values()):
             failed = ", ".join(key for key, value in configured_checks.items() if not value)
@@ -205,7 +214,7 @@ def run_target_agent_validation(
 
     after_verification = verify_filtered_staging(staging_path)
     configured_checks = configured_policy_checks(
-        inspect_payload, staging_path, normalized_image, command_tokens
+        inspect_payload, staging_path, observer_root, normalized_image, command_tokens
     )
     policy_checks = {
         **configured_checks,
@@ -216,6 +225,9 @@ def run_target_agent_validation(
         ),
         "container_cleanup_succeeded": cleanup_succeeded,
     }
+    mcp_ledger, stdout, stderr = extract_mcp_audit_ledger(stdout, stderr)
+    child_processes = mcp_child_process_observations(mcp_ledger)
+    tool_calls = mcp_tool_call_observations(mcp_ledger)
     observations = {
         "processes": [{
             "id": "container-main-process",
@@ -223,16 +235,16 @@ def run_target_agent_validation(
             "outcome": "observed",
             "exit_code": exit_code,
             "timed_out": timed_out,
-        }],
+        }, *child_processes],
         "file_access": [],
         "network_attempts": [],
-        "tool_calls": [],
+        "tool_calls": tool_calls,
     }
     dataflow_paths = (
         dataflow.get("paths") if isinstance(dataflow, dict) and isinstance(dataflow.get("paths"), list) else []
     )
     path_results = limited_path_results(
-        [item for item in dataflow_paths if isinstance(item, dict)]
+        [item for item in dataflow_paths if isinstance(item, dict)], observations
     )
     policy_verified = bool(policy_checks) and all(policy_checks.values())
     finished_at = datetime.now(timezone.utc)
@@ -274,14 +286,23 @@ def run_target_agent_validation(
             "removed_after_run": cleanup_succeeded,
         },
         "docker_context": docker_context,
+        "observer": {
+            "transport": "stdio-jsonrpc",
+            "mount_destination": "/opt/agent-observer",
+            "script_sha256": observer_sha256,
+            "content_stored": False,
+            "integrity": "format-and-event-hash-validated-not-cryptographically-authenticated",
+        },
+        "mcp_ledger": mcp_ledger,
         "policy_checks": policy_checks,
         "telemetry_coverage": {
             "main_process": "observed",
             "workspace_integrity": "observed",
             "network": "policy-enforced-not-instrumented",
             "file_access": "not-instrumented",
-            "child_processes": "not-instrumented",
-            "tool_calls": "not-instrumented",
+            "child_processes": telemetry_status(mcp_ledger, "child_process_count"),
+            "tool_calls": telemetry_status(mcp_ledger, "tool_call_count"),
+            "mcp_stdio": telemetry_status(mcp_ledger, "request_count"),
         },
         "observations": observations,
         "path_results": path_results,
@@ -297,7 +318,8 @@ def run_target_agent_validation(
         "limitations": [
             "This evidence covers one exact staging digest, image digest, command and timeout only.",
             "Network was disabled by container policy, but attempted destinations were not instrumented.",
-            "Only the main container process and before/after workspace integrity were observed; child processes, file access and tool calls were not instrumented.",
+            "The read-only stdio observer records bounded MCP method metadata and the MCP server child process; file access and system-level child processes remain uninstrumented.",
+            "Observer records have validated schemas and recomputed hashes, but the target-visible log channel is not cryptographically authenticated and could be forged by a hostile target.",
             "Container output content is not stored or returned; only redacted lengths and hashes are retained.",
             "A not_observed path result does not prove that the behavior is impossible.",
         ],
@@ -310,8 +332,276 @@ def run_target_agent_validation(
     return evidence
 
 
+def canonical_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def resolve_observer_asset() -> tuple[Path, str]:
+    try:
+        root = OBSERVER_ASSET_ROOT.resolve(strict=True)
+        script = (root / OBSERVER_SCRIPT_NAME).resolve(strict=True)
+    except OSError as exc:
+        raise TargetRuntimeRejected("The bundled MCP stdio observer is unavailable.") from exc
+    if (
+        not root.is_dir()
+        or is_link_or_junction(root)
+        or script.parent != root
+        or not script.is_file()
+        or is_link_or_junction(script)
+        or script.stat().st_size > 256 * 1024
+    ):
+        raise TargetRuntimeRejected("The bundled MCP stdio observer asset is unsafe.")
+    return root, sha256(script.read_bytes()).hexdigest()
+
+
+def _bounded_label(value: object, *, allow_redacted: bool = True) -> str:
+    text = str(value or "")[:120]
+    if allow_redacted and text == "[redacted-label]":
+        return text
+    return text if re.fullmatch(r"[A-Za-z0-9_.:/@-]{1,120}", text) else "[invalid-label]"
+
+
+def _bounded_hash(value: object) -> str:
+    text = str(value or "")
+    return text if re.fullmatch(r"[0-9a-f]{64}", text) else ""
+
+
+def normalize_mcp_audit_event(item: dict[str, object]) -> dict[str, object] | None:
+    if item.get("schema") != MCP_AUDIT_EVENT_SCHEMA:
+        return None
+    supplied_hash = _bounded_hash(item.get("event_sha256"))
+    unhashed = {key: value for key, value in item.items() if key != "event_sha256"}
+    if not supplied_hash or not hmac.compare_digest(supplied_hash, canonical_sha256(unhashed)):
+        return None
+    event_type = str(item.get("event_type") or "")
+    if event_type not in {"mcp_request", "mcp_response", "child_process", "observer_error"}:
+        return None
+    sequence = item.get("sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or not 1 <= sequence <= 10_000:
+        return None
+    event_id = str(item.get("event_id") or "")
+    if not re.fullmatch(r"mcp-[0-9]{4,8}", event_id):
+        return None
+    normalized: dict[str, object] = {
+        "schema": MCP_AUDIT_EVENT_SCHEMA,
+        "observer_version": _bounded_label(item.get("observer_version")),
+        "event_id": event_id,
+        "sequence": sequence,
+        "occurred_at": str(item.get("occurred_at") or "")[:64],
+        "event_type": event_type,
+        "event_sha256": supplied_hash,
+    }
+    if event_type in {"mcp_request", "mcp_response"}:
+        direction = str(item.get("direction") or "")
+        expected_direction = "client-to-server" if event_type == "mcp_request" else "server-to-client"
+        if direction != expected_direction:
+            return None
+        payload_bytes = item.get("payload_bytes")
+        if not isinstance(payload_bytes, int) or isinstance(payload_bytes, bool) or not 0 <= payload_bytes <= 64 * 1024:
+            return None
+        subject_kind = str(item.get("subject_kind") or "")
+        if subject_kind not in {"tool", "resource-scheme", "prompt", "method"}:
+            return None
+        normalized.update({
+            "direction": direction,
+            "method": _bounded_label(item.get("method")),
+            "subject_kind": subject_kind,
+            "subject": _bounded_label(item.get("subject")),
+            "expects_response": item.get("expects_response", True) is True,
+            "payload_bytes": payload_bytes,
+            "redacted_metadata_sha256": _bounded_hash(item.get("redacted_metadata_sha256")),
+        })
+        if not normalized["redacted_metadata_sha256"]:
+            return None
+        if event_type == "mcp_response":
+            duration_ms = item.get("duration_ms")
+            outcome = str(item.get("outcome") or "")
+            request_event_id = str(item.get("request_event_id") or "")
+            if (
+                outcome not in {"success", "error", "missing-or-oversized"}
+                or not isinstance(duration_ms, int)
+                or isinstance(duration_ms, bool)
+                or not 0 <= duration_ms <= 300_000
+                or not re.fullmatch(r"mcp-[0-9]{4,8}", request_event_id)
+            ):
+                return None
+            normalized.update({
+                "outcome": outcome,
+                "duration_ms": duration_ms,
+                "request_event_id": request_event_id,
+            })
+    elif event_type == "child_process":
+        phase = str(item.get("phase") or "")
+        if phase not in {"start", "exit"} or item.get("process_role") != "mcp-server":
+            return None
+        argument_count = item.get("argument_count")
+        if not isinstance(argument_count, int) or isinstance(argument_count, bool) or not 0 <= argument_count <= 64:
+            return None
+        normalized.update({
+            "phase": phase,
+            "process_role": "mcp-server",
+            "executable": _bounded_label(item.get("executable")),
+            "argument_count": argument_count,
+            "command_metadata_sha256": _bounded_hash(item.get("command_metadata_sha256")),
+            "pid_sha256": _bounded_hash(item.get("pid_sha256")),
+        })
+        if not normalized["command_metadata_sha256"] or not normalized["pid_sha256"]:
+            return None
+        if phase == "exit":
+            exit_code = item.get("exit_code")
+            stderr_bytes = item.get("stderr_bytes")
+            if (
+                not isinstance(exit_code, int)
+                or isinstance(exit_code, bool)
+                or not -255 <= exit_code <= 255
+                or not isinstance(stderr_bytes, int)
+                or isinstance(stderr_bytes, bool)
+                or not 0 <= stderr_bytes <= 64 * 1024 * 1024
+                or not isinstance(item.get("timed_out"), bool)
+            ):
+                return None
+            normalized.update({
+                "exit_code": exit_code,
+                "timed_out": item["timed_out"],
+                "stderr_bytes": stderr_bytes,
+            })
+    else:
+        normalized["code"] = _bounded_label(item.get("code"))
+    return normalized
+
+
+def extract_mcp_audit_ledger(
+    stdout: str, stderr: str
+) -> tuple[dict[str, object], str, str]:
+    events: list[dict[str, object]] = []
+    rejected = 0
+
+    def process_stream(value: str) -> str:
+        nonlocal rejected
+        clean_lines: list[str] = []
+        for line in value.splitlines(keepends=True):
+            if not line.startswith(MCP_AUDIT_PREFIX):
+                clean_lines.append(line)
+                continue
+            if len(events) >= MAX_MCP_AUDIT_EVENTS or len(line) > MAX_MCP_AUDIT_LINE_CHARACTERS:
+                rejected += 1
+                continue
+            try:
+                decoded = json.loads(line[len(MCP_AUDIT_PREFIX):].strip())
+            except json.JSONDecodeError:
+                rejected += 1
+                continue
+            normalized = normalize_mcp_audit_event(decoded) if isinstance(decoded, dict) else None
+            if normalized is None:
+                rejected += 1
+            else:
+                events.append(normalized)
+        return "".join(clean_lines)
+
+    clean_stdout = process_stream(stdout)
+    clean_stderr = process_stream(stderr)
+    method_counts: dict[str, int] = {}
+    notification_count = 0
+    response_count = success_count = error_count = 0
+    for event in events:
+        if event.get("event_type") == "mcp_request":
+            method = str(event.get("method") or "[invalid-label]")
+            method_counts[method] = method_counts.get(method, 0) + 1
+            if event.get("expects_response") is False:
+                notification_count += 1
+        elif event.get("event_type") == "mcp_response":
+            response_count += 1
+            if event.get("outcome") == "success":
+                success_count += 1
+            else:
+                error_count += 1
+    child_ids = {
+        str(event.get("pid_sha256"))
+        for event in events
+        if event.get("event_type") == "child_process" and event.get("phase") == "exit"
+    }
+    observer_versions = {
+        str(event.get("observer_version")) for event in events if event.get("observer_version")
+    }
+    ledger: dict[str, object] = {
+        "schema": MCP_LEDGER_SCHEMA,
+        "transport": "stdio-jsonrpc",
+        "source": "platform-readonly-observer",
+        "observer_version": next(iter(observer_versions)) if len(observer_versions) == 1 else "mixed-or-unavailable",
+        "integrity": "format-and-event-hash-validated-not-cryptographically-authenticated",
+        "content_stored": False,
+        "rejected_event_count": rejected,
+        "summary": {
+            "event_count": len(events),
+            "request_count": sum(method_counts.values()),
+            "response_count": response_count,
+            "notification_count": notification_count,
+            "successful_response_count": success_count,
+            "error_response_count": error_count,
+            "method_counts": dict(sorted(method_counts.items())),
+            "tool_call_count": method_counts.get("tools/call", 0),
+            "resource_read_count": method_counts.get("resources/read", 0),
+            "prompt_get_count": method_counts.get("prompts/get", 0),
+            "child_process_count": len(child_ids),
+        },
+        "events": sorted(events, key=lambda event: int(event.get("sequence") or 0)),
+    }
+    return ledger, clean_stdout, clean_stderr
+
+
+def mcp_child_process_observations(ledger: dict[str, object]) -> list[dict[str, object]]:
+    events = ledger.get("events") if isinstance(ledger.get("events"), list) else []
+    return [{
+        "id": f"mcp-child-{str(event.get('pid_sha256') or '')[:12]}",
+        "capability": "server-process",
+        "process_role": "mcp-server",
+        "executable": event.get("executable"),
+        "outcome": "observed",
+        "exit_code": event.get("exit_code"),
+        "timed_out": event.get("timed_out"),
+        "pid_sha256": event.get("pid_sha256"),
+        "source": "stdio-observer",
+    } for event in events if isinstance(event, dict) and event.get("event_type") == "child_process" and event.get("phase") == "exit"]
+
+
+def mcp_tool_call_observations(ledger: dict[str, object]) -> list[dict[str, object]]:
+    events = ledger.get("events") if isinstance(ledger.get("events"), list) else []
+    request_hashes = {
+        str(event.get("event_id")): event.get("event_sha256")
+        for event in events
+        if isinstance(event, dict) and event.get("event_type") == "mcp_request"
+    }
+    return [{
+        "id": str(event.get("event_id") or ""),
+        "capability": "tool-invocation",
+        "protocol": "mcp-stdio-jsonrpc",
+        "method": "tools/call",
+        "subject": event.get("subject"),
+        "subject_kind": event.get("subject_kind"),
+        "outcome": event.get("outcome"),
+        "duration_ms": event.get("duration_ms"),
+        "request_event_id": event.get("request_event_id"),
+        "request_event_sha256": request_hashes.get(str(event.get("request_event_id") or "")),
+        "response_event_sha256": event.get("event_sha256"),
+        "content_stored": False,
+        "source": "stdio-observer",
+    } for event in events if isinstance(event, dict) and event.get("event_type") == "mcp_response" and event.get("method") == "tools/call"]
+
+
+def telemetry_status(ledger: dict[str, object], count_key: str) -> str:
+    summary = ledger.get("summary") if isinstance(ledger.get("summary"), dict) else {}
+    if int(summary.get(count_key) or 0) > 0:
+        return "observed-via-stdio-proxy"
+    if int(summary.get("event_count") or 0) > 0:
+        return "stdio-proxy-active-no-matching-event"
+    return "not-instrumented"
+
+
 def build_target_container_command(
-    *, docker: str, container_name: str, staging_path: Path, image: str,
+    *, docker: str, container_name: str, staging_path: Path, observer_path: Path, image: str,
     command_tokens: list[str],
 ) -> list[str]:
     return [
@@ -324,33 +614,47 @@ def build_target_container_command(
         "--no-healthcheck", "--log-driver", "local", "--log-opt", "max-size=1m",
         "--log-opt", "max-file=1", "--log-opt", "compress=false",
         "--mount", f"type=bind,src={staging_path},dst=/workspace,readonly",
+        "--mount", f"type=bind,src={observer_path},dst=/opt/agent-observer,readonly",
         "--workdir", "/workspace", "--entrypoint", command_tokens[0],
         image, *command_tokens[1:],
     ]
 
 
-def limited_path_results(paths: list[dict[str, object]]) -> list[dict[str, object]]:
+def limited_path_results(
+    paths: list[dict[str, object]], observations: dict[str, object]
+) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
+    processes = observations.get("processes") if isinstance(observations.get("processes"), list) else []
+    tool_calls = observations.get("tool_calls") if isinstance(observations.get("tool_calls"), list) else []
     for path in paths[:1_000]:
         capability = str(path.get("capability") or "")
-        main_process_only = capability == "server-process"
+        observation_ids: list[str] = []
+        if capability == "server-process":
+            observation_ids = [
+                str(item.get("id") or "") for item in processes if isinstance(item, dict)
+            ]
+        elif capability == "tool-invocation":
+            observation_ids = [
+                str(item.get("id") or "") for item in tool_calls if isinstance(item, dict)
+            ]
+        observed = bool(observation_ids)
         results.append({
             "dataflow_path_id": str(path.get("id") or ""),
             "static_severity": path.get("severity"),
             "static_confidence": path.get("confidence"),
-            "runtime_status": "observed" if main_process_only else "not_instrumented",
-            "observation_ids": ["container-main-process"] if main_process_only else [],
+            "runtime_status": "observed" if observed else "not_instrumented",
+            "observation_ids": observation_ids,
             "reason": (
-                "The main container process was observed for this server-process path."
-                if main_process_only
-                else "This execution did not instrument the child process, file, network destination or tool-call evidence required for this path."
+                "Runtime observations were correlated with this static capability path."
+                if observed
+                else "This execution did not capture the file, network destination or matching MCP tool-call evidence required for this path."
             ),
         })
     return results
 
 
 def configured_policy_checks(
-    inspected: dict[str, object], staging_path: Path, image: str,
+    inspected: dict[str, object], staging_path: Path, observer_path: Path, image: str,
     command_tokens: list[str],
 ) -> dict[str, bool]:
     host = inspected.get("HostConfig") if isinstance(inspected.get("HostConfig"), dict) else {}
@@ -359,6 +663,7 @@ def configured_policy_checks(
     security_options = {str(value) for value in host.get("SecurityOpt", [])} if isinstance(host.get("SecurityOpt"), list) else set()
     cap_drop = {str(value).upper() for value in host.get("CapDrop", [])} if isinstance(host.get("CapDrop"), list) else set()
     workspace = next((item for item in mounts if isinstance(item, dict) and item.get("Destination") == "/workspace"), {})
+    observer = next((item for item in mounts if isinstance(item, dict) and item.get("Destination") == "/opt/agent-observer"), {})
     tmpfs = host.get("Tmpfs") if isinstance(host.get("Tmpfs"), dict) else {}
     log_config = host.get("LogConfig") if isinstance(host.get("LogConfig"), dict) else {}
     healthcheck = config.get("Healthcheck") if isinstance(config.get("Healthcheck"), dict) else {}
@@ -371,7 +676,9 @@ def configured_policy_checks(
         "root_filesystem_read_only": host.get("ReadonlyRootfs") is True,
         "workspace_read_only": bool(workspace) and workspace.get("RW") is False,
         "workspace_source_exact": Path(str(workspace.get("Source") or "")).resolve(strict=False) == staging_path.resolve(strict=False),
-        "only_workspace_mount": len(mounts) == 1 and bool(workspace),
+        "observer_read_only": bool(observer) and observer.get("RW") is False,
+        "observer_source_exact": Path(str(observer.get("Source") or "")).resolve(strict=False) == observer_path.resolve(strict=False),
+        "only_expected_mounts": len(mounts) == 2 and bool(workspace) and bool(observer),
         "capabilities_drop_all": "ALL" in cap_drop,
         "no_new_privileges": any(value.startswith("no-new-privileges") for value in security_options),
         "not_privileged": host.get("Privileged") is False,

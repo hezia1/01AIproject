@@ -6,7 +6,7 @@ from typing import Any
 
 
 TRUST_SCORE_SCHEMA = "ai-security-platform.agent-trust-score/v1"
-TRUST_SCORE_ALGORITHM = "agent-trust-static-1.0"
+TRUST_SCORE_ALGORITHM = "agent-trust-static-1.1"
 MAX_STATIC_SCORE = 90
 RESOLVED_FINDING_STATUSES = {"fixed", "closed", "false_positive"}
 
@@ -50,6 +50,7 @@ def calculate_agent_trust_score(
     )
     target_runtime_observed = has_target_runtime_evidence(runtime)
     complete_runtime_telemetry = has_complete_runtime_telemetry(runtime)
+    mcp_runtime = runtime_mcp_summary(runtime)
     confidence = confidence_label(evidence_completeness, target_runtime_observed, complete_runtime_telemetry)
     deductions = sorted(
         [
@@ -80,12 +81,16 @@ def calculate_agent_trust_score(
             "dataflow_path_count": integer(summary(flow).get("path_count")),
             "target_runtime_observed": target_runtime_observed,
             "complete_runtime_telemetry": complete_runtime_telemetry,
+            "mcp_request_count": integer(mcp_runtime.get("request_count")),
+            "mcp_tool_call_count": integer(mcp_runtime.get("tool_call_count")),
+            "mcp_child_process_count": integer(mcp_runtime.get("child_process_count")),
         },
         "limitations": [
             "The score summarizes current scanner evidence; it is not a security guarantee or publisher identity attestation.",
             "Accepted-risk findings still reduce the score. A false-positive status removes only direct finding-based deductions; independent provenance, intelligence, permission or data-flow evidence can still reduce the score.",
             "A local intelligence checked_no_match result means only that configured local sources did not match the exact version; it does not prove safety.",
             "Static data-flow paths are confidence-labelled inferences, not observed runtime calls or transfers.",
+            "Validated stdio MCP ledger events improve runtime evidence, but their target-visible log channel is not cryptographically authenticated.",
             "Harmless fixture validation tests the laboratory controls and never increases the scanned target's trust score.",
         ],
     }
@@ -352,6 +357,17 @@ def has_target_runtime_evidence(runtime: dict[str, object]) -> bool:
         and bool(evidence.get("execution_id"))
         and evidence.get("policy_verified") is True
     )
+
+
+def runtime_mcp_summary(runtime: dict[str, object]) -> dict[str, object]:
+    evidence = runtime.get("evidence")
+    if not isinstance(evidence, dict):
+        return {}
+    ledger = evidence.get("mcp_ledger")
+    if not isinstance(ledger, dict):
+        return {}
+    values = ledger.get("summary")
+    return values if isinstance(values, dict) else {}
 
 
 def has_complete_runtime_telemetry(runtime: dict[str, object]) -> bool:

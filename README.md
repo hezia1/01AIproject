@@ -4,13 +4,15 @@
 
 本文档反映 **2026-08-14** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
-## 2026-08-14 AGENT 代表性 MCP 集成目标真实验收
+## 2026-08-14 AGENT stdio MCP 调用账本与代表性目标真实验收
 
 - 新增离线、零第三方依赖的代表性 MCP 集成夹具 `apps/api/tests/fixtures/agent_runtime_mcp`。它同时包含指令文件、MCP 配置、插件清单、工具 Schema 和 Prompt，服务端以 stdio JSON-RPC 提供初始化、工具发现/调用、资源发现/读取和 Prompt 发现/获取；客户端只调用边界受控的整数加法工具，不读环境变量、不联网、不写文件。
 - 专项测试证明扫描器可识别 5 类 AGENT 资产，并分别覆盖静态权限/数据流/信任证据、只预检计划、8 文件过滤 staging 和 MCP 协议冒烟链路。该夹具是本仓库自建的代表性集成目标，不冒充第三方生产项目或完整 MCP SDK 兼容性证明。
-- 已创建独立项目 `AGENT-MCP-runtime-acceptance`，没有修改 DVNA。2026-08-14 使用已有本地 `python@sha256:423ed6ab…` 完成真实受控执行，全程 `--pull=never`、无下载：24/24 项策略检查通过、退出码 0、未超时、容器已删除、staging 运行前后未变化。
-- 本次扫描识别 5 个资产和 3 个静态 Finding；8 个文件进入 staging。计划 SHA-256 为 `793e8bdae5ec…`，staging SHA-256 为 `6128a33146ed…`，manifest SHA-256 为 `c64d029b8463…`，目标证据 SHA-256 为 `96475d9a5ab1…`，批次信任分为 82。完整 staging 与证据仅保存在 D 盘 Git 忽略目录。
-- MCP 协议冒烟测试验证了工具、资源和 Prompt 请求能够完成；目标容器证据目前只动态观察主进程、固定隔离策略和工作区完整性。子进程、逐文件访问、网络尝试目的地及工具调用仍为 `not-instrumented`，因此不能宣称运行时已经观测到具体 MCP 工具调用。
+- 指定目标执行器新增只读挂载的通用 stdio JSON-RPC 观察器。适配目标可通过固定平台路径使用它代理 MCP Server；观察器不保存 `params`、`result`、标准输出或标准错误内容，只记录方法、脱敏目标、字节数、结果、耗时和可复算事件 SHA-256，并记录 MCP Server 子进程的启动/退出元数据。
+- 后端会从容器日志剥离观察器记录，按固定 Schema、字段白名单、大小/数量上限和重算哈希进行验证，再生成 MCP 调用账本、工具调用/子进程观测及静态路径关联。日志通道并非密码学认证通道，恶意目标仍可能伪造同前缀事件，因此该证据不能表述为不可抵赖证明。
+- 已创建独立项目 `AGENT-MCP-runtime-acceptance`，没有修改 DVNA。2026-08-14 使用已有本地 `python@sha256:423ed6ab…` 完成更新后的真实受控执行，全程 `--pull=never`、无下载：26/26 项策略检查通过、退出码 0、未超时、容器已删除、staging 运行前后未变化。
+- 本次扫描批次 `cbd2a358-ee7f-4045-aa3b-5604759eb337`；8 个文件进入 staging。计划 SHA-256 为 `793e8bdae5ec…`，staging SHA-256 为 `5656c23040a2…`，manifest SHA-256 为 `dab16e33e7a9…`，目标证据 SHA-256 为 `45b9b87ff540…`，批次信任分仍为 82。完整 staging 与证据仅保存在 D 盘 Git 忽略目录。
+- 真实账本包含 17 条有效事件、0 条拒绝事件：7 次请求/响应、1 次 `notifications/initialized`（无需响应）、1 次 `tools/call`、1 次 `resources/read`、1 次 `prompts/get` 和 1 个 MCP Server 子进程。前端可查看汇总与逐条响应事件哈希；逐文件访问、系统级子进程和网络尝试目的地仍未插桩，因此行为遥测仍标记为不完整，运行分保持 7/10、总分上限保持 95。
 - 真实验收发现并修复 Docker `local` 日志驱动在 `max-file=1` 时默认压缩导致容器无法启动的兼容性问题：现在固定 `compress=false`，同时保留 1 MiB、单文件日志上限，并在启动前通过 inspect 复核。
 
 ## 2026-08-12 AGENT 无害夹具容器策略验收更新
@@ -63,7 +65,7 @@
 - 已实现指定项目 Agent 的受控 Docker 执行器，但项目策略 `target_runtime_execution_enabled` 默认关闭；开启策略本身不会运行任何内容，实际执行还要求选择精确绑定的 staging、输入固定确认短语并再次勾选。
 - 新建 staging 会把扫描批次、预检计划 SHA-256、命令 SHA-256、镜像 digest 和超时写入受哈希保护的 manifest。执行前服务器重新验证逐文件/整体/manifest 哈希和全部绑定，任一变化都会在联系 Docker 前拒绝。
 - 容器使用参数数组而非 Shell，强制 `--pull=never`、本地 Docker Context、digest 镜像、禁网、根目录/工作区只读、非 root、drop-all、no-new-privileges、无宿主环境/Socket、IPC/PID 隔离、CPU/内存/PID/超时限制、关闭镜像 Healthcheck 和有界本地日志；创建后先 inspect，策略不一致绝不启动。日志正文不落库、不进报告，只保存脱敏后的长度和摘要。
-- 证据保存主进程结果、工作区运行前后完整性、容器策略、脱敏有限日志、静态路径关联和证据 SHA-256，并明确把子进程、逐文件访问、网络尝试目的地和工具调用标记为未插桩。有限目标观测的运行分为 7/10、总分最高 95，不会冒充完整行为取证。
+- 证据保存主进程结果、工作区运行前后完整性、容器策略、静态路径关联和证据 SHA-256；适配平台 stdio 观察器的 MCP 目标还会保存脱敏方法账本、工具调用与 MCP Server 子进程元数据。逐文件访问、系统级子进程和网络尝试目的地仍未插桩；有限目标观测的运行分为 7/10、总分最高 95，不会冒充完整行为取证。
 - API 和前端已提供状态、绑定副本、最近证据和独立真实运行确认入口。除模拟回归测试外，现已对仓库内代表性 MCP 集成目标完成一次真实受控运行；没有下载镜像，也没有对 DVNA 或外部生产 Agent 执行。
 
 ## 2026-08-12 AGENT 可解释信任评分更新
@@ -184,7 +186,7 @@ npm run dev
 | --- | --- | --- |
 | SCA | 多生态依赖解析、版本解析质量、漏洞情报覆盖证明、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、未验证组件门禁、本地 CI CLI；所有治理和可信度入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树。目标项目没有锁文件/实际环境且离线库不覆盖时，平台会正确给出“部分验证/阻断”，不能给出完整无漏洞结论。 |
 | SAST | 本地规则扫描、项目自定义正则规则、内置及项目自定义 Semgrep YAML 规则包（校验/预检/发布/启停/版本）、固定版 Semgrep 离线增强、Python AST 与有限跨函数污点分析、JS/TS 保守数据流、开放重定向/原始 HTML/XXE 线索、低噪声 Git 历史密钥证据、Git 基线、规则/路径豁免、扫描历史/差异、JSON/HTML/SARIF 导出、项目策略一致的离线 CI、持久化任务队列和 Finding 统一治理；另有可选 DeepSeek 七角色真实模型审计、AI 漏洞发现、证据终审、审计历史和人工修复草案；入口均已在当前 SAST 页面开放。 | 自动写入修复或提交 PR；可执行工具的自治 Agent；跨语言、跨服务、全程序数据流；运行态和业务权限漏洞的完整证明；外部漏洞知识库/RAG 和自动学习；全模块分布式调度。 |
-| AGENT | 识别 Agent 指令、Prompt、Skill、MCP、工具和插件配置；结构化解析 Markdown Frontmatter、JSON、YAML、TOML，归一化资产、权限和审批边界；提取包/版本/来源/安装方式，记录文件及受限本地目录 SHA-256；以严格离线方式关联内置漏洞规则、可选本地 OSV 镜像和可选恶意包/受保护包名情报；建立带证据、依据和置信度的 Prompt→工具→资源静态路径；提供强制不执行的运行预检、敏感文件名清点、二次确认保护的 D 盘过滤 staging、逐文件/整体哈希复核，以及固定无害夹具的容器策略验收；项目策略、Allowlist、例外审批、质量门禁、审计、JSON/SARIF/HTML 和离线 CI 均已在 AGENT 治理页开放。 | 无害夹具已完成真实隔离策略验收，但尚未运行任何真实 Agent，也不连接 MCP Server、不执行实际工具调用；夹具通过不能证明项目 Agent 安全。尚缺真实目标的文件/网络/进程/工具调用观测、数字签名/Registry 身份、在线情报同步、复杂 Schema/引用解析、跨服务全程序数据流、AGENT 专用 AI 复核、可信 IAM 审批和行为回放。 |
+| AGENT | 识别 Agent 指令、Prompt、Skill、MCP、工具和插件配置；结构化解析 Markdown Frontmatter、JSON、YAML、TOML，归一化资产、权限和审批边界；提取包/版本/来源/安装方式，记录文件及受限本地目录 SHA-256；以严格离线方式关联内置漏洞规则、可选本地 OSV 镜像和可选恶意包/受保护包名情报；建立带证据、依据和置信度的 Prompt→工具→资源静态路径；提供运行预检、D 盘过滤 staging、容器策略验收及默认关闭的指定目标执行；适配 stdio 观察器的 MCP 目标可生成脱敏调用账本、工具调用和 MCP Server 子进程证据；项目策略、门禁、审计、JSON/SARIF/HTML 和离线 CI 均已开放。 | 已对仓库代表性 MCP 目标完成真实受控运行，但这不等于生产安全认证。尚缺 SSE/Streamable HTTP 等网络 MCP 传输观测、逐文件访问、系统级子进程和网络目的地监控、不可抵赖运行事件、数字签名/Registry 身份、在线情报同步、复杂 Schema/引用解析、跨服务全程序数据流、AGENT 专用 AI 复核、可信 IAM 审批和行为回放。 |
 | DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
 | SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
 | ASPM / 治理 | 汇总模块状态、组件、Finding、DAST、SANDBOX、扫描任务；证据图谱、攻击链、整改字段、复测对比、项目报告和知识中枢均已可见。 | 项目级 CVSS/EPSS/资产暴露面/业务权重风险模型、趋势与 SLA、工单与审批、图数据库/语义推理、全局审计与后台任务。 |
@@ -242,7 +244,7 @@ Syft/Grype/Trivy 增强扫描在页面和 API 中默认开启：需要 Docker、
 ## 其他模块的接口与实际边界
 
 - SAST：`POST /api/sast/scan`、`GET /api/sast/projects/{project_id}/findings`、`POST /api/sast/projects/{project_id}/agent-review`、`GET /api/sast/ai-health`、`POST /api/sast/ai-health/test`、`GET /api/sast/projects/{project_id}/agent-runs`、`GET/PATCH /api/sast/projects/{project_id}/profile`、`GET/POST/PATCH /api/sast/projects/{project_id}/rules`、`POST /api/sast/rules/validate`、`POST/PATCH /api/sast/projects/{project_id}/suppressions`、`GET /api/sast/projects/{project_id}/scan-history`、`GET /api/sast/projects/{project_id}/scan-diff`、`GET /api/sast/projects/{project_id}/sarif`、`GET /api/sast/projects/{project_id}/ci-config`、`GET /api/sast/tool-health`。基础扫描使用本地规则/静态分析；项目启用 AI 后，Agent 复核会真实调用 DeepSeek 七个角色，并按证据与置信度门槛写回结果。
-- AGENT：`POST /api/agent/scan`；`GET /api/agent/projects/{project_id}/findings|scan-history|snapshot|scan-diff|gate|report|sarif|report.html|ci-config`；`POST /api/agent/projects/{project_id}/runtime-preflight|runtime-staging|runtime-fixture-validation`；`GET /api/agent/projects/{project_id}/runtime-fixture-status|runtime-fixture-evidence`；`GET/PATCH /api/agent/projects/{project_id}/profile`；`POST /api/agent/projects/{project_id}/exceptions`；`PATCH /api/agent/projects/{project_id}/exceptions/{exception_id}`。预检不复制或执行；staging 只创建过滤副本；fixture validation 只运行固定仓库夹具和本地 digest 镜像且禁止拉取。三者都不能授权真实 Agent，规则、静态路径或夹具通过也不等于项目运行时安全。
+- AGENT：`POST /api/agent/scan`；`GET /api/agent/projects/{project_id}/findings|scan-history|snapshot|scan-diff|gate|report|sarif|report.html|ci-config`；`POST /api/agent/projects/{project_id}/runtime-preflight|runtime-staging|runtime-fixture-validation|runtime-target-validation`；`GET /api/agent/projects/{project_id}/runtime-fixture-status|runtime-fixture-evidence|runtime-target-status|runtime-target-evidence`；`GET/PATCH /api/agent/projects/{project_id}/profile`；`POST /api/agent/projects/{project_id}/exceptions`；`PATCH /api/agent/projects/{project_id}/exceptions/{exception_id}`。预检不复制或执行；staging 只创建过滤副本；fixture validation 只运行固定仓库夹具。指定目标执行默认关闭，要求扫描/计划/命令/镜像/超时/staging/manifest 精确绑定、固定确认短语和本地 digest 镜像，全部使用 `--pull=never`；静态规则、夹具或一次目标运行通过都不等于项目安全。
 - AGENT 单文件上限为 512 KiB，单资产最多持久化 500 条去重权限；超过上限会在快照元数据和前端资产结果中明确显示截断数量。
 - DAST：`POST /api/dast/probe`、`POST /api/dast/validations`、`GET /api/dast/projects/{project_id}/validations`。基础检查只验证 HTTP/HTTPS、状态、耗时、Server Header 和基础安全响应头；不能证明 SQL 注入、鉴权绕过等业务漏洞可利用。
 - SANDBOX：`POST /api/sandbox/run`、`POST /api/sandbox/evidence`、`GET /api/sandbox/projects/{project_id}/evidence`。默认使用受限 Docker 容器；执行摘要和隔离策略不等同系统级行为取证。

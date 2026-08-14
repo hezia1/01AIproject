@@ -17,6 +17,7 @@ REQUESTS = [
             "clientInfo": {"name": "bounded-fixture-client", "version": "1.0.0"},
         },
     },
+    {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
     {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     {
         "jsonrpc": "2.0",
@@ -26,14 +27,39 @@ REQUESTS = [
     },
     {"jsonrpc": "2.0", "id": 4, "method": "resources/list", "params": {}},
     {"jsonrpc": "2.0", "id": 5, "method": "prompts/list", "params": {}},
+    {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "resources/read",
+        "params": {"uri": "fixture://status"},
+    },
+    {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "prompts/get",
+        "params": {"name": "add-two-integers", "arguments": {"a": "2", "b": "4"}},
+    },
 ]
 
 
 def main() -> None:
     server_path = Path(__file__).with_name("mcp_server.py")
+    server_command = [sys.executable, "-I", "-B", str(server_path)]
+    observer_path = Path("/opt/agent-observer/mcp_stdio_observer.py")
+    if observer_path.is_file():
+        server_command = [
+            sys.executable,
+            "-I",
+            "-B",
+            str(observer_path),
+            "--ledger-fd-path",
+            "/proc/1/fd/2",
+            "--",
+            *server_command,
+        ]
     payload = "".join(json.dumps(item, separators=(",", ":")) + "\n" for item in REQUESTS)
     completed = subprocess.run(
-        [sys.executable, "-I", "-B", str(server_path)],
+        server_command,
         input=payload,
         capture_output=True,
         text=True,
@@ -44,7 +70,7 @@ def main() -> None:
         raise RuntimeError("bounded MCP server returned a non-zero exit code")
     responses = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
     by_id = {item.get("id"): item for item in responses}
-    if sorted(by_id) != [1, 2, 3, 4, 5]:
+    if sorted(by_id) != [1, 2, 3, 4, 5, 6, 7]:
         raise RuntimeError("bounded MCP server returned an incomplete response set")
     if by_id[1]["result"]["serverInfo"]["name"] != "bounded-mcp-integration":
         raise RuntimeError("unexpected MCP server identity")
@@ -56,6 +82,10 @@ def main() -> None:
         raise RuntimeError("unexpected MCP resource inventory")
     if [item["name"] for item in by_id[5]["result"]["prompts"]] != ["add-two-integers"]:
         raise RuntimeError("unexpected MCP prompt inventory")
+    if by_id[6]["result"]["contents"][0]["uri"] != "fixture://status":
+        raise RuntimeError("unexpected MCP resource read response")
+    if by_id[7]["result"]["messages"][0]["role"] != "user":
+        raise RuntimeError("unexpected MCP prompt response")
     print(json.dumps({
         "schema": "ai-security-platform.agent-runtime-mcp-result/v1",
         "server": "bounded-mcp-integration",
