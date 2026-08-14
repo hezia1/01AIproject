@@ -198,7 +198,10 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 - 自动探测严格拒绝配置环境变量、远程 URL、Shell/内联代码、危险参数、疑似凭据和绝对宿主可执行路径。运行要求项目目标执行策略已开启、精确 staging/候选、本地 digest 镜像、独立确认短语，并保持 `--pull=never`、禁网、只读、非 root、drop-all 和资源限制。
 - 固定探测客户端只执行 initialize、initialized notification、tools/list、resources/list、prompts/list；不会执行 tools/call、resources/read 或 prompts/get。结果只保存 Server 身份声明、工具/Prompt 名称、资源 URI scheme 和事件哈希，不保存正文。
 - 代表性项目真实验收直接从 staging `.mcp.json` 识别 `bounded-calculator`，无需 `test_client.py` 适配。27/27 策略检查通过，5 条请求、4 条响应、1 条 notification、1 个 MCP Server 子进程、0 条拒绝事件；发现 `bounded_add`、`fixture` 和 `add-two-integers`，证据 SHA-256 `694424c6e444b15ea74254c28618a61660ccd2564556493d8eb38b2351267889`。
-- 信任算法升级为 `agent-trust-static-1.2`，能力探测结果进入证据摘要但不增加整套 Agent 的运行分；代表性项目仍为 82 分。当前自动探测要求所选本地镜像同时具备 Python 3、Server 可执行文件和全部依赖，且仍不覆盖网络 MCP 传输。
+- 信任算法现为 `agent-trust-static-1.3`，本地与远程能力探测结果进入证据摘要但不增加整套 Agent 的运行分；此前代表性 stdio 项目仍为 82 分。本地 stdio 自动探测仍要求所选镜像同时具备 Python 3、Server 可执行文件和全部依赖。
+- 2026-08-14 已新增远程 MCP 安全能力探测：从已验证 staging 自动提取 HTTPS endpoint，支持 `2026-07-28` 无状态 Streamable HTTP、2025 会话式 Streamable HTTP、POST SSE 响应和旧 HTTP+SSE；只做发现/初始化和能力列表，不执行内容动作。
+- 远程候选拒绝 HTTP、非 443 端口、URL 凭据/查询参数、自定义 Header/环境/认证字段和本地命令。执行前 DNS 结果必须全部为公网地址；固定容器只连接预批准 IP、保持 TLS 主机名校验并阻断跨域重定向。配置凭据和旧 SSE 会话参数均不落证据。
+- 新增 `runtime-remote-mcp-probe-status|evidence|validation` API、前端入口、HTML 白名单报告和信任摘要。当前网络限制由固定探测脚本与 IP pinning 实施，不是独立 egress 防火墙；尚未覆盖认证后的私有能力、工具调用、整个 Agent 的透明网络流量或系统级行为监控。
 
 ### 已在前端可见
 
@@ -248,7 +251,7 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 11. **可解释信任评分（已完成批次级基础）**：六个固定分项、扣分证据、置信度、评分上限、改进建议、快照/报告/CI/前端和可选低分门禁已实现；当前不是资产级评分或安全认证。
 12. **指定 Agent 运行时验证（stdio MCP 第一阶段已完成）**：默认关闭、绑定清单、固定 Docker 策略、有限观测证据、报告/前端/信任分接入已实现；只读 stdio 观察器、脱敏 MCP 调用账本、工具调用和 MCP Server 子进程证据已经代表性目标真实验收。DVNA 和外部生产 Agent 未执行。下一阶段依次补 SSE/Streamable HTTP 网络 MCP 传输，再补系统级文件/子进程/网络目的地监控；后续每个新目标仍须用户明确批准具体目录、digest 镜像、命令和资源边界，并提前说明任何下载。
 13. **通用 stdio MCP 自动能力探测（已完成本地配置基础）**：已从 staging 配置自动提取并安全筛选 Server，无需项目客户端适配；固定只读协议探测、证据、前端、信任摘要和代表性真实验收均已完成。它不调用工具、不读取内容，也不等于透明截获 Agent 内部调用。
-14. **SSE / Streamable HTTP 网络 MCP 传输**：尚未实现；下一阶段需要先设计本地回环代理、远端目标审批、目的地 Allowlist、TLS/认证信息脱敏和禁外联测试边界。
+14. **SSE / Streamable HTTP 网络 MCP 传输（只读能力探测已完成）**：已支持 staging 绑定候选、现代/旧版协议协商、SSRF/DNS/IP pinning、TLS、同源重定向、无凭据清单探测、证据、报告和前端。尚未支持认证后的私有 MCP、工具调用与内容读取，也没有独立网络层 egress 防火墙或整个 Agent 的透明网络监控。
 15. **可选真实 AI 分析**：只有用户批准代码/配置发送边界和 API 费用后，才可设计 AGENT 专用模型复核；它不能复用文案冒充已实现能力。
 
 每个阶段都应先给出本次具体实现范围、测试方式、前端变化和明确边界，等待用户确认后再改代码。

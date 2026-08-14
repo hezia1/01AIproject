@@ -77,7 +77,7 @@ def test_limited_target_observation_scores_seven_and_caps_at_95() -> None:
     assert result["score"] == 95
     assert result["score_cap"] == 95
     assert result["confidence"] == "medium"
-    assert result["algorithm_version"] == "agent-trust-static-1.2"
+    assert result["algorithm_version"] == "agent-trust-static-1.3"
     assert result["evidence_summary"]["mcp_request_count"] == 7
     assert result["evidence_summary"]["mcp_tool_call_count"] == 1
     assert result["evidence_summary"]["mcp_child_process_count"] == 1
@@ -110,6 +110,26 @@ def test_mcp_capability_probe_is_summarized_without_claiming_whole_agent_runtime
 
     assert result["evidence_summary"]["mcp_capability_probe_observed"] is True
     assert result["evidence_summary"]["mcp_discovered_tool_count"] == 1
+    assert result["evidence_summary"]["target_runtime_observed"] is False
+    assert result["score"] == 90
+
+
+def test_remote_mcp_probe_is_summarized_without_increasing_whole_agent_runtime_score() -> None:
+    result = score(runtime_validation={
+        "schema": "runtime/v1", "isolation_policy": {"network": "none"},
+        "remote_mcp_probe_evidence": {
+            "status": "completed", "execution_id": "remote-mcp-probe-1", "policy_verified": True,
+            "capability_probe": {
+                "status": "success", "transport_mode": "streamable-http-modern",
+                "tool_names": ["catalog_search"], "resource_schemes": ["catalog"],
+                "prompt_names": ["search-help"],
+            },
+        },
+    })
+
+    assert result["evidence_summary"]["remote_mcp_capability_probe_observed"] is True
+    assert result["evidence_summary"]["remote_mcp_transport_mode"] == "streamable-http-modern"
+    assert result["evidence_summary"]["remote_mcp_discovered_tool_count"] == 1
     assert result["evidence_summary"]["target_runtime_observed"] is False
     assert result["score"] == 90
 
@@ -220,6 +240,30 @@ def test_html_report_summarizes_mcp_probe_without_content() -> None:
     assert "bounded_add" in html
     assert "MUST-NOT-RENDER" not in html
     assert "没有调用工具、读取资源或获取 Prompt 内容" in html
+
+
+def test_html_report_summarizes_remote_mcp_probe_without_content_or_secrets() -> None:
+    html = build_agent_html_report({
+        "summary": {}, "assets": [], "findings": [], "quality_gate": {},
+        "runtime_validation": {"remote_mcp_probe_evidence": {
+            "policy_verified": True, "evidence_sha256": "b" * 64,
+            "network_policy": {"hostname": "mcp.example.com", "port": 443},
+            "capability_probe": {
+                "status": "success", "transport_mode": "streamable-http-modern",
+                "protocol_version": "2026-07-28", "server_name": "remote-catalog",
+                "endpoint": "https://mcp.example.com/mcp", "tool_names": ["catalog_search"],
+                "resource_schemes": ["catalog"], "prompt_names": ["search-help"],
+                "method_outcomes": {"server/discover": "success", "tools/list": "success"},
+                "secret_response_content": "MUST-NOT-RENDER",
+                "authorization": "Bearer MUST-NOT-RENDER",
+            },
+        }},
+    })
+
+    assert "远程 MCP Server 只读能力探测" in html
+    assert "catalog_search" in html
+    assert "MUST-NOT-RENDER" not in html
+    assert "没有发送配置凭据、调用工具、读取资源或获取 Prompt 内容" in html
 
 
 def test_quality_gate_can_optionally_block_low_trust_without_changing_default() -> None:

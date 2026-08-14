@@ -581,6 +581,31 @@ def build_agent_html_report(report: dict[str, object]) -> str:
             "该探测没有调用工具、读取资源或获取 Prompt 内容；Server 声明不等于整个 Agent 已通过运行验证。</p>"
         )
         html = html.replace("</body>", f"{probe_section}</body>")
+    remote_mcp_probe = runtime.get("remote_mcp_probe_evidence") if isinstance(runtime.get("remote_mcp_probe_evidence"), dict) else {}
+    remote_probe_result = remote_mcp_probe.get("capability_probe") if isinstance(remote_mcp_probe.get("capability_probe"), dict) else {}
+    if remote_mcp_probe:
+        remote_outcomes = remote_probe_result.get("method_outcomes") if isinstance(remote_probe_result.get("method_outcomes"), dict) else {}
+        remote_method_rows = "".join(
+            f"<tr><td>{escape(str(method))}</td><td>{escape(str(outcome))}</td></tr>"
+            for method, outcome in remote_outcomes.items()
+        )
+        network_policy = remote_mcp_probe.get("network_policy") if isinstance(remote_mcp_probe.get("network_policy"), dict) else {}
+        remote_probe_section = (
+            "<h2>远程 MCP Server 只读能力探测</h2>"
+            f"<p>状态：{escape(str(remote_probe_result.get('status') or '-'))}；策略验证：{escape(str(remote_mcp_probe.get('policy_verified') is True))}；"
+            f"传输：{escape(str(remote_probe_result.get('transport_mode') or '-'))}；协议：{escape(str(remote_probe_result.get('protocol_version') or '-'))}</p>"
+            f"<p>Endpoint：{escape(str(remote_probe_result.get('endpoint') or '-'))}；"
+            f"目标主机：{escape(str(network_policy.get('hostname') or '-'))}:{escape(str(network_policy.get('port') or '-'))}；"
+            f"Server：{escape(str(remote_probe_result.get('server_name') or '-'))}</p>"
+            f"<p>工具：{escape(', '.join(str(item) for item in remote_probe_result.get('tool_names', [])) or '-')}；"
+            f"资源 scheme：{escape(', '.join(str(item) for item in remote_probe_result.get('resource_schemes', [])) or '-')}；"
+            f"Prompt：{escape(', '.join(str(item) for item in remote_probe_result.get('prompt_names', [])) or '-')}</p>"
+            "<table><thead><tr><th>协议方法</th><th>结果</th></tr></thead>"
+            f"<tbody>{remote_method_rows}</tbody></table>"
+            f"<p>证据 SHA-256：{escape(str(remote_mcp_probe.get('evidence_sha256') or '-'))}。"
+            "该探测没有发送配置凭据、调用工具、读取资源或获取 Prompt 内容；远程身份与能力名称均为 Server 自行声明。</p>"
+        )
+        html = html.replace("</body>", f"{remote_probe_section}</body>")
     trust = report.get("trust_score") if isinstance(report.get("trust_score"), dict) else {}
     if not trust:
         return html

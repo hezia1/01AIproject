@@ -1637,7 +1637,7 @@ def extract_mcp_servers(data: Any) -> list[tuple[str, dict[str, Any]]]:
         node = data.get(key) if isinstance(data, dict) else None
         if isinstance(node, dict):
             candidates.extend((str(name), config) for name, config in node.items() if isinstance(config, dict))
-    if isinstance(data, dict) and "command" in data:
+    if isinstance(data, dict) and any(key in data for key in ("command", "url", "endpoint")):
         candidates.append(("default", data))
     return candidates
 
