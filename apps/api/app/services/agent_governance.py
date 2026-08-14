@@ -605,6 +605,29 @@ def build_agent_html_report(report: dict[str, object]) -> str:
             f"<tbody>{comparison_rows}</tbody></table><ul>{comparison_limitations}</ul>"
         )
         html = html.replace("</body>", f"{comparison_section}</body>")
+    ai_review = report.get("ai_review") if isinstance(report.get("ai_review"), dict) else {}
+    if ai_review:
+        ai_usage = ai_review.get("usage") if isinstance(ai_review.get("usage"), dict) else {}
+        ai_reviews = ai_review.get("reviews") if isinstance(ai_review.get("reviews"), list) else []
+        ai_rows = "".join(
+            f"<tr><td>{escape(str(item.get('audit_item_id') or '-'))}</td>"
+            f"<td>{escape(str(item.get('review_priority') or '-'))}</td>"
+            f"<td>{escape(str(item.get('rationale') or '-'))}</td></tr>"
+            for item in ai_reviews if isinstance(item, dict)
+        ) or "<tr><td colspan='3'>No model review entries were retained.</td></tr>"
+        ai_limitations = "".join(
+            f"<li>{escape(str(item))}</li>" for item in ai_review.get("limitations", []) if isinstance(item, str)
+        )
+        ai_section = (
+            "<h2>AGENT DeepSeek advisory review</h2>"
+            f"<p>Status: {escape(str(ai_review.get('status') or '-'))}; model: {escape(str(ai_review.get('model') or '-'))}; "
+            f"external model invoked: {escape(str(ai_review.get('external_model_invoked') is True))}.</p>"
+            f"<p>Calls: {int(ai_usage.get('call_count') or 0)}; latency: {int(ai_usage.get('latency_ms') or 0)} ms; "
+            f"estimated cost (USD): {escape(str(ai_usage.get('estimated_cost_usd') or '-'))}.</p>"
+            "<table><thead><tr><th>Audit candidate</th><th>Priority</th><th>Advisory rationale</th></tr></thead>"
+            f"<tbody>{ai_rows}</tbody></table><ul>{ai_limitations}</ul>"
+        )
+        html = html.replace("</body>", f"{ai_section}</body>")
     runtime = report.get("runtime_validation") if isinstance(report.get("runtime_validation"), dict) else {}
     target = runtime.get("evidence") if isinstance(runtime.get("evidence"), dict) else {}
     if target:

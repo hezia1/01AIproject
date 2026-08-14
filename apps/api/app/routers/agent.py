@@ -16,6 +16,7 @@ from app.db_models import FindingRecord, ProjectModuleRecord, ProjectRecord, Sca
 from app.models import (
     AgentAssetDiffItem,
     AgentAssetResult,
+    AgentAiReviewRequest,
     AgentPermissionDiffItem,
     AgentPermissionResult,
     AgentScanDiff,
@@ -55,6 +56,8 @@ from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission
 from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
 from app.services.agent_audit import build_agent_offline_audit, compare_agent_offline_audits
+from app.services.agent_ai_review import run_agent_deepseek_review
+from app.services.deepseek_client import DeepSeekUnavailable, deepseek_health
 from app.services.agent_runtime_validation import build_agent_runtime_plan, staging_workspace_path
 from app.services.agent_trust import calculate_agent_trust_score
 from app.services.agent_staging import build_filtered_staging
@@ -871,6 +874,50 @@ def get_project_agent_audit_diff(
     return build_agent_audit_diff(project_id, target, base)
 
 
+@router.get("/projects/{project_id}/ai-health")
+def get_project_agent_ai_health(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    enabled_agent_module(db, project_id)
+    return {
+        **deepseek_health(),
+        "module": "agent",
+        "execution_mode": "manual-one-bounded-json-review",
+        "automatic_scan_invocation": False,
+        "confirmation_phrase": "AGENT_DEEPSEEK_REVIEW",
+        "data_boundary": "Only bounded, redacted local audit candidates are sent after explicit confirmation; source code, prompt contents, credential values, tool parameters, response bodies, and target data are excluded.",
+    }
+
+
+@router.post("/projects/{project_id}/ai-review")
+def run_project_agent_ai_review(
+    project_id: UUID,
+    payload: AgentAiReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    enabled_agent_module(db, project_id)
+    if payload.confirmation_phrase != "AGENT_DEEPSEEK_REVIEW":
+        raise HTTPException(status_code=400, detail="AGENT DeepSeek review confirmation phrase is required")
+    scan = latest_completed_agent_scan(db, str(project_id))
+    if scan is None:
+        raise HTTPException(status_code=400, detail="A completed AGENT scan is required before AI review")
+    metadata = scan.scan_metadata if isinstance(scan.scan_metadata, dict) else {}
+    audit = metadata.get("audit") if isinstance(metadata.get("audit"), dict) else {}
+    base = previous_completed_agent_scan(db, project_id, scan)
+    comparison = build_agent_audit_diff(project_id, scan, base).model_dump(mode="json")
+    try:
+        review = run_agent_deepseek_review(audit, comparison)
+    except (DeepSeekUnavailable, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    scan.scan_metadata = {**metadata, "ai_review": review}
+    db.commit()
+    return {
+        **review,
+        "scan_task_id": str(scan.id),
+        "actor": mutation_actor(request, {}),
+        "persisted": True,
+    }
+
+
 @router.get("/projects/{project_id}/gate")
 def get_project_agent_gate(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
     if db.get(ProjectRecord, str(project_id)) is None:
@@ -1175,6 +1222,7 @@ def agent_scan_snapshot(project_id: UUID, scan: ScanTaskRecord) -> AgentScanSnap
         intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
         dataflow=metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {},
         audit=metadata.get("audit") if isinstance(metadata.get("audit"), dict) else {},
+        ai_review=metadata.get("ai_review") if isinstance(metadata.get("ai_review"), dict) else {},
         runtime_validation=metadata.get("runtime_validation") if isinstance(metadata.get("runtime_validation"), dict) else {},
         trust_score=metadata.get("trust_score") if isinstance(metadata.get("trust_score"), dict) else {},
     )
@@ -1509,6 +1557,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "dataflow": metadata.get("dataflow") or {},
         "audit": metadata.get("audit") or {},
         "audit_comparison": build_agent_audit_diff(project_id, scan, base).model_dump(mode="json"),
+        "ai_review": metadata.get("ai_review") or {},
         "runtime_validation": metadata.get("runtime_validation") or {},
         "trust_score": metadata.get("trust_score") or {},
         "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
@@ -1527,6 +1576,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
             "Data-flow paths are static, confidence-labelled relationships and are not proof of observed runtime execution.",
             "The offline audit is a local rule-based review draft. It does not invoke an external model or change findings, governance decisions, quality gates, or trust scores.",
             "Audit comparison is limited to local static review candidates. A not-current-candidate label is not proof of remediation, safety, runtime absence, or non-exploitability.",
+            "An AGENT DeepSeek review is manual-only, bounded to redacted static evidence, and advisory-only. It cannot change findings, governance decisions, quality gates, trust scores, or code.",
             "The Agent runtime plan remains preflight-only; any target evidence is separately bound to an exact D-drive staging digest and uses --pull=never.",
         ],
     }

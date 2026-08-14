@@ -72,10 +72,12 @@ class DeepSeekClient:
         settings: DeepSeekSettings | None = None,
         opener: Callable[..., object] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        user_agent: str = "ai-security-platform/1.0",
     ) -> None:
         self.settings = settings or DeepSeekSettings.from_env()
         self._opener = opener or urlopen
         self._sleep = sleep
+        self._user_agent = user_agent[:160] or "ai-security-platform/1.0"
 
     def complete_json(
         self,
@@ -86,6 +88,8 @@ class DeepSeekClient:
         review: bool = False,
         max_tokens: int = 2200,
         required_keys: tuple[str, ...] = (),
+        max_retries: int | None = None,
+        thinking_enabled: bool | None = None,
     ) -> DeepSeekCallResult:
         if not self.settings.configured:
             raise DeepSeekUnavailable("未配置 DEEPSEEK_API_KEY")
@@ -100,10 +104,11 @@ class DeepSeekClient:
             "temperature": 0.0,
             "max_tokens": max(256, min(max_tokens, 8000)),
             "stream": False,
-            "thinking": {"type": "enabled" if self.settings.thinking_enabled else "disabled"},
+            "thinking": {"type": "enabled" if (self.settings.thinking_enabled if thinking_enabled is None else thinking_enabled) else "disabled"},
         }
         last_error = "DeepSeek 请求失败"
-        for attempt in range(self.settings.max_retries + 1):
+        retries = self.settings.max_retries if max_retries is None else max(0, min(int(max_retries), 5))
+        for attempt in range(retries + 1):
             attempt_payload = dict(payload)
             if attempt:
                 attempt_payload["max_tokens"] = min(8000, int(payload["max_tokens"]) * (attempt + 1))
@@ -126,7 +131,7 @@ class DeepSeekClient:
                     "Authorization": f"Bearer {self.settings.api_key}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "User-Agent": "ai-security-platform-sast/1.0",
+                    "User-Agent": self._user_agent,
                 },
                 method="POST",
             )
@@ -152,7 +157,7 @@ class DeepSeekClient:
             except (json.JSONDecodeError, KeyError, TypeError, ValueError, DeepSeekUnavailable) as exc:
                 last_error = safe_error(exc)
                 retryable = True
-            if attempt >= self.settings.max_retries or not retryable:
+            if attempt >= retries or not retryable:
                 break
             self._sleep(min(0.5 * (2 ** attempt), 4.0))
         raise DeepSeekUnavailable(last_error)

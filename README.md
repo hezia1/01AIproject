@@ -12,6 +12,12 @@
 - Results are limited to `new`, `still-pending`, and `not-current-candidate`. The last label only means the latest static evidence did not produce the same candidate; it is not a remediation, safety, runtime, connectivity, publisher-verification, or exploitability conclusion.
 - Older scans without the compatible offline-audit schema are explicitly marked non-comparable rather than treating all current candidates as new.
 
+## 2026-08-14 AGENT DeepSeek advisory review
+
+- AGENT now has a separate, manual-only DeepSeek advisory review flow. It reuses the existing local DeepSeek client and `DEEPSEEK_API_KEY`, but does not reuse the SAST seven-role source-code workflow. It only permits `deepseek-v4-flash`, forces non-thinking mode, allows one request with no retry, caps output at 1,200 tokens, and blocks a request whose maximum estimated cost exceeds USD 0.02.
+- The browser requires a confirmation dialog and the exact phrase `AGENT_DEEPSEEK_REVIEW` before it can contact `https://api.deepseek.com`. Automatic scan invocation remains disabled. A provider failure leaves the local offline audit draft unchanged.
+- The request contains at most 25 redacted static review candidates with bounded titles, rationales, and evidence references. It excludes source code, prompt contents, credential values, tool parameters, response bodies, and target data. Retained output is a validated human-review advisory only; it cannot change findings, governance decisions, quality gates, trust scores, or code.
+
 ## 2026-08-14 AGENT 私有来源离线预检
 
 - 对本地配置中明确声明为私有的 Git、Registry、镜像或远程来源，记录可见性、凭据是否以引用方式声明、接入前配置状态和固定的 `not-attempted` 连接状态；不保存凭据值。

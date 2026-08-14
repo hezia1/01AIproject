@@ -624,6 +624,7 @@ class AgentScanSnapshot(BaseModel):
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
     audit: dict[str, object] = Field(default_factory=dict)
+    ai_review: dict[str, object] = Field(default_factory=dict)
     runtime_validation: dict[str, object] = Field(default_factory=dict)
     trust_score: dict[str, object] = Field(default_factory=dict)
 
@@ -695,6 +696,10 @@ class AgentOfflineAuditDiff(BaseModel):
     summary: AgentOfflineAuditDiffSummary = Field(default_factory=AgentOfflineAuditDiffSummary)
     items: list[AgentOfflineAuditDiffItem] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
+
+class AgentAiReviewRequest(BaseModel):
+    confirmation_phrase: str = Field(min_length=1, max_length=120)
 
 
 class DastVerdict(str, Enum):
