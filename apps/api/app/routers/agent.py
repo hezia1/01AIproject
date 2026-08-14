@@ -53,6 +53,7 @@ from app.services.agent_governance import (
 from app.services.agent_scanner import AgentAsset, AgentFinding, AgentPermission, scan_agent_tree
 from app.services.agent_intelligence import analyze_agent_intelligence
 from app.services.agent_dataflow import analyze_agent_dataflow
+from app.services.agent_audit import build_agent_offline_audit
 from app.services.agent_runtime_validation import build_agent_runtime_plan, staging_workspace_path
 from app.services.agent_trust import calculate_agent_trust_score
 from app.services.agent_staging import build_filtered_staging
@@ -213,6 +214,14 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             dataflow=dataflow_output.report,
             runtime_validation=runtime_validation,
         )
+        audit = build_agent_offline_audit(
+            assets=asset_payloads,
+            findings=finding_payloads,
+            coverage=coverage.model_dump(),
+            intelligence=intelligence_output.report,
+            dataflow=dataflow_output.report,
+            trust_score=trust_score,
+        )
         quality_gate = evaluate_agent_quality_gate(
             findings=finding_payloads,
             permissions=parsed.permissions,
@@ -245,6 +254,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             "quality_gate": quality_gate,
             "intelligence": intelligence_output.report,
             "dataflow": dataflow_output.report,
+            "audit": audit,
             "runtime_validation": runtime_validation,
             "trust_score": trust_score,
         }
@@ -276,6 +286,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
         quality_gate=quality_gate,
         intelligence=intelligence_output.report,
         dataflow=dataflow_output.report,
+        audit=audit,
         runtime_validation=runtime_validation,
         trust_score=trust_score,
     )
@@ -1146,6 +1157,7 @@ def agent_scan_snapshot(project_id: UUID, scan: ScanTaskRecord) -> AgentScanSnap
         quality_gate=metadata.get("quality_gate") if isinstance(metadata.get("quality_gate"), dict) else {},
         intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
         dataflow=metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {},
+        audit=metadata.get("audit") if isinstance(metadata.get("audit"), dict) else {},
         runtime_validation=metadata.get("runtime_validation") if isinstance(metadata.get("runtime_validation"), dict) else {},
         trust_score=metadata.get("trust_score") if isinstance(metadata.get("trust_score"), dict) else {},
     )

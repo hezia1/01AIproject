@@ -592,6 +592,7 @@ class AgentScanResult(BaseModel):
     quality_gate: dict[str, object] = Field(default_factory=dict)
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
+    audit: dict[str, object] = Field(default_factory=dict)
     runtime_validation: dict[str, object] = Field(default_factory=dict)
     trust_score: dict[str, object] = Field(default_factory=dict)
 
@@ -621,6 +622,7 @@ class AgentScanSnapshot(BaseModel):
     quality_gate: dict[str, object] = Field(default_factory=dict)
     intelligence: dict[str, object] = Field(default_factory=dict)
     dataflow: dict[str, object] = Field(default_factory=dict)
+    audit: dict[str, object] = Field(default_factory=dict)
     runtime_validation: dict[str, object] = Field(default_factory=dict)
     trust_score: dict[str, object] = Field(default_factory=dict)
 
