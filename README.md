@@ -1,5 +1,11 @@
 # AI 网安项目
 
+## 2026-08-14 AGENT offline audit delivery
+
+- AGENT scans now produce an evidence-linked local review draft from current findings, configuration-coverage gaps, private-source onboarding declarations, static data-flow paths, and the existing trust-score context. The draft is explicitly labelled `local-rule-based-draft`, `model_status=not-run`, and `external_model_invoked=false`.
+- The same draft is included in AGENT snapshots, JSON and HTML reports, local `scripts/agent_ci.py` output, and the frontend review panel. It is a human-review queue only: it does not change finding severity, governance status, quality-gate decisions, or trust scores.
+- No external model, Agent, MCP server, plugin, tool, target, registry, or schema endpoint is contacted by this delivery. Static evidence is not represented as runtime observation, connectivity proof, publisher verification, or exploitability proof.
+
 ## 2026-08-14 AGENT 私有来源离线预检
 
 - 对本地配置中明确声明为私有的 Git、Registry、镜像或远程来源，记录可见性、凭据是否以引用方式声明、接入前配置状态和固定的 `not-attempted` 连接状态；不保存凭据值。

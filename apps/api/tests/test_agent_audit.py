@@ -1,4 +1,5 @@
 from app.services.agent_audit import build_agent_offline_audit
+from app.services.agent_governance import build_agent_html_report
 
 
 def test_offline_agent_audit_builds_bounded_evidence_linked_review_drafts() -> None:
@@ -66,3 +67,28 @@ def test_offline_agent_audit_does_not_treat_private_source_as_connected() -> Non
     assert report["summary"]["private_source_preflight_gap_count"] == 0
     assert not any(item["kind"] == "private-source-preflight" for item in report["items"])
     assert "connectivity proof" in " ".join(report["limitations"])
+
+
+def test_offline_agent_audit_is_included_in_html_report_without_a_model_claim() -> None:
+    audit = build_agent_offline_audit(
+        assets=[],
+        findings=[{
+            "rule_id": "AGENT.TOOL.SHELL_EXEC",
+            "title": "Agent exposes shell execution",
+            "severity": "high",
+            "file_path": "AGENTS.md",
+            "line_start": 12,
+            "status": "open",
+        }],
+        coverage={},
+        intelligence={},
+        dataflow={},
+        trust_score={"score": 52, "grade": "guarded"},
+    )
+
+    html = build_agent_html_report({"summary": {}, "audit": audit})
+
+    assert "AGENT offline review draft" in html
+    assert "local-rule-based-draft" in html
+    assert "external model invoked: False" in html
+    assert "Agent exposes shell execution" in html

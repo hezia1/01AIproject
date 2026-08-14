@@ -1440,6 +1440,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
         "quality_gate": metadata.get("quality_gate") or {},
         "intelligence": metadata.get("intelligence") or {},
         "dataflow": metadata.get("dataflow") or {},
+        "audit": metadata.get("audit") or {},
         "runtime_validation": metadata.get("runtime_validation") or {},
         "trust_score": metadata.get("trust_score") or {},
         "semantic_diff": build_agent_scan_diff(project_id, scan, base).model_dump(mode="json"),
@@ -1456,6 +1457,7 @@ def build_agent_report(project_id: UUID, scan: ScanTaskRecord, db: Session) -> d
             "SHA-256 values prove only that local bytes were stable between scans; they do not authenticate a publisher or remote package.",
             "Offline intelligence results are limited to configured local sources; checked-no-match is not proof that a package is vulnerability-free.",
             "Data-flow paths are static, confidence-labelled relationships and are not proof of observed runtime execution.",
+            "The offline audit is a local rule-based review draft. It does not invoke an external model or change findings, governance decisions, quality gates, or trust scores.",
             "The Agent runtime plan remains preflight-only; any target evidence is separately bound to an exact D-drive staging digest and uses --pull=never.",
         ],
     }

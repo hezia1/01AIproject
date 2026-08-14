@@ -28,6 +28,7 @@ from app.services.agent_intelligence import analyze_agent_intelligence  # noqa: 
 from app.services.agent_dataflow import analyze_agent_dataflow  # noqa: E402
 from app.services.agent_runtime_validation import build_agent_runtime_plan  # noqa: E402
 from app.services.agent_trust import calculate_agent_trust_score  # noqa: E402
+from app.services.agent_audit import build_agent_offline_audit  # noqa: E402
 
 
 def main() -> int:
@@ -88,6 +89,14 @@ def main() -> int:
         dataflow=dataflow_output.report,
         runtime_validation=runtime_validation,
     )
+    audit = build_agent_offline_audit(
+        assets=asset_payloads,
+        findings=finding_payloads,
+        coverage=coverage,
+        intelligence=intelligence_output.report,
+        dataflow=dataflow_output.report,
+        trust_score=trust_score,
+    )
 
     baseline_findings = baseline.get("findings") if isinstance(baseline.get("findings"), list) else []
     baseline_permissions = baseline.get("permissions") if isinstance(baseline.get("permissions"), list) else []
@@ -134,6 +143,7 @@ def main() -> int:
         "quality_gate": gate,
         "intelligence": intelligence_output.report,
         "dataflow": dataflow_output.report,
+        "audit": audit,
         "runtime_validation": runtime_validation,
         "trust_score": trust_score,
         "profile": profile,
@@ -145,6 +155,7 @@ def main() -> int:
             "All evidence emitted by the scanner uses its credential-redaction path.",
             "Offline intelligence checks use only bundled rules and explicitly configured local files; checked-no-match is not a clean bill of health.",
             "Data-flow paths are static, confidence-labelled relationships and do not prove observed runtime behavior.",
+            "The audit is a local rule-based review draft; it does not invoke an external model or change findings, gates, or trust scores.",
             "Runtime validation is preflight-only; this command does not create staging files, pull images or run the proposed Agent command.",
         ],
     }

@@ -552,6 +552,34 @@ def _build_agent_html_report_without_trust(report: dict[str, object]) -> str:
 
 def build_agent_html_report(report: dict[str, object]) -> str:
     html = _build_agent_html_report_without_trust(report)
+    audit = report.get("audit") if isinstance(report.get("audit"), dict) else {}
+    if audit:
+        audit_summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
+        audit_items = audit.get("items") if isinstance(audit.get("items"), list) else []
+        audit_rows = "".join(
+            f"<tr><td>{escape(str(item.get('priority') or '-'))}</td>"
+            f"<td>{escape(str(item.get('kind') or '-'))}</td>"
+            f"<td>{escape(str(item.get('title') or '-'))}</td>"
+            f"<td>{escape('; '.join(str(value) for value in item.get('evidence_refs', []) if isinstance(value, str))) or '-'}</td>"
+            f"<td>{escape(str(item.get('review_status') or '-'))}</td></tr>"
+            for item in audit_items if isinstance(item, dict)
+        ) or "<tr><td colspan='5'>No review candidates were generated from the current static evidence.</td></tr>"
+        audit_limitations = "".join(
+            f"<li>{escape(str(item))}</li>" for item in audit.get("limitations", []) if isinstance(item, str)
+        )
+        audit_section = (
+            "<h2>AGENT offline review draft</h2>"
+            f"<p>Mode: {escape(str(audit.get('mode') or '-'))}; model status: {escape(str(audit.get('model_status') or '-'))}; "
+            f"external model invoked: {escape(str(audit.get('external_model_invoked') is True))}.</p>"
+            f"<p>Review candidates: {int(audit_summary.get('review_item_count') or 0)}; active findings: "
+            f"{int(audit_summary.get('active_finding_count') or 0)}; trust score reference: "
+            f"{int(audit_summary.get('trust_score') or 0)} / 100.</p>"
+            "<table><thead><tr><th>Priority</th><th>Kind</th><th>Review candidate</th><th>Evidence references</th><th>Status</th></tr></thead>"
+            f"<tbody>{audit_rows}</tbody></table>"
+            f"<p><small>Audit SHA-256: {escape(str(audit.get('audit_sha256') or '-'))}</small></p>"
+            f"<ul>{audit_limitations}</ul>"
+        )
+        html = html.replace("</body>", f"{audit_section}</body>")
     runtime = report.get("runtime_validation") if isinstance(report.get("runtime_validation"), dict) else {}
     target = runtime.get("evidence") if isinstance(runtime.get("evidence"), dict) else {}
     if target:
