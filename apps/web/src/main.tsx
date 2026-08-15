@@ -122,6 +122,14 @@ type AgentScanSnapshot = { project_id: string; scan_task_id: string; created_at:
 type AgentAssetDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; path: string; asset_type: string; changes: string[] };
 type AgentPermissionDiffItem = { identity: string; change_type: "added" | "removed" | "changed"; direction: "expanded" | "reduced" | "changed"; permission: AgentPermission };
 type AgentScanDiff = { project_id: string; target_scan_id: string; base_scan_id: string | null; has_comparison: boolean; summary: { assets_added: number; assets_removed: number; assets_changed: number; permissions_added: number; permissions_removed: number; permissions_changed: number; source_changes: number; integrity_changes: number }; assets: AgentAssetDiffItem[]; permissions: AgentPermissionDiffItem[] };
+
+function agentSnapshotSection<T>(value: unknown, schema?: string, mode?: string): T | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (schema && candidate.schema !== schema) return undefined;
+  if (mode && candidate.mode !== mode) return undefined;
+  return value as T;
+}
 type ScaGovernanceComponent = { ecosystem: string; name: string; version: string | null; risk_status: string; severity: Severity | null; vulnerability_count: number; license_risk: string | null; risk_source: string | null; remediation: string | null };
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
@@ -2361,7 +2369,7 @@ function AgentProvenancePanel({ snapshot }: { snapshot: AgentScanSnapshot | null
 }
 
 function AgentIntelligencePanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
-  const intelligence = snapshot?.intelligence;
+  const intelligence = agentSnapshotSection<AgentIntelligence>(snapshot?.intelligence, undefined, "offline-only");
   if (!intelligence) return <section className="retest-panel"><div className="panel-header"><h3>依赖漏洞与恶意包情报</h3><span>等待扫描</span></div><p>完成一次新 AGENT 扫描后，这里会显示包坐标、本地漏洞匹配和可选恶意包情报覆盖。</p></section>;
   const summary = intelligence.summary ?? {};
   const packages = intelligence.packages ?? [];
@@ -2377,7 +2385,7 @@ function AgentIntelligencePanel({ snapshot }: { snapshot: AgentScanSnapshot | nu
 
 function AgentDataflowPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
   const [page, setPage] = useState(1);
-  const dataflow = snapshot?.dataflow;
+  const dataflow = agentSnapshotSection<AgentDataflow>(snapshot?.dataflow, "agent-dataflow/v1");
   const paths = dataflow?.paths ?? [];
   const pagination = paginate(paths, page);
   const nodes = new Map((dataflow?.nodes ?? []).map((item) => [item.id, item]));
@@ -2398,7 +2406,7 @@ function AgentDataflowPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }
 }
 
 function AgentOfflineAuditPanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
-  const audit = snapshot?.audit;
+  const audit = agentSnapshotSection<AgentOfflineAudit>(snapshot?.audit, "ai-security-platform.agent-offline-audit/v1");
   if (!audit) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 离线审计草案</h3><span>等待新扫描</span></div><p>完成一次新版本 AGENT 扫描后，这里会显示由现有本地静态证据形成的人工复核候选项。</p></section>;
   const priorityLabel: Record<string, string> = { critical: "严重", high: "高危", medium: "中危", low: "低危", info: "提示" };
   const kindLabel: Record<string, string> = { finding: "静态发现", "coverage-gap": "覆盖缺口", "private-source-preflight": "私有来源预检", "static-dataflow": "静态数据流" };
@@ -2412,8 +2420,8 @@ function AgentOfflineAuditPanel({ snapshot }: { snapshot: AgentScanSnapshot | nu
 }
 
 function AgentDeepSeekReviewPanel({ snapshot, loading, onRun }: { snapshot: AgentScanSnapshot | null; loading: boolean; onRun: (confirmationPhrase: string) => Promise<void> }) {
-  const audit = snapshot?.audit;
-  const review = snapshot?.ai_review;
+  const audit = agentSnapshotSection<AgentOfflineAudit>(snapshot?.audit, "ai-security-platform.agent-offline-audit/v1");
+  const review = agentSnapshotSection<AgentAiReview>(snapshot?.ai_review, "ai-security-platform.agent-ai-review/v1");
   const startReview = () => {
     if (!audit || !window.confirm("将向 DeepSeek 发送最多 25 个已脱敏的 AGENT 静态审计候选项；不会发送源码、Prompt、密钥、工具参数或目标数据。是否继续？")) return;
     const phrase = window.prompt("请输入 AGENT_DEEPSEEK_REVIEW 以确认本次 DeepSeek 审计：", "");
@@ -2430,7 +2438,7 @@ function AgentDeepSeekReviewPanel({ snapshot, loading, onRun }: { snapshot: Agen
 }
 
 function AgentTrustScorePanel({ snapshot }: { snapshot: AgentScanSnapshot | null }) {
-  const trust = snapshot?.trust_score;
+  const trust = agentSnapshotSection<AgentTrustScore>(snapshot?.trust_score, "ai-security-platform.agent-trust-score/v1");
   if (!trust) return <section className="retest-panel"><div className="panel-header"><h3>AGENT 可解释信任评分</h3><span>等待新扫描</span></div><p>完成一次新版本 AGENT 扫描后，这里会根据来源、哈希、情报、权限、数据流和运行证据给出可解释评分。</p></section>;
   const gradeLabels: Record<string, string> = { "provisional-high": "静态证据较完整", guarded: "需带控制使用", low: "低信任", untrusted: "不可信", "insufficient-evidence": "证据不足" };
   const confidenceLabels = { low: "低", medium: "中", high: "高" };
