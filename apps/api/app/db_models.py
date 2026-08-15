@@ -277,6 +277,63 @@ class DastValidationRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
+class DastVerificationPlanRecord(Base):
+    __tablename__ = "dast_verification_plans"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    finding_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("findings.id"))
+    component_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("components.id"))
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    authorized_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    allowed_paths: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    allowed_methods: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    strategy_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    strategy_name: Mapped[str | None] = mapped_column(String(160))
+    limitations: Mapped[str | None] = mapped_column(Text)
+    requester: Mapped[str] = mapped_column(String(120), nullable=False)
+    approval_status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft")
+    approval_reference: Mapped[str | None] = mapped_column(String(240))
+    approved_by: Mapped[str | None] = mapped_column(String(120))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class DastVerificationRunRecord(Base):
+    __tablename__ = "dast_verification_runs"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    plan_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_verification_plans.id"), nullable=False)
+    validation_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_validations.id"))
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="prepared")
+    execution_mode: Mapped[str] = mapped_column(String(80), nullable=False, default="documentation_only")
+    operator: Mapped[str] = mapped_column(String(120), nullable=False)
+    purpose: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class DastRunEvidenceRecord(Base):
+    __tablename__ = "dast_run_evidence"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    plan_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_verification_plans.id"), nullable=False)
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_verification_runs.id"), nullable=False)
+    evidence_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    content_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(String(1000))
+    collected_by: Mapped[str | None] = mapped_column(String(120))
+    redaction_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class SandboxEvidenceRecord(Base):
     __tablename__ = "sandbox_evidence"
 

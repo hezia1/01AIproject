@@ -1,7 +1,7 @@
 ﻿from uuid import UUID
 
-from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord, ScanTaskRecord
-from app.models import AiReview, Component, DastValidation, Finding, ModuleKey, Project, ProjectModule, SandboxEvidence, ScanTask
+from app.db_models import ComponentRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord, ScanTaskRecord
+from app.models import AiReview, Component, DastRunEvidence, DastValidation, DastVerificationPlan, DastVerificationRun, Finding, ModuleKey, Project, ProjectModule, SandboxEvidence, ScanTask
 
 
 def project_to_schema(record: ProjectRecord) -> Project:
@@ -128,6 +128,41 @@ def dast_validation_to_schema(record: DastValidationRecord) -> DastValidation:
         updated_at=record.updated_at,
         validation_mode=record.validation_mode,
         connection_confirmed=record.connection_confirmed,
+    )
+
+
+def dast_plan_to_schema(record: DastVerificationPlanRecord) -> DastVerificationPlan:
+    return DastVerificationPlan(
+        id=UUID(str(record.id)), project_id=UUID(str(record.project_id)),
+        finding_id=UUID(str(record.finding_id)) if record.finding_id else None,
+        component_id=UUID(str(record.component_id)) if record.component_id else None,
+        title=record.title, target_url=record.target_url, authorized_scope=record.authorized_scope,
+        allowed_paths=record.allowed_paths, allowed_methods=record.allowed_methods,
+        strategy_id=record.strategy_id, strategy_name=record.strategy_name,
+        limitations=record.limitations, requester=record.requester,
+        approval_status=record.approval_status, approval_reference=record.approval_reference,
+        approved_by=record.approved_by, approved_at=record.approved_at,
+        created_at=record.created_at, updated_at=record.updated_at,
+    )
+
+
+def dast_run_to_schema(record: DastVerificationRunRecord) -> DastVerificationRun:
+    return DastVerificationRun(
+        id=UUID(str(record.id)), project_id=UUID(str(record.project_id)), plan_id=UUID(str(record.plan_id)),
+        validation_id=UUID(str(record.validation_id)) if record.validation_id else None,
+        status=record.status, execution_mode=record.execution_mode, operator=record.operator,
+        purpose=record.purpose, started_at=record.started_at, completed_at=record.completed_at,
+        created_at=record.created_at, updated_at=record.updated_at,
+    )
+
+
+def dast_run_evidence_to_schema(record: DastRunEvidenceRecord) -> DastRunEvidence:
+    return DastRunEvidence(
+        id=UUID(str(record.id)), project_id=UUID(str(record.project_id)), plan_id=UUID(str(record.plan_id)),
+        run_id=UUID(str(record.run_id)), evidence_type=record.evidence_type,
+        content_summary=record.content_summary, content_hash=record.content_hash,
+        source_reference=record.source_reference, collected_by=record.collected_by,
+        redaction_applied=record.redaction_applied, created_at=record.created_at,
     )
 
 def sandbox_evidence_to_schema(record: SandboxEvidenceRecord) -> SandboxEvidence:

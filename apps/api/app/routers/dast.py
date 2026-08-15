@@ -1,5 +1,7 @@
 ﻿from datetime import datetime
 from uuid import UUID
+from hashlib import sha256
+import re
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,11 +9,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import ComponentRecord, DastValidationRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
+from app.db_models import ComponentRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
 from app.models import (
     DastLinkSuggestionRequest,
     DastProbeRequest,
+    DastRunEvidence,
+    DastRunEvidenceCreate,
     DastVerdict,
+    DastVerificationPlan,
+    DastVerificationPlanCreate,
+    DastVerificationPlanUpdate,
+    DastVerificationRun,
+    DastVerificationRunCreate,
+    DastVerificationRunUpdate,
     DastVerificationStrategy,
     DastValidation,
     DastValidationCreate,
@@ -19,7 +29,7 @@ from app.models import (
     LinkSuggestion,
     ModuleKey,
 )
-from app.repositories.mappers import dast_validation_to_schema
+from app.repositories.mappers import dast_plan_to_schema, dast_run_evidence_to_schema, dast_run_to_schema, dast_validation_to_schema
 from app.services.dast_probe import probe_target_url
 from app.services.evidence_link_suggestions import build_dast_link_suggestions
 from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
@@ -101,7 +111,22 @@ def ensure_manual_validation_record(record: DastValidationRecord) -> None:
         )
 
 
-def build_dast_report(project_id: UUID, records: list[DastValidationRecord]) -> dict[str, object]:
+def redact_evidence_summary(value: str) -> str:
+    redacted = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", value)
+    redacted = re.sub(r"(?i)((?:api[_-]?key|token|password|secret)\s*[:=]\s*)[^\s,;]+", r"\1[REDACTED]", redacted)
+    return redacted
+
+
+def build_dast_report(
+    project_id: UUID,
+    records: list[DastValidationRecord],
+    plans: list[DastVerificationPlanRecord] | None = None,
+    runs: list[DastVerificationRunRecord] | None = None,
+    evidence: list[DastRunEvidenceRecord] | None = None,
+) -> dict[str, object]:
+    plans = plans or []
+    runs = runs or []
+    evidence = evidence or []
     serialized_records = [dast_validation_to_schema(record).model_dump(mode="json") for record in records]
     automated_count = sum(record.validation_mode == "automated_web_baseline" for record in records)
     manual_count = sum(record.validation_mode == "manual_validation" for record in records)
@@ -120,13 +145,22 @@ def build_dast_report(project_id: UUID, records: list[DastValidationRecord]) -> 
             "manual_validation_count": manual_count,
             "linked_record_count": linked_count,
             "by_verdict": verdict_counts,
+            "verification_plan_count": len(plans),
+            "approved_plan_count": sum(plan.approval_status == "approved" for plan in plans),
+            "documentation_run_count": len(runs),
+            "reviewed_run_count": sum(run.status == "reviewed" for run in runs),
+            "evidence_item_count": len(evidence),
         },
         "records": serialized_records,
+        "verification_plans": [dast_plan_to_schema(plan).model_dump(mode="json") for plan in plans],
+        "verification_runs": [dast_run_to_schema(run).model_dump(mode="json") for run in runs],
+        "evidence_index": [dast_run_evidence_to_schema(item).model_dump(mode="json") for item in evidence],
         "capability_boundaries": [
             "Automated baseline records capture only the observed unauthenticated HTTP GET result for the confirmed target URL.",
             "A baseline_clear result is not a non-exploitability conclusion and does not establish the absence of vulnerabilities.",
             "Manual verdicts document the reviewer-provided evidence and are limited to their recorded target, scope, and reproduction steps.",
             "This report is generated solely from stored DAST records and does not connect to targets or perform new tests.",
+            "Verification runs in this release are documentation-only ledger entries; they do not execute HTTP requests, payloads, crawlers, or authenticated workflows.",
         ],
     }
 
@@ -176,6 +210,189 @@ def link_metadata(
         requested_source if requested_source != "unlinked" else "explicit-selection",
         requested_confidence if requested_confidence > 0 else 100,
     )
+
+
+def ensure_dast_plan(project_id: UUID, plan_id: UUID, db: Session) -> DastVerificationPlanRecord:
+    plan = db.get(DastVerificationPlanRecord, str(plan_id))
+    if plan is None or plan.project_id != str(project_id):
+        raise HTTPException(status_code=404, detail="DAST verification plan not found")
+    return plan
+
+
+@router.get("/projects/{project_id}/plans", response_model=list[DastVerificationPlan])
+def list_verification_plans(project_id: UUID, db: Session = Depends(get_db)) -> list[DastVerificationPlan]:
+    ensure_dast_enabled(project_id, db)
+    records = db.scalars(
+        select(DastVerificationPlanRecord)
+        .where(DastVerificationPlanRecord.project_id == str(project_id))
+        .order_by(DastVerificationPlanRecord.created_at.desc())
+    ).all()
+    return [dast_plan_to_schema(record) for record in records]
+
+
+@router.post("/plans", response_model=DastVerificationPlan, status_code=201)
+def create_verification_plan(
+    payload: DastVerificationPlanCreate, db: Session = Depends(get_db)
+) -> DastVerificationPlan:
+    ensure_dast_enabled(payload.project_id, db)
+    ensure_links_belong_to_project(payload.project_id, payload.finding_id, payload.component_id, db)
+    finding = db.get(FindingRecord, str(payload.finding_id)) if payload.finding_id else None
+    try:
+        strategy = resolve_dast_strategy(payload.strategy_id, finding)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record = DastVerificationPlanRecord(
+        project_id=str(payload.project_id),
+        finding_id=str(payload.finding_id) if payload.finding_id else None,
+        component_id=str(payload.component_id) if payload.component_id else None,
+        title=payload.title,
+        target_url=payload.target_url,
+        authorized_scope=payload.authorized_scope,
+        allowed_paths=payload.allowed_paths,
+        allowed_methods=[method.upper() for method in payload.allowed_methods],
+        strategy_id=strategy.id,
+        strategy_name=strategy.name,
+        limitations=payload.limitations or " ".join(strategy.limitations),
+        requester=payload.requester,
+        approval_status="draft",
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return dast_plan_to_schema(record)
+
+
+@router.patch("/plans/{plan_id}", response_model=DastVerificationPlan)
+def update_verification_plan(
+    plan_id: UUID, payload: DastVerificationPlanUpdate, db: Session = Depends(get_db)
+) -> DastVerificationPlan:
+    record = db.get(DastVerificationPlanRecord, str(plan_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="DAST verification plan not found")
+    updates = payload.model_dump(exclude_unset=True)
+    next_status = updates.get("approval_status", record.approval_status)
+    if next_status not in {"draft", "approved", "archived"}:
+        raise HTTPException(status_code=400, detail="approval_status must be draft, approved, or archived")
+    if next_status == "approved":
+        approval_reference = updates.get("approval_reference", record.approval_reference)
+        approved_by = updates.get("approved_by", record.approved_by)
+        if not (approval_reference or "").strip() or not (approved_by or "").strip():
+            raise HTTPException(status_code=400, detail="Approved DAST plans require approval_reference and approved_by")
+        record.approved_at = datetime.utcnow()
+    elif "approval_status" in updates:
+        record.approved_at = None
+    scope_fields = {"title", "authorized_scope", "allowed_paths", "allowed_methods", "limitations"}
+    if record.approval_status == "approved" and scope_fields & updates.keys():
+        if updates.get("approval_status") == "approved":
+            raise HTTPException(status_code=400, detail="Change DAST scope first, then record a separate approval")
+        record.approval_status = "draft"
+        record.approval_reference = None
+        record.approved_by = None
+        record.approved_at = None
+    for field, value in updates.items():
+        if field == "allowed_methods" and value is not None:
+            value = [method.upper() for method in value]
+        setattr(record, field, value)
+    record.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(record)
+    return dast_plan_to_schema(record)
+
+
+@router.get("/plans/{plan_id}/runs", response_model=list[DastVerificationRun])
+def list_verification_runs(plan_id: UUID, db: Session = Depends(get_db)) -> list[DastVerificationRun]:
+    plan = db.get(DastVerificationPlanRecord, str(plan_id))
+    if plan is None:
+        raise HTTPException(status_code=404, detail="DAST verification plan not found")
+    records = db.scalars(
+        select(DastVerificationRunRecord)
+        .where(DastVerificationRunRecord.plan_id == str(plan_id))
+        .order_by(DastVerificationRunRecord.created_at.desc())
+    ).all()
+    return [dast_run_to_schema(record) for record in records]
+
+
+@router.post("/plans/{plan_id}/runs", response_model=DastVerificationRun, status_code=201)
+def create_verification_run(
+    plan_id: UUID, payload: DastVerificationRunCreate, db: Session = Depends(get_db)
+) -> DastVerificationRun:
+    plan = db.get(DastVerificationPlanRecord, str(plan_id))
+    if plan is None:
+        raise HTTPException(status_code=404, detail="DAST verification plan not found")
+    if plan.approval_status != "approved":
+        raise HTTPException(status_code=400, detail="Only an approved DAST verification plan can create a run ledger entry")
+    record = DastVerificationRunRecord(
+        project_id=plan.project_id, plan_id=str(plan.id), operator=payload.operator,
+        purpose=payload.purpose, status="prepared", execution_mode="documentation_only",
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return dast_run_to_schema(record)
+
+
+@router.patch("/runs/{run_id}", response_model=DastVerificationRun)
+def update_verification_run(
+    run_id: UUID, payload: DastVerificationRunUpdate, db: Session = Depends(get_db)
+) -> DastVerificationRun:
+    record = db.get(DastVerificationRunRecord, str(run_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="DAST verification run not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if "status" in updates and updates["status"] not in {"prepared", "evidence_recorded", "reviewed"}:
+        raise HTTPException(status_code=400, detail="Run status must be prepared, evidence_recorded, or reviewed")
+    if "validation_id" in updates and updates["validation_id"] is not None:
+        validation = db.get(DastValidationRecord, str(updates["validation_id"]))
+        if validation is None or validation.project_id != record.project_id:
+            raise HTTPException(status_code=400, detail="validation_id does not belong to this DAST run project")
+        ensure_manual_validation_record(validation)
+        record.validation_id = str(validation.id)
+    if updates.get("status") == "reviewed" and not record.validation_id:
+        raise HTTPException(status_code=400, detail="A reviewed DAST run requires a linked manual validation verdict")
+    if "status" in updates:
+        record.status = updates["status"]
+        record.completed_at = datetime.utcnow() if record.status == "reviewed" else None
+    record.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(record)
+    return dast_run_to_schema(record)
+
+
+@router.get("/runs/{run_id}/evidence", response_model=list[DastRunEvidence])
+def list_run_evidence(run_id: UUID, db: Session = Depends(get_db)) -> list[DastRunEvidence]:
+    run = db.get(DastVerificationRunRecord, str(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="DAST verification run not found")
+    records = db.scalars(
+        select(DastRunEvidenceRecord)
+        .where(DastRunEvidenceRecord.run_id == str(run_id))
+        .order_by(DastRunEvidenceRecord.created_at.desc())
+    ).all()
+    return [dast_run_evidence_to_schema(record) for record in records]
+
+
+@router.post("/runs/{run_id}/evidence", response_model=DastRunEvidence, status_code=201)
+def create_run_evidence(
+    run_id: UUID, payload: DastRunEvidenceCreate, db: Session = Depends(get_db)
+) -> DastRunEvidence:
+    run = db.get(DastVerificationRunRecord, str(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="DAST verification run not found")
+    summary = redact_evidence_summary(payload.content_summary)
+    record = DastRunEvidenceRecord(
+        project_id=run.project_id, plan_id=run.plan_id, run_id=str(run.id),
+        evidence_type=payload.evidence_type, content_summary=summary,
+        content_hash=sha256(summary.encode("utf-8")).hexdigest(),
+        source_reference=redact_evidence_summary(payload.source_reference) if payload.source_reference else None,
+        collected_by=payload.collected_by,
+        redaction_applied=True,
+    )
+    run.status = "evidence_recorded"
+    run.updated_at = datetime.utcnow()
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return dast_run_evidence_to_schema(record)
 
 
 @router.post("/validations", response_model=DastValidation, status_code=201)
@@ -292,7 +509,22 @@ def get_project_dast_report(project_id: UUID, db: Session = Depends(get_db)) -> 
         .where(DastValidationRecord.project_id == str(project_id))
         .order_by(DastValidationRecord.created_at.desc())
     ).all()
-    return build_dast_report(project_id, records)
+    plans = db.scalars(
+        select(DastVerificationPlanRecord)
+        .where(DastVerificationPlanRecord.project_id == str(project_id))
+        .order_by(DastVerificationPlanRecord.created_at.desc())
+    ).all()
+    runs = db.scalars(
+        select(DastVerificationRunRecord)
+        .where(DastVerificationRunRecord.project_id == str(project_id))
+        .order_by(DastVerificationRunRecord.created_at.desc())
+    ).all()
+    evidence = db.scalars(
+        select(DastRunEvidenceRecord)
+        .where(DastRunEvidenceRecord.project_id == str(project_id))
+        .order_by(DastRunEvidenceRecord.created_at.desc())
+    ).all()
+    return build_dast_report(project_id, records, plans, runs, evidence)
 
 
 @router.patch("/validations/{validation_id}", response_model=DastValidation)

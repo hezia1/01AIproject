@@ -800,6 +800,88 @@ class DastValidationUpdate(BaseModel):
     reproduction_steps: str | None = None
     remediation_hint: str | None = None
 
+
+class DastVerificationPlanCreate(BaseModel):
+    project_id: UUID
+    title: str = Field(min_length=1, max_length=200)
+    target_url: str = Field(min_length=1, max_length=1000)
+    authorized_scope: str = Field(min_length=1, max_length=6000)
+    allowed_paths: list[str] = Field(default_factory=list)
+    allowed_methods: list[str] = Field(default_factory=list)
+    finding_id: UUID | None = None
+    component_id: UUID | None = None
+    strategy_id: str = "web-baseline"
+    limitations: str | None = Field(default=None, max_length=6000)
+    requester: str = Field(min_length=1, max_length=120)
+
+
+class DastVerificationPlanUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    authorized_scope: str | None = Field(default=None, min_length=1, max_length=6000)
+    allowed_paths: list[str] | None = None
+    allowed_methods: list[str] | None = None
+    limitations: str | None = Field(default=None, max_length=6000)
+    approval_status: str | None = None
+    approval_reference: str | None = Field(default=None, max_length=240)
+    approved_by: str | None = Field(default=None, max_length=120)
+
+
+class DastVerificationPlan(DastVerificationPlanCreate):
+    id: UUID = Field(default_factory=uuid4)
+    strategy_name: str | None = None
+    approval_status: str = "draft"
+    approval_reference: str | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DastVerificationRunCreate(BaseModel):
+    operator: str = Field(min_length=1, max_length=120)
+    purpose: str | None = Field(default=None, max_length=6000)
+
+
+class DastVerificationRunUpdate(BaseModel):
+    validation_id: UUID | None = None
+    status: str | None = None
+
+
+class DastVerificationRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    project_id: UUID
+    plan_id: UUID
+    validation_id: UUID | None = None
+    status: str
+    execution_mode: str
+    operator: str
+    purpose: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DastRunEvidenceCreate(BaseModel):
+    evidence_type: str = Field(min_length=1, max_length=80)
+    content_summary: str = Field(min_length=1, max_length=12000)
+    source_reference: str | None = Field(default=None, max_length=1000)
+    collected_by: str | None = Field(default=None, max_length=120)
+
+
+class DastRunEvidence(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    project_id: UUID
+    plan_id: UUID
+    run_id: UUID
+    evidence_type: str
+    content_summary: str
+    content_hash: str
+    source_reference: str | None = None
+    collected_by: str | None = None
+    redaction_applied: bool
+    created_at: datetime
+
 class SandboxEvidenceCreate(BaseModel):
     project_id: UUID
     run_command: str = Field(min_length=1, max_length=1000)

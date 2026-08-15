@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from app.routers.dast import build_dast_report, confirm_probe_target, ensure_manual_validation_record
+from app.routers.dast import build_dast_report, confirm_probe_target, ensure_manual_validation_record, redact_evidence_summary
 from app.models import DastVerdict
 from app.services.dast_probe import build_probe_result
 from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
@@ -119,18 +119,27 @@ def test_dast_report_summarizes_stored_records_without_new_probe() -> None:
     )
 
     assert report["schema"] == "ai-security-platform.dast-report/v1"
-    assert report["summary"] == {
-        "record_count": 2,
-        "automated_baseline_count": 1,
-        "manual_validation_count": 1,
-        "linked_record_count": 1,
-        "by_verdict": {
-            "exploitable": 0,
-            "uncertain": 1,
-            "not_exploitable": 0,
-            "baseline_attention": 0,
-            "baseline_clear": 1,
-        },
+    assert report["summary"]["record_count"] == 2
+    assert report["summary"]["automated_baseline_count"] == 1
+    assert report["summary"]["manual_validation_count"] == 1
+    assert report["summary"]["linked_record_count"] == 1
+    assert report["summary"]["by_verdict"] == {
+        "exploitable": 0,
+        "uncertain": 1,
+        "not_exploitable": 0,
+        "baseline_attention": 0,
+        "baseline_clear": 1,
     }
+    assert report["summary"]["verification_plan_count"] == 0
+    assert report["summary"]["evidence_item_count"] == 0
     assert len(report["records"]) == 2
-    assert "does not connect to targets" in report["capability_boundaries"][-1]
+    assert any("does not connect to targets" in item for item in report["capability_boundaries"])
+
+
+def test_dast_evidence_summary_redacts_common_secret_values() -> None:
+    result = redact_evidence_summary("Authorization: Bearer abc123 token=def456 password=secret")
+
+    assert "abc123" not in result
+    assert "def456" not in result
+    assert "secret" not in result
+    assert result.count("[REDACTED]") == 3
