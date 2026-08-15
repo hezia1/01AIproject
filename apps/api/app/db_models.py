@@ -272,6 +272,8 @@ class DastValidationRecord(Base):
     response_summary: Mapped[str | None] = mapped_column(Text)
     reproduction_steps: Mapped[str | None] = mapped_column(Text)
     remediation_hint: Mapped[str | None] = mapped_column(Text)
+    validation_mode: Mapped[str] = mapped_column(String(80), nullable=False, default="manual_validation")
+    connection_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 

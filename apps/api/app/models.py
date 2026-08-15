@@ -706,6 +706,8 @@ class DastVerdict(str, Enum):
     exploitable = "exploitable"
     uncertain = "uncertain"
     not_exploitable = "not_exploitable"
+    baseline_attention = "baseline_attention"
+    baseline_clear = "baseline_clear"
 
 
 class LinkSuggestion(BaseModel):
@@ -716,7 +718,7 @@ class LinkSuggestion(BaseModel):
     confidence_level: str
     reasons: list[str] = Field(default_factory=list)
     label: str
-    source: str = "rule-engine-v1"
+    source: str = "rule-engine-v1-suggested"
 
 
 class DastLinkSuggestionRequest(BaseModel):
@@ -769,12 +771,15 @@ class DastProbeRequest(BaseModel):
     link_confidence: int = Field(default=0, ge=0, le=100)
     validator: str | None = "auto-dast"
     strategy_id: str = "web-baseline"
+    target_confirmation: str = Field(min_length=1, max_length=1200)
 
 
 class DastValidation(DastValidationCreate):
     id: UUID = Field(default_factory=uuid4)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    validation_mode: str = "manual_validation"
+    connection_confirmed: bool = False
 
 
 class DastValidationUpdate(BaseModel):

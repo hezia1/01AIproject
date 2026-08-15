@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.models import DastVerdict
 
@@ -16,6 +16,13 @@ SECURITY_HEADERS = [
     "Strict-Transport-Security",
     "Referrer-Policy",
 ]
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    """Keep a confirmed target request on its original origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
 
 
 @dataclass(frozen=True)
@@ -45,7 +52,8 @@ def probe_target_url(target_url: str, timeout_seconds: float = 8.0) -> DastProbe
     )
 
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        opener = build_opener(NoRedirectHandler())
+        with opener.open(request, timeout=timeout_seconds) as response:
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             status_code = response.status
             headers = {key: value for key, value in response.headers.items()}
@@ -60,10 +68,10 @@ def probe_target_url(target_url: str, timeout_seconds: float = 8.0) -> DastProbe
         return DastProbeResult(
             target_url=target_url,
             verdict=DastVerdict.uncertain,
-            evidence_summary=f"目标访问失败，耗时 {elapsed_ms} ms，错误：{reason}",
+            evidence_summary=f"基础 Web 观察未完成，耗时 {elapsed_ms} ms，错误：{reason}",
             request_summary=f"GET {target_url} timeout={timeout_seconds}s",
             response_summary="未获得有效 HTTP 响应。",
-            reproduction_steps=f"从平台 DAST 模块对 {target_url} 发起 GET 请求，观察连接失败或超时。",
+            reproduction_steps=f"从平台 DAST 模块对已确认目标 {target_url} 发起一次无认证 GET 请求，观察连接失败或超时。该结果不是漏洞裁决。",
             remediation_hint="确认目标 URL、网络可达性、DNS、TLS 证书和访问控制策略；如果目标仅内网可达，需要在可访问网络中部署验证节点。",
         )
 
@@ -91,15 +99,15 @@ def build_probe_result(
         risk_points += 1
     if server_header != "-":
         risk_points += 1
-    if status_code >= 500:
+    if status_code >= 300:
         risk_points += 1
 
     if error:
         verdict = DastVerdict.uncertain
     elif risk_points >= 1:
-        verdict = DastVerdict.uncertain
+        verdict = DastVerdict.baseline_attention
     else:
-        verdict = DastVerdict.not_exploitable
+        verdict = DastVerdict.baseline_clear
 
     evidence_parts = [
         f"状态码 {status_code}",
@@ -108,6 +116,7 @@ def build_probe_result(
         f"Server={server_header}",
         f"Content-Type={content_type}",
         f"缺失安全头：{', '.join(missing_headers) if missing_headers else '无'}",
+        "观察范围：一次无认证 GET，不读取响应正文，不跟随重定向，不发送 payload",
     ]
     request_summary = f"GET {target_url} User-Agent=AI-Security-Platform-DAST/0.1"
     response_summary = (
@@ -122,7 +131,7 @@ def build_probe_result(
         evidence_summary="；".join(evidence_parts),
         request_summary=request_summary,
         response_summary=response_summary,
-        reproduction_steps=f"访问 {target_url}，记录状态码、响应头和安全头缺失情况，并按三色裁决规则生成结论。",
+        reproduction_steps=f"对已确认目标 {target_url} 发起一次无认证 GET，记录状态码与响应头。该基础观察不构成漏洞可利用性或未利用结论。",
         remediation_hint=remediation,
     )
 

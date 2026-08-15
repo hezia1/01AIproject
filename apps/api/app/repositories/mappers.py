@@ -126,6 +126,8 @@ def dast_validation_to_schema(record: DastValidationRecord) -> DastValidation:
         remediation_hint=record.remediation_hint,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        validation_mode=record.validation_mode,
+        connection_confirmed=record.connection_confirmed,
     )
 
 def sandbox_evidence_to_schema(record: SandboxEvidenceRecord) -> SandboxEvidence:
