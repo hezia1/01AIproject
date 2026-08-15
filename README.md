@@ -1,5 +1,12 @@
 # AI 网安项目
 
+## 2026-08-15 AGENT PPT 对照核验与交接
+
+- 已按原始 `01.pptx` 的 AGENT 三项要求和当前代码、接口、前端及本地测试重新核验。**指令文件/工具协议/插件扩展扫描**以及**规则检测/AI 审计/覆盖矩阵/信任评分**已实现并在前端开放。
+- **私有源接入/配置解析/公开只读报告/复测**为受控的部分实现：支持 Markdown Frontmatter、JSON、YAML、TOML 解析，JSON/SARIF/HTML 只读报告、扫描历史、差异与基线复测；私有来源仅做本地声明识别、凭据引用预检和经确认的 D 盘过滤 staging，绝不自动使用凭据连接或拉取私有 Git/Registry。报告是只读导出能力，不等同于已设计并验收互联网公开访问、IAM 或访问控制。
+- 复杂厂商 Schema/远程引用、数字签名与 Registry 身份、在线情报同步、认证后的私有 MCP 能力、跨服务全程序数据流仍未实现。逐文件访问、完整进程树和真实网络目的地属于 PPT 的 SANDBOX 运行时观测范围，不应误写为 AGENT 静态扫描已经具备。
+- 验证：在 D 盘临时目录运行 AGENT 测试为 `139 passed, 1 skipped`；前端 `npm run build` 通过。测试使用本地夹具，未连接 DeepSeek、MCP 或任何外部目标。旧扫描快照的空对象兼容性已修复，避免 AGENT 前端页面因缺少新版审计字段而崩溃。
+
 ## 2026-08-14 AGENT offline audit delivery
 
 - AGENT scans now produce an evidence-linked local review draft from current findings, configuration-coverage gaps, private-source onboarding declarations, static data-flow paths, and the existing trust-score context. The draft is explicitly labelled `local-rule-based-draft`, `model_status=not-run`, and `external_model_invoked=false`.
@@ -39,7 +46,7 @@
 
 本项目实现 `01.pptx` 所描述的本地安全治理平台：围绕一个已存在的项目，接入本地源码、运行地址与运行入口，提供 SCA、SAST、AGENT、DAST、SANDBOX 和 ASPM 六个模块的扫描、验证、证据关联与治理汇总。
 
-本文档反映 **2026-08-14** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
+本文档反映 **2026-08-15** 的代码状态。所有“已实现”均指仓库中已有后端实现，且已从当前 React 控制台开放；没有把计划能力写成已完成能力。
 
 ## 2026-08-14 AGENT 远程 MCP 安全能力探测
 
@@ -241,7 +248,7 @@ npm run dev
 | --- | --- | --- |
 | SCA | 多生态依赖解析、版本解析质量、漏洞情报覆盖证明、风险和许可证分析、SBOM、依赖图、历史差异、哈希证据、OSV/离线情报、策略/例外/VEX、未验证组件门禁、本地 CI CLI；所有治理和可信度入口均已在 SCA 页面开放。 | 实时情报同步、签名校验、商业情报适配；真实 IAM/租户审批；所有生态的完整原生依赖树。目标项目没有锁文件/实际环境且离线库不覆盖时，平台会正确给出“部分验证/阻断”，不能给出完整无漏洞结论。 |
 | SAST | 本地规则扫描、项目自定义正则规则、内置及项目自定义 Semgrep YAML 规则包（校验/预检/发布/启停/版本）、固定版 Semgrep 离线增强、Python AST 与有限跨函数污点分析、JS/TS 保守数据流、开放重定向/原始 HTML/XXE 线索、低噪声 Git 历史密钥证据、Git 基线、规则/路径豁免、扫描历史/差异、JSON/HTML/SARIF 导出、项目策略一致的离线 CI、持久化任务队列和 Finding 统一治理；另有可选 DeepSeek 七角色真实模型审计、AI 漏洞发现、证据终审、审计历史和人工修复草案；入口均已在当前 SAST 页面开放。 | 自动写入修复或提交 PR；可执行工具的自治 Agent；跨语言、跨服务、全程序数据流；运行态和业务权限漏洞的完整证明；外部漏洞知识库/RAG 和自动学习；全模块分布式调度。 |
-| AGENT | 识别 Agent 指令、Prompt、Skill、MCP、工具和插件配置；结构化解析 Markdown Frontmatter、JSON、YAML、TOML，归一化资产、权限和审批边界；提取包/版本/来源/安装方式，记录文件及受限本地目录 SHA-256；以严格离线方式关联内置漏洞规则、可选本地 OSV 镜像和可选恶意包/受保护包名情报；建立带证据、依据和置信度的 Prompt→工具→资源静态路径；提供运行预检、D 盘过滤 staging、容器策略验收及默认关闭的指定目标执行；适配 stdio 观察器的 MCP 目标可生成脱敏调用账本、工具调用和 MCP Server 子进程证据；项目策略、门禁、审计、JSON/SARIF/HTML 和离线 CI 均已开放。 | 已对仓库代表性 MCP 目标完成真实受控运行，但这不等于生产安全认证。尚缺 SSE/Streamable HTTP 等网络 MCP 传输观测、逐文件访问、系统级子进程和网络目的地监控、不可抵赖运行事件、数字签名/Registry 身份、在线情报同步、复杂 Schema/引用解析、跨服务全程序数据流、AGENT 专用 AI 复核、可信 IAM 审批和行为回放。 |
+| AGENT | 识别 Agent 指令、Prompt、Skill、MCP、工具和插件配置；结构化解析 Markdown Frontmatter、JSON、YAML、TOML，归一化资产、权限和审批边界；本地规则、覆盖矩阵、批次级可解释信任评分、离线审计草案和人工确认后的脱敏 DeepSeek 建议审计；私有来源声明/凭据引用预检、来源与哈希证据、Prompt→工具→资源静态路径；扫描历史、差异、质量门禁、JSON/SARIF/HTML 只读报告和离线 CI 均已开放。受控 stdio 与远程 MCP 能力探测默认不调用工具或读取内容。 | 私有源目前不自动连接或拉取；报告导出不等同于互联网公开访问/IAM。仍缺复杂 Schema/远程引用、数字签名/Registry 身份、在线情报同步、认证后私有 MCP、跨服务全程序数据流和资产级信任评分。逐文件访问、系统级进程树、真实网络目的地、不可抵赖运行事件和行为回放属于 SANDBOX 的后续运行时观测范围。 |
 | DAST | 人工验证、轻量 Web 基础检查、验证策略、显式风险/组件关联与可解释的关联建议；动态验证中心和历史已在前端开放。 | 爬虫、登录态管理、攻击 payload、业务漏洞利用证明、OWASP ZAP/Nuclei 集成、自动复现与自动复测。 |
 | SANDBOX | 受控 Docker 运行、命令模板、危险命令拦截、禁网/只读/资源限制、输出脱敏、人工证据和显式证据链；工作台已在前端开放。 | 真实文件/网络/进程/工具调用探针、eBPF/Sysmon、交互程序、复杂多步骤编排和恶意样本级强隔离。 |
 | ASPM / 治理 | 汇总模块状态、组件、Finding、DAST、SANDBOX、扫描任务；证据图谱、攻击链、整改字段、复测对比、项目报告和知识中枢均已可见。 | 项目级 CVSS/EPSS/资产暴露面/业务权重风险模型、趋势与 SLA、工单与审批、图数据库/语义推理、全局审计与后台任务。 |

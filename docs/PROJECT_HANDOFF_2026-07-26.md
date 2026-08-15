@@ -1,8 +1,14 @@
-# 项目交接文档（更新于 2026-08-10）
+# 项目交接文档（更新于 2026-08-15）
 
-本文件用于在新窗口继续完善 **AI 网络安全检测、验证与治理平台**。下一阶段由用户重新发送原始 `01.pptx`，并重点完善 **AGENT 供应链安全模块**。新窗口不得依赖旧对话结论，应以重新提供的 PPT、仓库根目录 `README.md`、本文件和实际代码共同判断需求与完成度。
+本文件用于在新窗口继续完善 **AI 网络安全检测、验证与治理平台**。AGENT 供应链安全模块已完成本阶段的 PPT 对照核验与前端稳定性修复；下一阶段建议按 PPT 顺序继续 **DAST 漏洞动态验证**，随后 **SANDBOX 沙箱动态证据链**。新窗口不得依赖旧对话结论，应以重新提供的 PPT、仓库根目录 `README.md`、本文件和实际代码共同判断需求与完成度。
 
-用户已经明确选择 AGENT 作为下一阶段；因此 `README.md` 末尾较早写入的“下一步推荐 ASPM”不再代表当前优先级。除这一优先级外，README 中的架构、启动方式和模块边界仍是有效参考。
+## 0. 2026-08-15 交接结论与下一步范围
+
+- 原始 PPT 对 AGENT 的三项要求为：三类目标扫描；规则检测/AI 审计/覆盖矩阵/信任评分；私有源接入/配置解析/公开只读报告/复测。
+- 当前结论：前两项已实现；第三项中的配置解析、只读导出报告和复测已实现，私有源仅实现本地声明与凭据引用预检、D 盘过滤 staging，**没有**自动连接或拉取私有 Git/Registry。复杂 Schema/远程引用、数字签名/Registry 身份、在线情报同步仍是明确边界。
+- AGENT 测试在 D 盘临时目录验证为 `139 passed, 1 skipped`；前端 `npm run build` 通过。首次在 C 盘临时目录的失败是 D 盘 staging 安全限制正确生效，不是功能放宽或绕过。
+- `AGENT-MCP-runtime-acceptance` 是仓库内无害 MCP 夹具的本地验收项目记录，不是用户业务项目；不要删除或修改它，除非用户明确要求。
+- DAST 与 SANDBOX 的边界必须保持清楚：DAST 负责面向已发现风险的 Web/业务验证及三态裁决；SANDBOX 才负责隔离运行、逐文件/进程/网络等运行时证据。任何外部目标、凭据、镜像、Docker 特权、Docker Socket、eBPF 或系统权限调整都必须先单独说明风险并等待用户确认。
 
 ## 1. 新窗口必须先做的事情
 
@@ -43,24 +49,23 @@ git log -5 --oneline
 
 ## 2. 当前 Git 和验证基线
 
-更新本文档前的代码基线：
+2026-08-15 交接时的代码基线：
 
 ```text
-18991cb Harden SCA and SAST scan assurance
-0933a71 Simplify SAST governance workspace
-0307fe9 Complete DeepSeek SAST sub-agent integration
-bd482d1 Complete SAST offline governance fixes
-47bbc0f Isolate module execution state and refresh
+60e2756 Fix AGENT legacy snapshot rendering
+a40d987 Add confirmed DeepSeek AGENT review
+a323e22 Add AGENT audit history comparison
+dae887e Deliver AGENT offline audit reports
+31a1417 Add offline AGENT audit drafts
 ```
 
 本文档更新前 `main` 与 `origin/main` 一致，工作区无未提交代码。实际状态始终以新窗口执行的 Git 命令为准。
 
-最近一次完整验证：
+本次交接的相关验证：
 
-- 后端：`56 passed`。
+- AGENT 后端：在 D 盘临时目录运行 `tests/test_agent_*.py`，`139 passed, 1 skipped`。
 - 前端：TypeScript 与 Vite 生产构建成功。
-- DVNA SAST：Semgrep 与本地规则均完成，生成 28 条静态证据；Git 历史密钥证据收敛为 2 条高置信路径。
-- DVNA SCA Docker 增强：Grype、Trivy 成功；Syft 因目标缺少锁文件/安装目录而回退；19 个组件中 3 个固定版本完成漏洞覆盖，16 个版本范围保持未验证，整体正确显示 `partial`。
+- 本轮没有连接 DeepSeek、MCP 或外部业务目标；没有读取或修改 `apps/api/.env`，没有修改 DVNA。
 
 常用验证命令：
 
@@ -234,7 +239,11 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 - 已增加 AGENT 专项测试，覆盖资产识别、否定语句、正向能力、结构化权限、证据脱敏、标准 npx MCP、无效 JSON，以及自建 stdio MCP 的工具/资源/Prompt 协议冒烟与受控运行链路；仍需扩充真实第三方生态样例矩阵。
 - SAST 的 DeepSeek Key 和七角色流水线不会自动让 AGENT 模块获得 AI 分析能力。若 PPT 要求 AGENT 使用第三方模型，需要单独设计数据边界、提示词、审计、费用和降级策略，并再次获得用户确认。
 
-## 6. 新窗口推荐的 AGENT 推进顺序
+## 6. AGENT 已完成范围与下一窗口推荐顺序
+
+AGENT 的当前功能与边界以本文开头的 2026-08-15 对照结论和根目录 `README.md` 为准。本节的较早 AGENT 里程碑保留为实现历史，不应再将“AGENT 专用 AI 复核”“SSE/Streamable HTTP 只读能力探测”标记为未完成；二者已分别由 `a40d987` 与 `0917158` 完成。
+
+下一窗口先做 **DAST**，再做 **SANDBOX**；不要把 SANDBOX 的系统级行为观测倒灌描述为 AGENT 静态审计缺口。
 
 最终范围必须等用户重新发送 PPT 后再确定。建议按以下顺序评估，不要直接全部实现：
 
@@ -266,7 +275,7 @@ SAST 还接入了真实 DeepSeek 七角色流水线：策略、漏洞发现、�
 ## 8. 新窗口可直接使用的提示词
 
 ```text
-继续完善 D:\project\PYproject\AI网安项目，本窗口重点完善 AGENT 模块。
+继续完善 D:\project\PYproject\AI网安项目。本窗口先重点完善 DAST 模块；DAST 完成并经我确认后，再进入 SANDBOX 模块。
 
 请不要依赖旧对话记录。先完整读取我重新提供的原始 01.pptx、README.md、docs/PROJECT_HANDOFF_2026-07-26.md 和当前代码，再执行：
 
@@ -275,7 +284,7 @@ git log -5 --oneline
 
 正式仓库只使用 D:\project\PYproject\AI网安项目，不要修改 C:\Users\hezia\Documents\AI网络安全项目。
 
-请先根据 PPT 和实际代码重新列出 AGENT 已完成、未完成以及前端可见性，指出页面是否存在超前或误导文案。不要直接改代码；先给出最推荐的下一步和明确实现范围，等我确认。
+请先根据 PPT 和实际代码，核对 DAST 的已完成、未完成、前端可见性和与 SANDBOX/AGENT 的边界；指出页面是否存在超前或误导文案。不要直接改代码；先给出最推荐的下一步、明确实现范围、测试方式、前端变化和不包含的功能，等我确认。
 
-规则：每次修改代码前先说明功能并等待确认；每次代码更新后提交并推送 GitHub。如需下载规则、镜像或测试资源，只放 D 盘并先说明用途。
+规则：每次修改代码前先说明功能并等待确认；每次代码更新后提交并推送 GitHub。如需下载规则、镜像或测试资源，只放 D 盘并先说明用途、来源、大小和保存位置。不得读取、打印、复制或提交 apps/api/.env 中的 API Key；不得修改 DVNA；不得把未观察到的行为写成不存在或不可利用；连接外部目标前必须说明并获得确认。若需要 Docker Socket、特权容器、eBPF、宿主内核能力或关闭安全限制，先停止实现并单独说明风险，等待我决定。
 ```
