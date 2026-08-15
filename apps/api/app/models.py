@@ -783,6 +783,7 @@ class DastValidation(DastValidationCreate):
 
 
 class DastValidationUpdate(BaseModel):
+    target_url: str | None = Field(default=None, min_length=1, max_length=1000)
     finding_id: UUID | None = None
     component_id: UUID | None = None
     link_source: str | None = None

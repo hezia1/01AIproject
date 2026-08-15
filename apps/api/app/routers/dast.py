@@ -93,6 +93,44 @@ def confirm_probe_target(project: ProjectRecord, target_url: str, confirmation: 
         raise HTTPException(status_code=400, detail=f"Enter the exact confirmation phrase: {expected}")
 
 
+def ensure_manual_validation_record(record: DastValidationRecord) -> None:
+    if record.validation_mode != "manual_validation":
+        raise HTTPException(
+            status_code=400,
+            detail="Automated DAST baseline observations are read-only; create a manual validation record for review.",
+        )
+
+
+def build_dast_report(project_id: UUID, records: list[DastValidationRecord]) -> dict[str, object]:
+    serialized_records = [dast_validation_to_schema(record).model_dump(mode="json") for record in records]
+    automated_count = sum(record.validation_mode == "automated_web_baseline" for record in records)
+    manual_count = sum(record.validation_mode == "manual_validation" for record in records)
+    linked_count = sum(record.finding_id is not None or record.component_id is not None for record in records)
+    verdict_counts = {
+        verdict.value: sum(record.verdict == verdict.value for record in records)
+        for verdict in DastVerdict
+    }
+    return {
+        "schema": "ai-security-platform.dast-report/v1",
+        "generated_at": datetime.utcnow().isoformat(),
+        "project_id": str(project_id),
+        "summary": {
+            "record_count": len(records),
+            "automated_baseline_count": automated_count,
+            "manual_validation_count": manual_count,
+            "linked_record_count": linked_count,
+            "by_verdict": verdict_counts,
+        },
+        "records": serialized_records,
+        "capability_boundaries": [
+            "Automated baseline records capture only the observed unauthenticated HTTP GET result for the confirmed target URL.",
+            "A baseline_clear result is not a non-exploitability conclusion and does not establish the absence of vulnerabilities.",
+            "Manual verdicts document the reviewer-provided evidence and are limited to their recorded target, scope, and reproduction steps.",
+            "This report is generated solely from stored DAST records and does not connect to targets or perform new tests.",
+        ],
+    }
+
+
 @router.get("/projects/{project_id}/strategies", response_model=list[DastVerificationStrategy])
 def list_verification_strategies(
     project_id: UUID,
@@ -246,6 +284,17 @@ def list_project_validations(project_id: UUID, db: Session = Depends(get_db)) ->
     return [dast_validation_to_schema(record) for record in records]
 
 
+@router.get("/projects/{project_id}/report")
+def get_project_dast_report(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    ensure_dast_enabled(project_id, db)
+    records = db.scalars(
+        select(DastValidationRecord)
+        .where(DastValidationRecord.project_id == str(project_id))
+        .order_by(DastValidationRecord.created_at.desc())
+    ).all()
+    return build_dast_report(project_id, records)
+
+
 @router.patch("/validations/{validation_id}", response_model=DastValidation)
 def update_validation(
     validation_id: UUID, payload: DastValidationUpdate, db: Session = Depends(get_db)
@@ -253,11 +302,12 @@ def update_validation(
     record = db.get(DastValidationRecord, str(validation_id))
     if record is None:
         raise HTTPException(status_code=404, detail="DAST validation not found")
+    ensure_manual_validation_record(record)
 
     updates = payload.model_dump(exclude_unset=True)
     if "verdict" in updates and updates["verdict"] not in {DastVerdict.exploitable, DastVerdict.uncertain, DastVerdict.not_exploitable}:
         raise HTTPException(status_code=400, detail="Manual DAST validation requires an explicit three-state verdict")
-    if "verdict" in updates:
+    if {"verdict", "evidence_summary", "reproduction_steps"} & updates.keys():
         next_evidence = updates.get("evidence_summary", record.evidence_summary)
         next_steps = updates.get("reproduction_steps", record.reproduction_steps)
         if not (next_evidence or "").strip() or not (next_steps or "").strip():

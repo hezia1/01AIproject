@@ -1,9 +1,11 @@
 import pytest
+from datetime import datetime
 from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi import HTTPException
 
-from app.routers.dast import confirm_probe_target
+from app.routers.dast import build_dast_report, confirm_probe_target, ensure_manual_validation_record
 from app.models import DastVerdict
 from app.services.dast_probe import build_probe_result
 from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
@@ -69,3 +71,66 @@ def test_probe_target_requires_configured_origin_and_exact_confirmation() -> Non
         confirm_probe_target(project, target, "confirm")
     with pytest.raises(HTTPException, match="same origin"):
         confirm_probe_target(project, "https://unapproved.example/login", "DAST_WEB_BASELINE:https://unapproved.example/login")
+
+
+def test_automated_baseline_observation_is_read_only() -> None:
+    automated_record = SimpleNamespace(validation_mode="automated_web_baseline")
+
+    with pytest.raises(HTTPException, match="read-only"):
+        ensure_manual_validation_record(automated_record)
+
+
+def test_dast_report_summarizes_stored_records_without_new_probe() -> None:
+    project_id = uuid4()
+    now = datetime.utcnow()
+
+    def record(*, verdict: str, mode: str, finding_id: str | None) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=uuid4(),
+            project_id=project_id,
+            finding_id=finding_id,
+            component_id=None,
+            link_source="explicit-selection" if finding_id else "unlinked",
+            link_confidence=100 if finding_id else 0,
+            target_url="https://example.test/login",
+            verdict=verdict,
+            validator="reviewer",
+            strategy_id="web-baseline",
+            strategy_name="Web baseline",
+            scope_summary="stored record only",
+            limitations="limited scope",
+            evidence_summary="stored evidence",
+            request_summary="no new request",
+            response_summary="stored response",
+            reproduction_steps="stored reproduction steps",
+            remediation_hint="stored remediation",
+            validation_mode=mode,
+            connection_confirmed=mode == "automated_web_baseline",
+            created_at=now,
+            updated_at=now,
+        )
+
+    report = build_dast_report(
+        project_id,
+        [
+            record(verdict="baseline_clear", mode="automated_web_baseline", finding_id=None),
+            record(verdict="uncertain", mode="manual_validation", finding_id=str(uuid4())),
+        ],
+    )
+
+    assert report["schema"] == "ai-security-platform.dast-report/v1"
+    assert report["summary"] == {
+        "record_count": 2,
+        "automated_baseline_count": 1,
+        "manual_validation_count": 1,
+        "linked_record_count": 1,
+        "by_verdict": {
+            "exploitable": 0,
+            "uncertain": 1,
+            "not_exploitable": 0,
+            "baseline_attention": 0,
+            "baseline_clear": 1,
+        },
+    }
+    assert len(report["records"]) == 2
+    assert "does not connect to targets" in report["capability_boundaries"][-1]
