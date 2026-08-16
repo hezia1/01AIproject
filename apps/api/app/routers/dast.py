@@ -9,9 +9,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.db_models import ComponentRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
+from app.db_models import ComponentRecord, DastBusinessFlowRecord, DastBusinessRunRecord, DastBusinessSnapshotRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord
 from app.models import (
     DastLinkSuggestionRequest,
+    DastBusinessCandidate,
+    DastBusinessDraftRequest,
+    DastBusinessFlow,
+    DastBusinessFlowCreate,
+    DastBusinessFlowUpdate,
+    DastBusinessRun,
+    DastBusinessRunCreate,
+    DastBusinessRunVerdict,
+    DastBusinessSnapshot,
     DastProbeRequest,
     DastRunEvidence,
     DastRunEvidenceCreate,
@@ -29,7 +38,10 @@ from app.models import (
     LinkSuggestion,
     ModuleKey,
 )
-from app.repositories.mappers import dast_plan_to_schema, dast_run_evidence_to_schema, dast_run_to_schema, dast_validation_to_schema
+from app.repositories.mappers import dast_business_flow_to_schema, dast_business_run_to_schema, dast_business_snapshot_to_schema, dast_plan_to_schema, dast_run_evidence_to_schema, dast_run_to_schema, dast_validation_to_schema
+from app.services.dast_business_flow import dry_run as dry_run_business_flow, execute_api_flow, redact as redact_business_value
+from app.services.dast_deepseek import dast_deepseek_health, generate_business_flow_draft
+from app.services.deepseek_client import DeepSeekUnavailable
 from app.services.dast_probe import probe_target_url
 from app.services.evidence_link_suggestions import build_dast_link_suggestions
 from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
@@ -210,6 +222,247 @@ def link_metadata(
         requested_source if requested_source != "unlinked" else "explicit-selection",
         requested_confidence if requested_confidence > 0 else 100,
     )
+
+
+def business_candidate(record: FindingRecord, component: ComponentRecord | None = None) -> DastBusinessCandidate:
+    review = record.ai_review if isinstance(record.ai_review, dict) else {}
+    category = str(review.get("category") or review.get("cwe") or record.rule_id or "unknown").lower()
+    if record.source == "SCA":
+        vulnerability_type = "dependency_risk"
+    elif "idor" in category or "access" in category or "authorization" in category:
+        vulnerability_type = "access_control"
+    elif "sql" in category:
+        vulnerability_type = "sql_injection"
+    elif "xss" in category or "cross-site" in category:
+        vulnerability_type = "xss"
+    elif "ssrf" in category:
+        vulnerability_type = "ssrf"
+    else:
+        vulnerability_type = "unclassified"
+    notes = [f"来源模块：{record.source}"]
+    if component is not None:
+        notes.append(f"受影响组件：{component.name} {component.version or 'unknown'}")
+    return DastBusinessCandidate(
+        id=UUID(str(record.id)), source=record.source, scan_task_id=UUID(str(record.scan_task_id)) if record.scan_task_id else None,
+        rule_id=record.rule_id, title=record.title, severity=record.severity,
+        vulnerability_type=vulnerability_type, cwe=str(review.get("cwe")) if review.get("cwe") else None,
+        file_path=record.file_path, line_start=record.line_start, line_end=record.line_end,
+        evidence=redact_business_value(record.evidence or ""),
+        preconditions={"required_roles": [], "required_fixtures": [], "business_notes": notes},
+        missing=["接口或页面地址", "HTTP 方法", "参数位置", "业务身份与前置测试数据"],
+        requires_human_input=True,
+    )
+
+
+def ensure_business_flow(flow_id: UUID, db: Session) -> DastBusinessFlowRecord:
+    record = db.get(DastBusinessFlowRecord, str(flow_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="DAST business flow not found")
+    return record
+
+
+def business_flow_target_confirmation(project: ProjectRecord, flow: DastBusinessFlowRecord, confirmation: str | None) -> None:
+    confirm_probe_target(project, flow.target_url, f"DAST_WEB_BASELINE:{flow.target_url}")
+    expected = f"DAST_BUSINESS_FLOW:{flow.id}:{flow.target_url}"
+    if confirmation != expected:
+        raise HTTPException(status_code=400, detail=f"Enter the exact confirmation phrase: {expected}")
+
+
+def persist_business_snapshots(
+    db: Session,
+    flow: DastBusinessFlowRecord,
+    run: DastBusinessRunRecord,
+    snapshots: list[dict[str, object]],
+) -> None:
+    for snapshot in snapshots:
+        payload = {
+            "step_id": str(snapshot.get("step_id") or "unknown"),
+            "step_kind": str(snapshot.get("step_kind") or "unknown"),
+            "role_alias": snapshot.get("role_alias"),
+            "status": str(snapshot.get("status") or "unknown"),
+            "request_summary": redact_business_value(str(snapshot.get("request_summary") or "")) or None,
+            "response_summary": redact_business_value(str(snapshot.get("response_summary") or "")) or None,
+            "detail": snapshot.get("detail") if isinstance(snapshot.get("detail"), dict) else {},
+        }
+        evidence_hash = sha256(str(sorted(payload.items())).encode("utf-8")).hexdigest()
+        db.add(DastBusinessSnapshotRecord(
+            project_id=flow.project_id, flow_id=str(flow.id), run_id=str(run.id),
+            step_id=payload["step_id"], step_kind=payload["step_kind"], role_alias=payload["role_alias"],
+            status=payload["status"], request_summary=payload["request_summary"],
+            response_summary=payload["response_summary"], detail=payload["detail"], evidence_hash=evidence_hash,
+        ))
+
+
+@router.get("/business-draft-health")
+def business_draft_health() -> dict[str, object]:
+    return dast_deepseek_health()
+
+
+@router.post("/business-candidates/{finding_id}/ai-draft")
+def generate_business_candidate_draft(
+    finding_id: UUID, payload: DastBusinessDraftRequest, db: Session = Depends(get_db)
+) -> dict[str, object]:
+    finding = db.get(FindingRecord, str(finding_id))
+    if finding is None or finding.source not in {"SCA", "SAST", "AGENT"}:
+        raise HTTPException(status_code=404, detail="DAST business candidate not found")
+    ensure_dast_enabled(UUID(str(finding.project_id)), db)
+    expected = f"DAST_DEEPSEEK_DRAFT:{finding_id}"
+    if payload.confirmation_phrase != expected:
+        raise HTTPException(status_code=400, detail=f"Enter the exact confirmation phrase: {expected}")
+    component = db.get(ComponentRecord, str(finding.component_id)) if finding.component_id else None
+    normalized = business_candidate(finding, component)
+    candidate = {
+        "source": normalized.source,
+        "rule_id": normalized.rule_id,
+        "title": normalized.title,
+        "severity": normalized.severity.value,
+        "vulnerability_type": normalized.vulnerability_type,
+        "cwe": normalized.cwe,
+        "attack_surface": normalized.attack_surface,
+        "preconditions": normalized.preconditions,
+        "missing": normalized.missing,
+    }
+    try:
+        return generate_business_flow_draft(candidate, redact_business_value(payload.business_description), redact_business_value(payload.target_description))
+    except DeepSeekUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/business-candidates", response_model=list[DastBusinessCandidate])
+def list_business_candidates(project_id: UUID, db: Session = Depends(get_db)) -> list[DastBusinessCandidate]:
+    ensure_dast_enabled(project_id, db)
+    findings = db.scalars(
+        select(FindingRecord)
+        .where(
+            FindingRecord.project_id == str(project_id),
+            FindingRecord.source.in_(["SCA", "SAST", "AGENT"]),
+            FindingRecord.status.in_(["open", "pending", "confirmed"]),
+        )
+        .order_by(FindingRecord.created_at.desc())
+    ).all()
+    components = {str(item.id): item for item in db.scalars(select(ComponentRecord).where(ComponentRecord.project_id == str(project_id))).all()}
+    return [business_candidate(item, components.get(str(item.component_id))) for item in findings]
+
+
+@router.get("/projects/{project_id}/business-flows", response_model=list[DastBusinessFlow])
+def list_business_flows(project_id: UUID, db: Session = Depends(get_db)) -> list[DastBusinessFlow]:
+    ensure_dast_enabled(project_id, db)
+    records = db.scalars(
+        select(DastBusinessFlowRecord)
+        .where(DastBusinessFlowRecord.project_id == str(project_id))
+        .order_by(DastBusinessFlowRecord.created_at.desc())
+    ).all()
+    return [dast_business_flow_to_schema(record) for record in records]
+
+
+@router.post("/business-flows", response_model=DastBusinessFlow, status_code=201)
+def create_business_flow(payload: DastBusinessFlowCreate, db: Session = Depends(get_db)) -> DastBusinessFlow:
+    ensure_dast_enabled(payload.project_id, db)
+    if payload.flow_mode not in {"api", "browser", "hybrid"}:
+        raise HTTPException(status_code=400, detail="flow_mode must be api, browser, or hybrid")
+    if payload.strategy_source not in {"manual", "recorded", "template", "ai_draft"}:
+        raise HTTPException(status_code=400, detail="strategy_source must be manual, recorded, template, or ai_draft")
+    if payload.finding_id:
+        finding = db.get(FindingRecord, str(payload.finding_id))
+        if finding is None or finding.project_id != str(payload.project_id):
+            raise HTTPException(status_code=400, detail="finding_id does not belong to this project")
+    record = DastBusinessFlowRecord(
+        project_id=str(payload.project_id), finding_id=str(payload.finding_id) if payload.finding_id else None,
+        name=payload.name, target_url=payload.target_url, flow_mode=payload.flow_mode,
+        strategy_source=payload.strategy_source, authorized_scope=payload.authorized_scope,
+        allowed_paths=payload.allowed_paths, roles=payload.roles, steps=payload.steps,
+        sufficiency_criteria=payload.sufficiency_criteria, requester=payload.requester, status="draft",
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return dast_business_flow_to_schema(record)
+
+
+@router.patch("/business-flows/{flow_id}", response_model=DastBusinessFlow)
+def update_business_flow(flow_id: UUID, payload: DastBusinessFlowUpdate, db: Session = Depends(get_db)) -> DastBusinessFlow:
+    record = ensure_business_flow(flow_id, db)
+    updates = payload.model_dump(exclude_unset=True)
+    status = updates.get("status", record.status)
+    if status not in {"draft", "approved", "archived"}:
+        raise HTTPException(status_code=400, detail="status must be draft, approved, or archived")
+    if status == "approved":
+        reference = updates.get("approval_reference", record.approval_reference)
+        approver = updates.get("approved_by", record.approved_by)
+        if not (reference or "").strip() or not (approver or "").strip():
+            raise HTTPException(status_code=400, detail="Approved business flows require approval_reference and approved_by")
+        record.approved_at = datetime.utcnow()
+    scope_fields = {"authorized_scope", "allowed_paths", "roles", "steps", "sufficiency_criteria"}
+    if record.status == "approved" and scope_fields & updates.keys():
+        if updates.get("status") == "approved":
+            raise HTTPException(status_code=400, detail="Change business flow scope first, then record a separate approval")
+        record.status, record.approval_reference, record.approved_by, record.approved_at = "draft", None, None, None
+    for field, value in updates.items():
+        setattr(record, field, value)
+    record.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(record)
+    return dast_business_flow_to_schema(record)
+
+
+@router.get("/business-flows/{flow_id}/runs", response_model=list[DastBusinessRun])
+def list_business_runs(flow_id: UUID, db: Session = Depends(get_db)) -> list[DastBusinessRun]:
+    ensure_business_flow(flow_id, db)
+    records = db.scalars(select(DastBusinessRunRecord).where(DastBusinessRunRecord.flow_id == str(flow_id)).order_by(DastBusinessRunRecord.created_at.desc())).all()
+    return [dast_business_run_to_schema(record) for record in records]
+
+
+@router.get("/business-runs/{run_id}/snapshots", response_model=list[DastBusinessSnapshot])
+def list_business_snapshots(run_id: UUID, db: Session = Depends(get_db)) -> list[DastBusinessSnapshot]:
+    if db.get(DastBusinessRunRecord, str(run_id)) is None:
+        raise HTTPException(status_code=404, detail="DAST business run not found")
+    records = db.scalars(select(DastBusinessSnapshotRecord).where(DastBusinessSnapshotRecord.run_id == str(run_id)).order_by(DastBusinessSnapshotRecord.created_at.asc())).all()
+    return [dast_business_snapshot_to_schema(record) for record in records]
+
+
+@router.post("/business-flows/{flow_id}/runs", response_model=DastBusinessRun, status_code=201)
+def run_business_flow(flow_id: UUID, payload: DastBusinessRunCreate, db: Session = Depends(get_db)) -> DastBusinessRun:
+    flow = ensure_business_flow(flow_id, db)
+    project = ensure_dast_enabled(UUID(str(flow.project_id)), db)
+    if payload.execution_mode not in {"dry_run", "api_execution"}:
+        raise HTTPException(status_code=400, detail="execution_mode must be dry_run or api_execution")
+    if payload.execution_mode == "api_execution":
+        if flow.status != "approved":
+            raise HTTPException(status_code=400, detail="Only an approved business flow can connect to a target")
+        business_flow_target_confirmation(project, flow, payload.target_confirmation)
+    run = DastBusinessRunRecord(
+        project_id=flow.project_id, flow_id=str(flow.id), status="running", execution_mode=payload.execution_mode,
+        operator=payload.operator, started_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    if payload.execution_mode == "dry_run":
+        snapshots, errors = dry_run_business_flow(flow)
+        run.status = "blocked" if errors else "completed"
+        run.verdict = "uncertain" if errors else None
+        run.verdict_reason = "；".join(errors) if errors else "本地预执行校验通过；未连接目标。"
+    else:
+        snapshots, verdict, reason = execute_api_flow(flow)
+        run.status = "completed" if verdict in {"exploitable", "not_exploitable"} else "blocked"
+        run.verdict, run.verdict_reason = verdict, reason
+    persist_business_snapshots(db, flow, run, snapshots)
+    run.completed_at, run.updated_at = datetime.utcnow(), datetime.utcnow()
+    db.commit()
+    db.refresh(run)
+    return dast_business_run_to_schema(run)
+
+
+@router.patch("/business-runs/{run_id}/verdict", response_model=DastBusinessRun)
+def set_business_run_verdict(run_id: UUID, payload: DastBusinessRunVerdict, db: Session = Depends(get_db)) -> DastBusinessRun:
+    run = db.get(DastBusinessRunRecord, str(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="DAST business run not found")
+    if payload.verdict not in {DastVerdict.exploitable, DastVerdict.not_exploitable, DastVerdict.uncertain}:
+        raise HTTPException(status_code=400, detail="Business run requires an explicit three-state verdict")
+    run.verdict, run.verdict_reason, run.updated_at = payload.verdict.value, payload.reason, datetime.utcnow()
+    db.commit()
+    db.refresh(run)
+    return dast_business_run_to_schema(run)
 
 
 def ensure_dast_plan(project_id: UUID, plan_id: UUID, db: Session) -> DastVerificationPlanRecord:

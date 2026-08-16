@@ -1,7 +1,7 @@
 ﻿from uuid import UUID
 
-from app.db_models import ComponentRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord, ScanTaskRecord
-from app.models import AiReview, Component, DastRunEvidence, DastValidation, DastVerificationPlan, DastVerificationRun, Finding, ModuleKey, Project, ProjectModule, SandboxEvidence, ScanTask
+from app.db_models import ComponentRecord, DastBusinessFlowRecord, DastBusinessRunRecord, DastBusinessSnapshotRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord, ScanTaskRecord
+from app.models import AiReview, Component, DastBusinessFlow, DastBusinessRun, DastBusinessSnapshot, DastRunEvidence, DastValidation, DastVerificationPlan, DastVerificationRun, Finding, ModuleKey, Project, ProjectModule, SandboxEvidence, ScanTask
 
 
 def project_to_schema(record: ProjectRecord) -> Project:
@@ -163,6 +163,40 @@ def dast_run_evidence_to_schema(record: DastRunEvidenceRecord) -> DastRunEvidenc
         content_summary=record.content_summary, content_hash=record.content_hash,
         source_reference=record.source_reference, collected_by=record.collected_by,
         redaction_applied=record.redaction_applied, created_at=record.created_at,
+    )
+
+
+def dast_business_flow_to_schema(record: DastBusinessFlowRecord) -> DastBusinessFlow:
+    return DastBusinessFlow(
+        id=UUID(str(record.id)), project_id=UUID(str(record.project_id)),
+        finding_id=UUID(str(record.finding_id)) if record.finding_id else None,
+        name=record.name, target_url=record.target_url, flow_mode=record.flow_mode,
+        strategy_source=record.strategy_source, authorized_scope=record.authorized_scope,
+        allowed_paths=record.allowed_paths, roles=record.roles, steps=record.steps,
+        sufficiency_criteria=record.sufficiency_criteria, requester=record.requester,
+        status=record.status, approval_reference=record.approval_reference,
+        approved_by=record.approved_by, approved_at=record.approved_at,
+        created_at=record.created_at, updated_at=record.updated_at,
+    )
+
+
+def dast_business_run_to_schema(record: DastBusinessRunRecord) -> DastBusinessRun:
+    return DastBusinessRun(
+        id=UUID(str(record.id)), project_id=UUID(str(record.project_id)), flow_id=UUID(str(record.flow_id)),
+        status=record.status, execution_mode=record.execution_mode, operator=record.operator,
+        verdict=record.verdict, verdict_reason=record.verdict_reason,
+        started_at=record.started_at, completed_at=record.completed_at,
+        created_at=record.created_at, updated_at=record.updated_at,
+    )
+
+
+def dast_business_snapshot_to_schema(record: DastBusinessSnapshotRecord) -> DastBusinessSnapshot:
+    return DastBusinessSnapshot(
+        id=UUID(str(record.id)), project_id=UUID(str(record.project_id)), flow_id=UUID(str(record.flow_id)),
+        run_id=UUID(str(record.run_id)), step_id=record.step_id, step_kind=record.step_kind,
+        role_alias=record.role_alias, status=record.status, request_summary=record.request_summary,
+        response_summary=record.response_summary, detail=record.detail, evidence_hash=record.evidence_hash,
+        created_at=record.created_at,
     )
 
 def sandbox_evidence_to_schema(record: SandboxEvidenceRecord) -> SandboxEvidence:

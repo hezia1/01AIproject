@@ -882,6 +882,110 @@ class DastRunEvidence(BaseModel):
     redaction_applied: bool
     created_at: datetime
 
+
+class DastBusinessCandidate(BaseModel):
+    id: UUID
+    source: str
+    scan_task_id: UUID | None = None
+    rule_id: str
+    title: str
+    severity: Severity
+    vulnerability_type: str
+    cwe: str | None = None
+    file_path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    evidence: str | None = None
+    attack_surface: dict[str, list[str]] = Field(default_factory=lambda: {"urls": [], "methods": [], "parameters": []})
+    preconditions: dict[str, list[str]] = Field(default_factory=lambda: {"required_roles": [], "required_fixtures": [], "business_notes": []})
+    missing: list[str] = Field(default_factory=list)
+    requires_human_input: bool = True
+
+
+class DastBusinessFlowCreate(BaseModel):
+    project_id: UUID
+    name: str = Field(min_length=1, max_length=200)
+    target_url: str = Field(min_length=1, max_length=1000)
+    flow_mode: str = "hybrid"
+    strategy_source: str = "manual"
+    finding_id: UUID | None = None
+    authorized_scope: str = Field(min_length=1, max_length=6000)
+    allowed_paths: list[str] = Field(default_factory=list)
+    roles: list[dict[str, object]] = Field(default_factory=list)
+    steps: list[dict[str, object]] = Field(default_factory=list)
+    sufficiency_criteria: dict[str, object] = Field(default_factory=dict)
+    requester: str = Field(min_length=1, max_length=120)
+
+
+class DastBusinessFlowUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    authorized_scope: str | None = Field(default=None, min_length=1, max_length=6000)
+    allowed_paths: list[str] | None = None
+    roles: list[dict[str, object]] | None = None
+    steps: list[dict[str, object]] | None = None
+    sufficiency_criteria: dict[str, object] | None = None
+    status: str | None = None
+    approval_reference: str | None = Field(default=None, max_length=240)
+    approved_by: str | None = Field(default=None, max_length=120)
+
+
+class DastBusinessFlow(DastBusinessFlowCreate):
+    id: UUID = Field(default_factory=uuid4)
+    status: str = "draft"
+    approval_reference: str | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DastBusinessRunCreate(BaseModel):
+    operator: str = Field(min_length=1, max_length=120)
+    execution_mode: str = "dry_run"
+    target_confirmation: str | None = Field(default=None, max_length=1400)
+
+
+class DastBusinessRunVerdict(BaseModel):
+    verdict: DastVerdict
+    reason: str = Field(min_length=1, max_length=6000)
+
+
+class DastBusinessRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    project_id: UUID
+    flow_id: UUID
+    status: str
+    execution_mode: str
+    operator: str
+    verdict: DastVerdict | None = None
+    verdict_reason: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DastBusinessSnapshot(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    project_id: UUID
+    flow_id: UUID
+    run_id: UUID
+    step_id: str
+    step_kind: str
+    role_alias: str | None = None
+    status: str
+    request_summary: str | None = None
+    response_summary: str | None = None
+    detail: dict[str, object] = Field(default_factory=dict)
+    evidence_hash: str
+    created_at: datetime
+
+
+class DastBusinessDraftRequest(BaseModel):
+    business_description: str = Field(min_length=1, max_length=12000)
+    target_description: str = Field(min_length=1, max_length=4000)
+    confirmation_phrase: str = Field(min_length=1, max_length=200)
+
 class SandboxEvidenceCreate(BaseModel):
     project_id: UUID
     run_command: str = Field(min_length=1, max_length=1000)

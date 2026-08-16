@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from app.routers.dast import build_dast_report, confirm_probe_target, ensure_manual_validation_record, redact_evidence_summary
 from app.models import DastVerdict
 from app.services.dast_probe import build_probe_result
+from app.services.dast_business_flow import dry_run, execute_api_flow
 from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
 
 
@@ -143,3 +144,30 @@ def test_dast_evidence_summary_redacts_common_secret_values() -> None:
     assert "def456" not in result
     assert "secret" not in result
     assert result.count("[REDACTED]") == 3
+
+
+def test_business_flow_dry_run_validates_roles_without_connecting() -> None:
+    flow = SimpleNamespace(
+        roles=[{"alias": "user_a", "credential_ref": "env:DAST_FLOW_USER_A"}],
+        steps=[{"id": "list", "kind": "http_request", "role": "user_a", "method": "GET", "url": "https://example.test/items"}],
+    )
+
+    snapshots, errors = dry_run(flow)
+
+    assert errors == []
+    assert snapshots[0]["status"] == "ready"
+
+
+def test_business_flow_browser_step_is_blocked_without_connecting() -> None:
+    flow = SimpleNamespace(
+        roles=[{"alias": "user_a", "credential_ref": "env:DAST_FLOW_USER_A"}],
+        steps=[{"id": "page", "kind": "browser_action", "role": "user_a", "action": "click"}],
+        target_url="https://example.test",
+        allowed_paths=[],
+    )
+
+    snapshots, verdict, reason = execute_api_flow(flow)
+
+    assert verdict == "uncertain"
+    assert "预执行校验" in reason
+    assert snapshots[0]["status"] == "blocked"

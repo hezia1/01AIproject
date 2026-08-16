@@ -334,6 +334,65 @@ class DastRunEvidenceRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class DastBusinessFlowRecord(Base):
+    __tablename__ = "dast_business_flows"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    finding_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("findings.id"))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    flow_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="hybrid")
+    strategy_source: Mapped[str] = mapped_column(String(40), nullable=False, default="manual")
+    authorized_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    allowed_paths: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    roles: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    steps: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    sufficiency_criteria: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft")
+    requester: Mapped[str] = mapped_column(String(120), nullable=False)
+    approval_reference: Mapped[str | None] = mapped_column(String(240))
+    approved_by: Mapped[str | None] = mapped_column(String(120))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class DastBusinessRunRecord(Base):
+    __tablename__ = "dast_business_runs"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    flow_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_business_flows.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued")
+    execution_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="dry_run")
+    operator: Mapped[str] = mapped_column(String(120), nullable=False)
+    verdict: Mapped[str | None] = mapped_column(String(40))
+    verdict_reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class DastBusinessSnapshotRecord(Base):
+    __tablename__ = "dast_business_snapshots"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    flow_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_business_flows.id"), nullable=False)
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("dast_business_runs.id"), nullable=False)
+    step_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    step_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    role_alias: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_summary: Mapped[str | None] = mapped_column(Text)
+    response_summary: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class SandboxEvidenceRecord(Base):
     __tablename__ = "sandbox_evidence"
 
