@@ -75,6 +75,79 @@ def scan_interprocedural_python(root: Path, files: list[Path]) -> list[ParsedFin
     return findings
 
 
+def scan_javascript_project(root: Path, files: list[Path]) -> list[ParsedFinding]:
+    """Find bounded, cross-line Express security patterns.
+
+    These checks intentionally require concrete route or handler evidence. They
+    do not infer that every authenticated POST is vulnerable or that every
+    database response leaks sensitive data.
+    """
+    sources: dict[Path, str] = {}
+    for file_path in files:
+        if file_path.suffix.lower() not in {".js", ".jsx", ".ts", ".tsx"}:
+            continue
+        try:
+            sources[file_path] = file_path.read_text(encoding="utf-8-sig", errors="ignore")
+        except OSError:
+            continue
+    findings: list[ParsedFinding] = []
+    for file_path, source in sources.items():
+        relative_path = file_path.relative_to(root).as_posix()
+        for match in re.finditer(r"router\s*\.\s*(get|post|put|patch|delete)\s*\(\s*['\"]([^'\"]+)['\"]([^\n;]*)", source, re.IGNORECASE):
+            method, route_path, route_tail = match.group(1).upper(), match.group(2), match.group(3)
+            line = source.count("\n", 0, match.start()) + 1
+            if "/admin/" in route_path.lower() and "api" in route_path.lower() and "isauthenticated" in route_tail.lower() and not re.search(r"adminCheck|requireRole|authorize|isAdmin", route_tail, re.IGNORECASE):
+                findings.append(_javascript_project_finding(
+                    "SAST.ACCESS.ADMIN_ROUTE_ROLE_MISSING", "管理接口缺少角色授权校验", Severity.critical,
+                    relative_path, line, match.group(0), "access_control", "CWE-862", "A01:2021 Broken Access Control",
+                    "管理接口只校验登录态，没有校验管理员角色。", "在服务端路由增加角色/能力授权中间件，并为普通用户拒绝访问。",
+                ))
+            if method in {"POST", "PUT", "PATCH", "DELETE"} and "isauthenticated" in route_tail.lower() and re.search(r"modify|edit|delete|create|update", route_path, re.IGNORECASE) and not re.search(r"csrf|xsrf", route_tail, re.IGNORECASE):
+                findings.append(_javascript_project_finding(
+                    "SAST.CSRF.STATE_CHANGE_WITHOUT_TOKEN", "已认证状态变更路由缺少 CSRF 防护", Severity.high,
+                    relative_path, line, match.group(0), "csrf", "CWE-352", "A01:2021 Broken Access Control",
+                    "携带 Cookie 登录态的状态变更路由未声明 CSRF 校验。", "启用成熟的 CSRF 中间件，校验不可预测令牌并配置合适的 SameSite Cookie。",
+                ))
+        handlers = list(re.finditer(r"module\.exports\.([A-Za-z_$][\w$]*)\s*=\s*function\b", source))
+        for index, handler in enumerate(handlers):
+            function_text = source[handler.start():handlers[index + 1].start() if index + 1 < len(handlers) else len(source)]
+            handler_line = source.count("\n", 0, handler.start()) + 1
+            idor = re.search(r"['\"]?id['\"]?\s*:\s*req\.body\.id", function_text, re.IGNORECASE)
+            if idor and re.search(r"db\s*\.\s*User\s*\.\s*find", function_text, re.IGNORECASE) and not re.search(r"req\.user\.id\s*={2,3}\s*req\.body\.id|req\.body\.id\s*={2,3}\s*req\.user\.id", function_text, re.IGNORECASE):
+                findings.append(_javascript_project_finding(
+                    "SAST.ACCESS.USER_ID_FROM_BODY", "对象更新使用客户端用户 ID 且未校验所有权", Severity.critical,
+                    relative_path, handler_line + function_text.count("\n", 0, idor.start()), idor.group(0), "access_control", "CWE-639", "A01:2021 Broken Access Control",
+                    "用户对象查询直接信任请求体中的 ID，函数内没有与当前会话用户比较。", "从服务端会话获取用户 ID，或在查询中同时绑定资源所有者并拒绝越权对象。",
+                ))
+            exposure = re.search(r"\.findAll\s*\(\s*\{\s*\}\s*\)", function_text)
+            if exposure and re.search(r"\.json\s*\([\s\S]{0,300}\busers\b", function_text, re.IGNORECASE):
+                findings.append(_javascript_project_finding(
+                    "SAST.DATA.FULL_USER_OBJECT_RESPONSE", "接口返回完整用户对象", Severity.high,
+                    relative_path, handler_line + function_text.count("\n", 0, exposure.start()), exposure.group(0), "sensitive_data_exposure", "CWE-200", "A01:2021 Broken Access Control",
+                    "用户查询没有限制返回字段，随后把完整对象发送给客户端，可能暴露密码哈希等敏感属性。", "数据库查询仅选择业务必需字段，并在响应 DTO 中明确允许输出的属性。",
+                ))
+    combined = "\n".join(sources.values())
+    if re.search(r"passport\.authenticate\s*\(\s*['\"]login['\"]", combined, re.IGNORECASE) and not re.search(r"\b(?:winston|pino|bunyan)\b|logger\s*\.\s*(?:warn|error|info)\s*\(", combined, re.IGNORECASE):
+        route_file, route_source = next(((path, text) for path, text in sources.items() if "passport.authenticate('login'" in text or 'passport.authenticate("login"' in text), (next(iter(sources), root), ""))
+        match = re.search(r"passport\.authenticate\s*\(\s*['\"]login['\"]", route_source, re.IGNORECASE)
+        if match and route_file != root:
+            findings.append(_javascript_project_finding(
+                "SAST.LOGGING.AUTH_EVENTS_NOT_AUDITED", "认证事件缺少安全审计日志", Severity.medium,
+                route_file.relative_to(root).as_posix(), route_source.count("\n", 0, match.start()) + 1, match.group(0), "logging", "CWE-778", "A09:2021 Security Logging and Monitoring Failures",
+                "项目包含登录流程，但未发现结构化安全日志记录器对成功/失败认证事件进行审计。", "记录登录成功、失败、密码重置和高价值操作，并配置集中存储、告警与留存策略。",
+            ))
+    return findings
+
+
+def _javascript_project_finding(rule_id: str, title: str, severity: Severity, file_path: str, line: int, evidence: str, category: str, cwe: str, owasp: str, description: str, remediation: str) -> ParsedFinding:
+    return ParsedFinding(
+        rule_id=rule_id, title=title, severity=severity, file_path=file_path,
+        line_start=line, line_end=line, evidence=redact_evidence(evidence.strip()),
+        category=category, cwe=cwe, owasp=owasp, description=description,
+        remediation=remediation, language="JavaScript",
+    )
+
+
 def _collect_function_sinks(tree: ast.Module, module: str) -> list[_FunctionSink]:
     collected: list[_FunctionSink] = []
     for function in (node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
@@ -239,7 +312,8 @@ def _scan_javascript(file_path: Path, relative_path: str) -> list[ParsedFinding]
         sink = _javascript_sink_kind(lowered)
         if sink is None:
             continue
-        tainted_input = any(re.search(rf"\b{re.escape(name)}\b", line) for name in tainted) or any(marker in lowered for marker in SOURCE_MARKERS)
+        code_without_strings = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", "", line)
+        tainted_input = any(re.search(rf"\b{re.escape(name)}\b", code_without_strings) for name in tainted) or any(marker in lowered for marker in SOURCE_MARKERS)
         if tainted_input and not any(marker in lowered for marker in SANITIZER_MARKERS):
             title, cwe, owasp, severity, remediation = SINKS[sink]
             findings.append(ParsedFinding(

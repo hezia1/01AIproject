@@ -896,10 +896,35 @@ class DastBusinessCandidate(BaseModel):
     line_start: int | None = None
     line_end: int | None = None
     evidence: str | None = None
-    attack_surface: dict[str, list[str]] = Field(default_factory=lambda: {"urls": [], "methods": [], "parameters": []})
+    attack_surface: dict[str, object] = Field(default_factory=lambda: {"urls": [], "methods": [], "parameters": [], "injection_points": []})
     preconditions: dict[str, list[str]] = Field(default_factory=lambda: {"required_roles": [], "required_fixtures": [], "business_notes": []})
     missing: list[str] = Field(default_factory=list)
     requires_human_input: bool = True
+    readiness: str = "blocked"
+    target_status: str = "not_configured"
+    recommended_strategy_id: str = "web-baseline"
+    recommended_strategy_name: str = "Web 暴露面基线"
+    strategy_description: str = ""
+    strategy_match: str = "builtin"
+    evidence_requirements: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=list)
+    auto_filled: list[str] = Field(default_factory=list)
+    validation_status: str = "unverified"
+    validation_count: int = 0
+    latest_flow_id: UUID | None = None
+    latest_run_id: UUID | None = None
+    latest_run_status: str | None = None
+    latest_verdict: DastVerdict | None = None
+    latest_verdict_reason: str | None = None
+    latest_verified_at: datetime | None = None
+
+
+class DastAssetDiscoveryRequest(BaseModel):
+    target_url: str = Field(min_length=1, max_length=1000)
+    target_confirmation: str = Field(min_length=1, max_length=1400)
+    max_pages: int = Field(default=12, ge=1, le=30)
+    credential_ref: str | None = Field(default=None, max_length=160, pattern=r"^env:[A-Za-z_][A-Za-z0-9_]*$")
+    allowed_paths: list[str] = Field(default_factory=list, max_length=100)
 
 
 class DastBusinessFlowCreate(BaseModel):
@@ -986,6 +1011,95 @@ class DastBusinessDraftRequest(BaseModel):
     target_description: str = Field(min_length=1, max_length=4000)
     confirmation_phrase: str = Field(min_length=1, max_length=200)
 
+
+class DastSandboxRunCreate(BaseModel):
+    operator: str = Field(min_length=1, max_length=120)
+
+
+class DastSandboxResult(BaseModel):
+    task_id: UUID
+    strategy_id: UUID
+    callback_token: str = Field(min_length=32, max_length=200)
+    execution_id: str = Field(min_length=1, max_length=200)
+    status: str
+    capabilities: list[str] = Field(default_factory=list)
+    evidence: list[dict[str, object]] = Field(default_factory=list, max_length=200)
+    verdict_signal: DastVerdict | None = None
+    verdict_reason: str | None = Field(default=None, max_length=6000)
+
+
+class SandboxTargetCreate(BaseModel):
+    mode: str = Field(pattern="^(external|docker)$")
+    runtime_url: str | None = Field(default=None, max_length=1000)
+    image: str | None = Field(default=None, max_length=300)
+    command: str | None = Field(default=None, max_length=1000)
+    container_port: int | None = Field(default=None, ge=1, le=65535)
+    health_path: str = Field(default="/", min_length=1, max_length=300)
+    operator: str = Field(min_length=1, max_length=120)
+    operator_confirmed: bool = False
+    browser_session_id: UUID | None = None
+
+
+class SandboxTargetInstance(BaseModel):
+    id: UUID
+    project_id: UUID
+    mode: str
+    status: str
+    runtime_url: str
+    internal_url: str | None = None
+    image: str | None = None
+    command: str | None = None
+    container_port: int | None = None
+    health_path: str
+    health_detail: dict[str, object] = Field(default_factory=dict)
+    policy: dict[str, object] = Field(default_factory=dict)
+    operator: str
+    expires_at: datetime | None = None
+    stopped_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SandboxTask(BaseModel):
+    id: UUID
+    project_id: UUID
+    target_instance_id: UUID | None = None
+    source_module: str
+    source_task_id: str
+    strategy_id: str
+    finding_id: UUID | None = None
+    status: str
+    required_capabilities: list[str] = Field(default_factory=list)
+    contract: dict[str, object] = Field(default_factory=dict)
+    execution_id: str | None = None
+    evidence: list[dict[str, object]] = Field(default_factory=list)
+    result_summary: str | None = None
+    error: str | None = None
+    operator: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SandboxTaskEvent(BaseModel):
+    id: UUID
+    task_id: UUID
+    state: str
+    status: str
+    detail: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class SandboxTaskExecute(BaseModel):
+    operator: str = Field(min_length=1, max_length=120)
+    target_instance_id: UUID | None = None
+
+
+class SandboxTaskCancel(BaseModel):
+    operator: str = Field(min_length=1, max_length=120)
+    reason: str = Field(default="操作员取消", min_length=1, max_length=1000)
+
 class SandboxEvidenceCreate(BaseModel):
     project_id: UUID
     run_command: str = Field(min_length=1, max_length=1000)
@@ -1057,6 +1171,7 @@ class SandboxCommandTemplate(BaseModel):
     image: str
     risk_level: str
     description: str
+    container_port: int | None = None
 
 
 class AttackChainStep(BaseModel):

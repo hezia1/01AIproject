@@ -69,6 +69,8 @@ def create_db_schema() -> None:
         connection.execute(text("ALTER TABLE dast_validations ADD COLUMN IF NOT EXISTS component_id UUID"))
         connection.execute(text("ALTER TABLE dast_validations ADD COLUMN IF NOT EXISTS link_source VARCHAR(40) NOT NULL DEFAULT 'unlinked'"))
         connection.execute(text("ALTER TABLE dast_validations ADD COLUMN IF NOT EXISTS link_confidence INTEGER NOT NULL DEFAULT 0"))
+        connection.execute(text("ALTER TABLE dast_validations ADD COLUMN IF NOT EXISTS validation_mode VARCHAR(80) NOT NULL DEFAULT 'manual_validation'"))
+        connection.execute(text("ALTER TABLE dast_validations ADD COLUMN IF NOT EXISTS connection_confirmed BOOLEAN NOT NULL DEFAULT FALSE"))
         connection.execute(text("ALTER TABLE sandbox_evidence ADD COLUMN IF NOT EXISTS finding_id UUID"))
         connection.execute(text("ALTER TABLE sandbox_evidence ADD COLUMN IF NOT EXISTS component_id UUID"))
         connection.execute(text("ALTER TABLE sandbox_evidence ADD COLUMN IF NOT EXISTS validation_id UUID"))

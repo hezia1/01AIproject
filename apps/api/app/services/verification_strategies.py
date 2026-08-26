@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.db_models import FindingRecord
 from app.models import DastVerificationStrategy
+from app.services.dast_candidate_adapter import TEMPLATES, classify_vulnerability
 
 
 WEB_BASELINE = DastVerificationStrategy(
@@ -32,12 +33,38 @@ COMPONENT_EXPOSURE = DastVerificationStrategy(
 )
 
 
+SPECIALIZED_STRATEGIES = tuple(
+    DastVerificationStrategy(
+        id=item.id,
+        name=item.name,
+        description=item.description,
+        scope_summary="仅用于已授权且与项目配置同源的目标；执行器遵守方法、路径、速率和禁止业务副作用约束。",
+        check_items=list(item.evidence_requirements),
+        limitations=["证据不足时只能裁决为不确定。", "涉及登录态、浏览器或外带回调时，缺少对应运行配置会阻止执行。"],
+    )
+    for item in TEMPLATES
+    if item.id not in {"web-baseline", "component-exposure"}
+)
+
+
+def _preferred_strategy_id(finding: FindingRecord) -> str:
+    if getattr(finding, "source", "") == "SCA":
+        return "component-exposure"
+    raw_review = getattr(finding, "ai_review", None)
+    review = raw_review if isinstance(raw_review, dict) else {}
+    vulnerability_type = classify_vulnerability(
+        str(getattr(finding, "source", "")), str(getattr(finding, "rule_id", "")), str(getattr(finding, "title", "")), review
+    )
+    template = next((item for item in TEMPLATES if vulnerability_type in item.vulnerability_types), None)
+    return template.id if template else "runtime-exposure"
+
+
 def recommended_dast_strategies(finding: FindingRecord | None = None) -> list[DastVerificationStrategy]:
-    if finding and finding.source == "SCA":
-        return [COMPONENT_EXPOSURE, WEB_BASELINE, RUNTIME_EXPOSURE]
+    all_strategies = [*SPECIALIZED_STRATEGIES, COMPONENT_EXPOSURE, WEB_BASELINE, RUNTIME_EXPOSURE]
     if finding:
-        return [RUNTIME_EXPOSURE, WEB_BASELINE, COMPONENT_EXPOSURE]
-    return [WEB_BASELINE, RUNTIME_EXPOSURE, COMPONENT_EXPOSURE]
+        preferred = _preferred_strategy_id(finding)
+        return sorted(all_strategies, key=lambda item: (item.id != preferred, item.name))
+    return all_strategies
 
 
 def resolve_dast_strategy(strategy_id: str, finding: FindingRecord | None = None) -> DastVerificationStrategy:

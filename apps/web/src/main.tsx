@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { Activity, ArrowRight, BookOpen, Boxes, Bug, Check, FlaskConical, FolderKanban, GitBranch, Lock, Network, Play, Plus, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Activity, ArrowRight, BookOpen, Boxes, Bug, Check, FlaskConical, FolderKanban, GitBranch, LoaderCircle, Lock, Network, Play, Plus, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import "./styles.css";
 
 type ViewKey = "projects" | "assets" | "detection" | "governance" | "knowledge" | "modules" | "sca" | "sast" | "agent" | "dast" | "sandbox" | "tasks" | "aspm";
@@ -9,6 +9,7 @@ type ExecutableModuleKey = Exclude<ModuleKey, "aspm">;
 type ModuleLoadingState = Record<ExecutableModuleKey, boolean>;
 type Severity = "critical" | "high" | "medium" | "low" | "info";
 type FindingStatus = "open" | "pending" | "confirmed" | "fixing" | "fixed" | "accepted_risk" | "false_positive" | "retest" | "closed";
+const LAST_PROJECT_STORAGE_KEY = "ai-security-platform:last-project-id";
 
 type SecurityModule = { key: ModuleKey; code: string; name: string; subtitle: string; category: string; description: string; capabilities: { title: string; description: string }[]; dependencies: ModuleKey[]; default_config: Record<string, unknown> };
 type Project = { id: string; name: string; business_owner: string | null; security_owner: string | null; repository_url: string | null; source_path: string | null; runtime_url: string | null; api_base_url: string | null; sandbox_command: string | null; sandbox_image: string | null; default_branch: string; risk_score: number; created_at: string };
@@ -60,14 +61,23 @@ type ManualDastValidationDraft = { target_url: string; verdict: "exploitable" | 
 type DastVerificationPlan = { id: string; project_id: string; finding_id?: string | null; component_id?: string | null; title: string; target_url: string; authorized_scope: string; allowed_paths: string[]; allowed_methods: string[]; strategy_id: string; strategy_name?: string | null; limitations?: string | null; requester: string; approval_status: "draft" | "approved" | "archived"; approval_reference?: string | null; approved_by?: string | null; approved_at?: string | null; created_at: string };
 type DastVerificationRun = { id: string; project_id: string; plan_id: string; validation_id?: string | null; status: "prepared" | "evidence_recorded" | "reviewed"; execution_mode: "documentation_only"; operator: string; purpose?: string | null; started_at: string; completed_at?: string | null; created_at: string };
 type DastRunEvidence = { id: string; project_id: string; plan_id: string; run_id: string; evidence_type: string; content_summary: string; content_hash: string; source_reference?: string | null; collected_by?: string | null; redaction_applied: boolean; created_at: string };
-type DastBusinessCandidate = { id: string; source: "SCA" | "SAST" | "AGENT"; scan_task_id?: string | null; rule_id: string; title: string; severity: Severity; vulnerability_type: string; cwe?: string | null; file_path?: string | null; line_start?: number | null; line_end?: number | null; evidence?: string | null; attack_surface: { urls: string[]; methods: string[]; parameters: string[] }; preconditions: { required_roles: string[]; required_fixtures: string[]; business_notes: string[] }; missing: string[]; requires_human_input: boolean };
-type DastBusinessFlow = { id: string; project_id: string; finding_id?: string | null; name: string; target_url: string; flow_mode: "api" | "browser" | "hybrid"; strategy_source: "manual" | "recorded" | "template" | "ai_draft"; authorized_scope: string; allowed_paths: string[]; roles: Record<string, unknown>[]; steps: Record<string, unknown>[]; sufficiency_criteria: Record<string, unknown>; requester: string; status: "draft" | "approved" | "archived"; approval_reference?: string | null; approved_by?: string | null; approved_at?: string | null; created_at: string };
-type DastBusinessRun = { id: string; project_id: string; flow_id: string; status: string; execution_mode: "dry_run" | "api_execution"; operator: string; verdict?: "exploitable" | "not_exploitable" | "uncertain" | null; verdict_reason?: string | null; started_at?: string | null; completed_at?: string | null; created_at: string };
+type DastBusinessCandidate = { id: string; source: "SAST" | "AGENT"; scan_task_id?: string | null; rule_id: string; title: string; severity: Severity; vulnerability_type: string; cwe?: string | null; file_path?: string | null; line_start?: number | null; line_end?: number | null; evidence?: string | null; attack_surface: { urls: string[]; methods: string[]; parameters: string[]; injection_points?: { name: string; location: string }[] }; preconditions: { required_roles: string[]; required_fixtures: string[]; business_notes: string[] }; missing: string[]; requires_human_input: boolean; readiness: "ready" | "needs_context" | "blocked"; target_status: "configured" | "not_configured"; recommended_strategy_id: string; recommended_strategy_name: string; strategy_description: string; strategy_match: "builtin" | "ai_required"; evidence_requirements: string[]; required_capabilities: string[]; auto_filled: string[]; validation_status: "unverified" | "verifying" | "verified" | "failed"; validation_count: number; latest_flow_id?: string | null; latest_run_id?: string | null; latest_run_status?: string | null; latest_verdict?: "exploitable" | "not_exploitable" | "uncertain" | null; latest_verdict_reason?: string | null; latest_verified_at?: string | null };
+type DastBusinessFlow = { id: string; project_id: string; finding_id?: string | null; name: string; target_url: string; flow_mode: "api" | "browser" | "hybrid"; strategy_source: "manual" | "recorded" | "template" | "ai_draft" | "learned_template"; authorized_scope: string; allowed_paths: string[]; roles: Record<string, unknown>[]; steps: Record<string, unknown>[]; sufficiency_criteria: Record<string, unknown>; requester: string; status: "draft" | "approved" | "archived"; approval_reference?: string | null; approved_by?: string | null; approved_at?: string | null; created_at: string };
+type DastBusinessRun = { id: string; project_id: string; flow_id: string; status: string; execution_mode: "dry_run" | "api_execution" | "sandbox_handoff"; operator: string; verdict?: "exploitable" | "not_exploitable" | "uncertain" | null; verdict_reason?: string | null; started_at?: string | null; completed_at?: string | null; created_at: string };
 type DastBusinessSnapshot = { id: string; project_id: string; flow_id: string; run_id: string; step_id: string; step_kind: string; role_alias?: string | null; status: string; request_summary?: string | null; response_summary?: string | null; detail: Record<string, unknown>; evidence_hash: string; created_at: string };
-type DastReport = { schema: string; generated_at: string; project_id: string; summary: { record_count: number; automated_baseline_count: number; manual_validation_count: number; linked_record_count: number; by_verdict: Record<string, number>; verification_plan_count: number; approved_plan_count: number; documentation_run_count: number; reviewed_run_count: number; evidence_item_count: number }; records: DastValidation[]; verification_plans: DastVerificationPlan[]; verification_runs: DastVerificationRun[]; evidence_index: DastRunEvidence[]; capability_boundaries: string[] };
+type DastDiscovery = { task_id: string; status: string; target_url: string; urls: string[]; forms: { form_id: string; action: string; method: string; parameters: Record<string, unknown>[]; source_url: string }[]; api_urls: string[]; parameters: Record<string, unknown>[]; request_logs: { request_id: string; method: string; url: string; status_code?: number; status?: string; duration_ms: number; response_bytes: number }[]; environment: Record<string, unknown>; errors: string[]; scope: Record<string, unknown> };
+type DastReport = { schema: string; generated_at: string; project_id: string; summary: { record_count: number; automated_baseline_count: number; manual_validation_count: number; linked_record_count: number; by_verdict: Record<string, number>; verification_plan_count: number; approved_plan_count: number; documentation_run_count: number; reviewed_run_count: number; evidence_item_count: number; business_flow_count?: number; business_run_count?: number; tri_color?: { total: number; exploitable: number; uncertain: number; not_exploitable: number }; unverified_count?: number; execution_status?: Record<string, number>; evidence_coverage?: Record<string, number> }; records: DastValidation[]; verification_plans: DastVerificationPlan[]; verification_runs: DastVerificationRun[]; evidence_index: DastRunEvidence[]; vulnerability_details?: Record<string, unknown>[]; execution_log_summary?: Record<string, unknown>[]; capability_boundaries: string[] };
+type DastPreflight = { status: "ready" | "blocked" | "waiting_sandbox"; can_execute_local: boolean; can_handoff_sandbox: boolean; required_capabilities: string[]; checks: { code: string; label: string; status: "passed" | "blocked" | "waiting"; detail: string; remediation?: string | null }[] };
 type SandboxExecutionPlan = { strategyName: string; purpose: string; limitations: string };
 type SandboxEvidence = { id: string; finding_id?: string | null; component_id?: string | null; validation_id?: string | null; link_source: string; link_confidence: number; run_command: string; runtime_profile: string | null; network_policy: string; filesystem_policy: string; observed_files: Record<string, unknown>[]; observed_network: Record<string, unknown>[]; observed_processes: Record<string, unknown>[]; observed_tool_calls: Record<string, unknown>[]; evidence_summary: string | null; operator: string | null; strategy_name?: string | null; purpose?: string | null; limitations?: string | null; created_at: string };
-type SandboxTemplate = { name: string; command: string; command_type: string; image: string; risk_level: string; description: string };
+type SandboxTemplate = { name: string; command: string; command_type: string; image: string; risk_level: string; description: string; container_port?: number | null };
+type SandboxSupportService = { name: string; kind: string; image: string; source: string; healthcheck: string };
+type SandboxLaunchCandidate = { name: string; image: string; command: string; container_port: number; health_path: string; source: string; source_subdir?: string; confidence: number; rationale: string; approved: boolean; services?: SandboxSupportService[] };
+type SandboxLaunchPlan = { schema: string; project_id?: string; status: string; recommended: SandboxLaunchCandidate | null; candidates: SandboxLaunchCandidate[]; orchestration?: { mode: "single_service" | "multi_service"; support_services: SandboxSupportService[] }; ai: { status: string; configured: boolean; model?: string | null; rationale?: string | null; missing_services?: string[]; environment_variables?: string[] }; message: string };
+type SandboxCapabilityHealth = { status: string; docker: { available: boolean; ready: boolean; detail: string }; executor_image: string; browser_image: string; capabilities: Record<string, { status: string; detail: string }>; checked_at: string };
+type SandboxTarget = { id: string; project_id: string; mode: "external" | "docker"; status: string; runtime_url: string; internal_url: string | null; image: string | null; command: string | null; container_port: number | null; health_path: string; health_detail: Record<string, unknown>; policy: Record<string, unknown>; operator: string; expires_at: string | null; stopped_at: string | null; created_at: string; updated_at: string };
+type SandboxTask = { id: string; project_id: string; target_instance_id: string | null; source_module: string; source_task_id: string; strategy_id: string; finding_id: string | null; status: string; required_capabilities: string[]; contract: Record<string, unknown>; execution_id: string | null; evidence: Record<string, unknown>[]; result_summary: string | null; error: string | null; operator: string | null; started_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
+type SandboxTaskEvent = { id: string; task_id: string; state: string; status: string; detail: Record<string, unknown>; created_at: string };
 type AttackChainStep = { module: string; title: string; evidence: string | null; node_id?: string | null; relation_type?: string | null; confidence?: number | null; created_at?: string | null };
 type AttackChain = { id: string; name: string; severity: Severity; modules: string[]; evidence_count: number; confidence: number; correlation_basis: string[]; summary: string; recommended_action: string; steps: AttackChainStep[] };
 type EvidenceGraphNode = { id: string; kind: string; module: string; label: string; severity?: Severity | null; status?: string | null; detail?: string | null; created_at?: string | null };
@@ -153,12 +163,46 @@ const DEFAULT_SOURCE_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\sc
 const DEFAULT_SAST_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\sast-sample";
 const DEFAULT_AGENT_PATH = "D:\\project\\PYproject\\AI网安项目\\outputs\\agent-sample";
 const FINDING_WORKFLOW_STATUSES: FindingStatus[] = ["open", "confirmed", "fixing", "fixed", "accepted_risk", "false_positive"];
+const SANDBOX_BROWSER_SESSION_KEY = "ai-security-platform:sandbox-browser-session";
+const SANDBOX_UNLOAD_PROJECTS_KEY = "ai-security-platform:sandbox-unload-projects";
+const SANDBOX_BROWSER_SESSION_ID = (() => {
+  try {
+    const existing = window.sessionStorage.getItem(SANDBOX_BROWSER_SESSION_KEY);
+    if (existing) return existing;
+    const created = window.crypto.randomUUID();
+    window.sessionStorage.setItem(SANDBOX_BROWSER_SESSION_KEY, created);
+    return created;
+  } catch { return window.crypto.randomUUID(); }
+})();
+const sandboxUnloadProjects = (() => {
+  try { return new Set<string>(JSON.parse(window.sessionStorage.getItem(SANDBOX_UNLOAD_PROJECTS_KEY) ?? "[]") as string[]); }
+  catch { return new Set<string>(); }
+})();
+
+function registerSandboxUnloadProject(projectId: string) {
+  sandboxUnloadProjects.add(projectId);
+  try { window.sessionStorage.setItem(SANDBOX_UNLOAD_PROJECTS_KEY, JSON.stringify([...sandboxUnloadProjects])); }
+  catch { /* Page-close cleanup still works with the in-memory registry. */ }
+}
+
+function stopSandboxBrowserSessionTargets() {
+  for (const projectId of sandboxUnloadProjects) {
+    const url = `${API_BASE}/sandbox/projects/${projectId}/browser-sessions/${SANDBOX_BROWSER_SESSION_ID}/stop`;
+    if (!navigator.sendBeacon(url)) void fetch(url, { method: "POST", keepalive: true }).catch(() => undefined);
+  }
+}
+
+type ProjectResource<T> = { value: T; warning: string | null };
+async function captureProjectResource<T>(label: string, operation: Promise<T>, fallback: T): Promise<ProjectResource<T>> {
+  try { return { value: await operation, warning: null }; }
+  catch (error) { console.error(`项目资源加载失败：${label}`, error); return { value: fallback, warning: label }; }
+}
 
 const fallbackModules: SecurityModule[] = [
   { key: "sast", code: "SAST", name: "智能静态审计", subtitle: "定制化安全 Skill + 多 Sub-agent 编排 + 行业历史漏洞知识库", category: "detection", description: "面向代码仓库执行智能静态审计，将规则扫描、AI 审计、历史漏洞经验和多 Agent 复核组合为代码风险发现能力。", capabilities: [{ title: "定制化安全 Skill", description: "按行业、框架和业务场景生成审计策略。" }, { title: "多 Sub-agent 编排", description: "发现、复核、证据和修复建议分工协同。" }, { title: "行业历史漏洞知识库", description: "沉淀通用漏洞、业务漏洞和误报经验。" }], dependencies: [], default_config: {} },
   { key: "sca", code: "SCA", name: "供应链风险分析", subtitle: "SBOM + 组件漏洞匹配 + 许可证风险归一化 + 依赖影响分析", category: "detection", description: "解析多语言工程依赖，生成 SBOM，识别漏洞、许可证和直接/传递依赖风险，并给出修复优先级。", capabilities: [{ title: "SBOM 生成", description: "生成项目组件清单和依赖来源。" }, { title: "组件漏洞匹配", description: "匹配 CVE、受影响版本和修复版本。" }, { title: "许可证风险归一化", description: "识别许可证类型并归一化风险等级。" }, { title: "依赖影响分析", description: "分析直接/传递依赖、版本归一化和修复影响。" }], dependencies: [], default_config: {} },
   { key: "agent", code: "AGENT", name: "Agent 供应链安全", subtitle: "统一资产模型 + 能力权限矩阵 + 语义差异", category: "detection", description: "结构化解析 Agent 指令、MCP、工具和插件配置，形成资产、能力、资源范围、审批边界和批次变化。", capabilities: [{ title: "多格式资产解析", description: "解析 Markdown Frontmatter、JSON、YAML 与 TOML。" }, { title: "能力权限矩阵", description: "归一化工具、文件、网络、命令、凭据和审批边界。" }, { title: "证据脱敏", description: "保存发现和快照前遮蔽凭据和值。" }, { title: "语义差异", description: "比较资产新增/移除、配置变化与权限扩大/收缩。" }], dependencies: [], default_config: {} },
-  { key: "dast", code: "DAST", name: "漏洞动态验证", subtitle: "受控 Web 基础观察 + 风险关联建议 + 人工三态裁决", category: "validation", description: "对已确认的项目运行地址执行一次无认证 Web 基础观察，并将人工验证记录关联至上游风险；自动观察不构成漏洞可利用性裁决。", capabilities: [{ title: "Web 基础观察", description: "仅对已确认的同源项目目标发送一次无认证 GET。" }, { title: "风险关联建议", description: "按 URL 与风险元数据提供需人工确认的关联建议。" }, { title: "人工三态裁决", description: "人工验证可记录可利用、不确定或限定范围内未复现。" }, { title: "结构化观察摘要", description: "保存状态、耗时与响应头摘要，不保存截图或原始响应正文。" }], dependencies: ["sast"], default_config: {} },
+  { key: "dast", code: "DAST", name: "漏洞动态验证", subtitle: "SAST / AGENT 联动 + 专用策略 + 证据驱动三色裁决", category: "validation", description: "把当前项目的 SAST/AGENT 漏洞自动转换为运行时验证策略，经审批后由 DAST 有界 HTTP 执行器或 SANDBOX 隔离执行器完成验证、证据归档和报告。", capabilities: [{ title: "运行资产发现", description: "同源抓取 URL、表单、JavaScript API 和 OpenAPI 参数并持久化。" }, { title: "专用验证策略", description: "SQL 注入、XSS、越权、SSRF、命令注入等类型使用独立证据规则。" }, { title: "隔离执行合同", description: "浏览器、OAST、时延和 Agent 运行验证通过一次性 SANDBOX 合同交接。" }, { title: "证据驱动裁决", description: "可利用、不确定、不可利用与未验证分开统计并生成专项报告。" }], dependencies: ["sast"], default_config: {} },
   { key: "sandbox", code: "SANDBOX", name: "沙箱动态证据链", subtitle: "隔离环境 + 行为监控 + 调用账本 + AI 驱动动态验证", category: "evidence", description: "在隔离环境中运行目标程序、插件或 Agent，采集文件、网络、进程、工具调用和运行时行为证据。", capabilities: [{ title: "隔离环境", description: "以容器或受控运行时隔离目标执行。" }, { title: "行为监控", description: "监控文件访问、网络连接、进程启动和环境变量读取。" }, { title: "调用账本", description: "结构化采集 Agent 工具调用和运行时覆盖。" }, { title: "策略化探测", description: "适配多类 Agent 运行时并支持 AI 驱动验证。" }], dependencies: ["agent"], default_config: {} },
   { key: "aspm", code: "ASPM", name: "平台治理与交付", subtitle: "项目组 + 攻击链 + 风险趋势 + 整改闭环 + 安全门禁", category: "governance", description: "聚合各模块结果，提供跨项目关联、攻击链、风险趋势、整改闭环、开放接口、流水线门禁和合规报告。", capabilities: [{ title: "风险治理", description: "管理项目组、跨项目关联、攻击链、风险趋势和整改闭环。" }, { title: "开放接口", description: "提供开放工具接口、批量任务和研发流水线安全门禁。" }, { title: "权限与配额", description: "管理模块权限、授权配额和审计日志。" }, { title: "交付报告", description: "输出诊断导出、合规报告和治理看板。" }], dependencies: [], default_config: {} },
 ];
@@ -166,6 +210,13 @@ const fallbackModules: SecurityModule[] = [
 const moduleIcons: Record<ModuleKey, React.ReactNode> = { sast: <Bug size={20} />, sca: <Boxes size={20} />, agent: <Network size={20} />, dast: <Activity size={20} />, sandbox: <FlaskConical size={20} />, aspm: <ShieldCheck size={20} /> };
 
 function Root() {
+  useEffect(() => {
+    let dispatched = false;
+    const cleanup = () => { if (!dispatched) { dispatched = true; stopSandboxBrowserSessionTargets(); } };
+    window.addEventListener("pagehide", cleanup);
+    window.addEventListener("beforeunload", cleanup);
+    return () => { window.removeEventListener("pagehide", cleanup); window.removeEventListener("beforeunload", cleanup); };
+  }, []);
   return <App />;
 }
 
@@ -218,6 +269,8 @@ function App() {
   const [moduleLoading, setModuleLoading] = useState<ModuleLoadingState>(EMPTY_MODULE_LOADING);
   const unifiedLoadingRef = React.useRef(false);
   const moduleLoadingRef = React.useRef<ModuleLoadingState>({ ...EMPTY_MODULE_LOADING });
+  const projectSwitchEpochRef = React.useRef(0);
+  const activeProjectIdRef = React.useRef<string | null>(null);
   const [savingKey, setSavingKey] = useState<ModuleKey | null>(null);
   const anyModuleLoading = Object.values(moduleLoading).some(Boolean);
   const projectControlsLoading = loading || unifiedLoading || anyModuleLoading;
@@ -239,6 +292,7 @@ function App() {
   useEffect(() => { void bootstrap(); }, []);
   useEffect(() => {
     if (!project || (activeView !== "dast" && activeView !== "sandbox")) return;
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       const path = activeView === "dast" ? "/dast/link-suggestions" : "/sandbox/link-suggestions";
       const body = activeView === "dast"
@@ -251,6 +305,7 @@ function App() {
           };
       void request<LinkSuggestion[]>(path, { method: "POST", body: JSON.stringify(body) })
         .then((items) => {
+          if (cancelled) return;
           if (activeView === "dast") setDastLinkSuggestions(items);
           else setSandboxLinkSuggestions(items);
           const top = items[0];
@@ -262,23 +317,27 @@ function App() {
           }
         })
         .catch((error) => {
+          if (cancelled) return;
           console.error(error);
           if (activeView === "dast") setDastLinkSuggestions([]);
           else setSandboxLinkSuggestions([]);
         });
     }, 350);
-    return () => window.clearTimeout(timer);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [activeView, project?.id, targetUrl, runCommand]);
 
   useEffect(() => {
     if (!project || !enabledModules.has("dast")) { setDastStrategies([]); return; }
+    let cancelled = false;
     const findingQuery = correlationFindingId ? `?finding_id=${correlationFindingId}` : "";
     void request<DastStrategy[]>(`/dast/projects/${project.id}/strategies${findingQuery}`)
       .then((items) => {
+        if (cancelled) return;
         setDastStrategies(items);
         if (items.length && !items.some((item) => item.id === dastStrategyId)) setDastStrategyId(items[0].id);
       })
-      .catch(() => setDastStrategies([]));
+      .catch(() => { if (!cancelled) setDastStrategies([]); });
+    return () => { cancelled = true; };
   }, [project?.id, correlationFindingId, enabledModules, dastStrategyId]);
 
   const optionalModules = useMemo(() => modules.filter((module) => OPTIONAL_MODULES.includes(module.key)), [modules]);
@@ -298,12 +357,16 @@ function App() {
       const projectData = await request<Project[]>("/projects");
       setProjects(projectData);
       if (projectData.length === 0) {
+        persistLastProjectId(null);
+        activeProjectIdRef.current = null;
+        projectSwitchEpochRef.current += 1;
         clearProjectData();
         setProject(null);
         setStatus("API 已连接，请先创建项目");
         return;
       }
-      const nextProject = projectData.find((item) => item.id === project?.id) ?? projectData[0];
+      const rememberedProjectId = activeProjectIdRef.current ?? project?.id ?? readLastProjectId();
+      const nextProject = projectData.find((item) => item.id === rememberedProjectId) ?? projectData[0];
       await selectProject(nextProject, projectData);
       setStatus("API 已连接，已加载当前项目数据");
     } catch (error) {
@@ -347,74 +410,83 @@ function App() {
   }
 
   async function selectProject(nextProject: Project, knownProjects = projects) {
+    const switchEpoch = ++projectSwitchEpochRef.current;
+    activeProjectIdRef.current = nextProject.id;
+    persistLastProjectId(nextProject.id);
     setLoading(true);
+    clearProjectData();
+    setProject(nextProject);
+    setProjects(knownProjects.length ? knownProjects : projects);
+    setSourcePath(nextProject.source_path ?? "");
+    setSastPath(nextProject.source_path ?? "");
+    setAgentPath(nextProject.source_path ?? "");
+    setTargetUrl(nextProject.runtime_url ?? nextProject.api_base_url ?? "");
+    setRunCommand(nextProject.sandbox_command ?? "");
+    setSandboxImage(nextProject.sandbox_image ?? "");
     try {
-      setCorrelationFindingId("");
-      setCorrelationComponentId("");
-      setCorrelationValidationId("");
-      setCorrelationLinkSource("unlinked");
-      setCorrelationLinkConfidence(0);
-      setDastLinkSuggestions([]);
-      setSandboxLinkSuggestions([]);
-      setProject(nextProject);
-      setProjects(knownProjects.length ? knownProjects : await request<Project[]>("/projects"));
-      if (nextProject.source_path) {
-        setSourcePath(nextProject.source_path);
-        setSastPath(nextProject.source_path);
-        setAgentPath(nextProject.source_path);
-      }
-      if (nextProject.runtime_url || nextProject.api_base_url) {
-        setTargetUrl(nextProject.runtime_url ?? nextProject.api_base_url ?? "");
-      }
-      if (nextProject.sandbox_command) setRunCommand(nextProject.sandbox_command);
-      if (nextProject.sandbox_image) setSandboxImage(nextProject.sandbox_image);
-      await refreshProjectContext(nextProject.id);
-      setStatus(`已切换到项目：${nextProject.name}`);
+      const nextProjects = knownProjects.length ? knownProjects : await request<Project[]>("/projects");
+      if (switchEpoch !== projectSwitchEpochRef.current) return;
+      setProjects(nextProjects);
+      const warnings = await refreshProjectContext(nextProject.id, null);
+      if (switchEpoch !== projectSwitchEpochRef.current) return;
+      setStatus(warnings.length ? `已切换到项目：${nextProject.name}；${warnings.join("、")}暂时不可用` : `已切换到项目：${nextProject.name}`);
     } catch (error) {
       console.error(error);
-      setStatus("项目切换失败");
+      if (switchEpoch === projectSwitchEpochRef.current) setStatus(`已切换到项目：${nextProject.name}，但项目数据暂时加载失败：${errorMessage(error)}`);
     } finally {
-      setLoading(false);
+      if (switchEpoch === projectSwitchEpochRef.current) setLoading(false);
     }
   }
 
-  async function refreshProjectContext(projectId = project?.id, scaScanId: string | null = selectedScaScanId) {
-    if (!projectId) return;
-    const [projectModules, probeData] = await Promise.all([
-      request<ProjectModule[]>(`/modules/projects/${projectId}`),
-      request<ProjectAssetProbe>(`/projects/${projectId}/asset-probe`),
+  async function refreshProjectContext(projectId = project?.id, scaScanId: string | null = selectedScaScanId): Promise<string[]> {
+    if (!projectId) return [];
+    const [moduleResource, probeResource] = await Promise.all([
+      captureProjectResource("模块配置", request<ProjectModule[]>(`/modules/projects/${projectId}`), []),
+      captureProjectResource<ProjectAssetProbe | null>("资产画像", request<ProjectAssetProbe>(`/projects/${projectId}/asset-probe`), null),
     ]);
-    if (!projectModules.some((item) => item.module_key === "aspm" && item.enabled)) {
-      await enableProjectModule(projectId, "aspm", true);
+    if (activeProjectIdRef.current !== projectId) return [];
+    const warnings = [moduleResource.warning, probeResource.warning].filter((item): item is string => Boolean(item));
+    const projectModules = moduleResource.value;
+    if (!moduleResource.warning && !projectModules.some((item) => item.module_key === "aspm" && item.enabled)) {
+      try { await enableProjectModule(projectId, "aspm", true); }
+      catch (error) { console.error("ASPM 自动接入失败", error); warnings.push("ASPM 配置"); }
     }
+    if (activeProjectIdRef.current !== projectId) return [];
     setEnabledModules(new Set([...projectModules.filter((item) => item.enabled).map((item) => item.module_key), "aspm"]));
-    setAssetProbe(probeData);
-    await refreshProjectData(projectId, scaScanId);
+    setAssetProbe(probeResource.value);
+    warnings.push(...await refreshProjectData(projectId, scaScanId));
+    return uniqueValues(warnings);
   }
 
-  async function refreshProjectData(projectId = project?.id, scaScanId: string | null = selectedScaScanId) {
-    if (!projectId) return;
-    const [historyData, agentHistoryData, agentSnapshotData, agentDiffData, agentAuditDiffData] = await Promise.all([
-      request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`).catch(() => []),
-      request<AgentScanHistoryItem[]>(`/agent/projects/${projectId}/scan-history`).catch(() => []),
-      request<AgentScanSnapshot>(`/agent/projects/${projectId}/snapshot`).catch(() => null),
-      request<AgentScanDiff>(`/agent/projects/${projectId}/scan-diff`).catch(() => null),
-      request<AgentOfflineAuditDiff>(`/agent/projects/${projectId}/audit-diff`).catch(() => null),
+  async function refreshProjectData(projectId = project?.id, scaScanId: string | null = selectedScaScanId): Promise<string[]> {
+    if (!projectId) return [];
+    const historyResources = await Promise.all([
+      captureProjectResource("SCA 扫描历史", request<ScaScanHistoryItem[]>(`/sca/projects/${projectId}/scan-history`), []),
+      captureProjectResource("AGENT 扫描历史", request<AgentScanHistoryItem[]>(`/agent/projects/${projectId}/scan-history`), []),
+      captureProjectResource<AgentScanSnapshot | null>("AGENT 快照", request<AgentScanSnapshot>(`/agent/projects/${projectId}/snapshot`), null),
+      captureProjectResource<AgentScanDiff | null>("AGENT 扫描差异", request<AgentScanDiff>(`/agent/projects/${projectId}/scan-diff`), null),
+      captureProjectResource<AgentOfflineAuditDiff | null>("AGENT 审计差异", request<AgentOfflineAuditDiff>(`/agent/projects/${projectId}/audit-diff`), null),
     ]);
+    if (activeProjectIdRef.current !== projectId) return [];
+    const [historyData, agentHistoryData, agentSnapshotData, agentDiffData, agentAuditDiffData] = historyResources.map((item) => item.value) as [ScaScanHistoryItem[], AgentScanHistoryItem[], AgentScanSnapshot | null, AgentScanDiff | null, AgentOfflineAuditDiff | null];
+    const warnings = historyResources.flatMap((item) => item.warning ? [item.warning] : []);
     const effectiveScaScanId = scaScanId ?? historyData[0]?.scan_task_id ?? null;
     const scaQuery = effectiveScaScanId ? `?scan_task_id=${effectiveScaScanId}` : "";
     const diffQuery = effectiveScaScanId ? `?target_scan_id=${effectiveScaScanId}` : "";
-    const [componentData, graphData, diffData, findingData, validationData, evidenceData, templateData, summaryData, evidenceGraphData] = await Promise.all([
-      request<Component[]>(`/sca/projects/${projectId}/components${scaQuery}`),
-      request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph${scaQuery}`).catch(() => null),
-      request<ScaScanDiff>(`/sca/projects/${projectId}/scan-diff${diffQuery}`).catch(() => null),
-      request<Finding[]>(`/findings?project_id=${projectId}`),
-      request<DastValidation[]>(`/dast/projects/${projectId}/validations`),
-      request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`),
-      request<SandboxTemplate[]>(`/sandbox/projects/${projectId}/templates`),
-      request<AspmSummary>(`/aspm/projects/${projectId}/summary`),
-      request<EvidenceGraph>(`/aspm/projects/${projectId}/evidence-graph`),
+    const dataResources = await Promise.all([
+      captureProjectResource("SCA 组件", request<Component[]>(`/sca/projects/${projectId}/components${scaQuery}`), []),
+      captureProjectResource<DependencyGraph | null>("依赖图", request<DependencyGraph>(`/sca/projects/${projectId}/dependency-graph${scaQuery}`), null),
+      captureProjectResource<ScaScanDiff | null>("SCA 扫描差异", request<ScaScanDiff>(`/sca/projects/${projectId}/scan-diff${diffQuery}`), null),
+      captureProjectResource("风险清单", request<Finding[]>(`/findings?project_id=${projectId}`), []),
+      captureProjectResource("DAST 验证", request<DastValidation[]>(`/dast/projects/${projectId}/validations`), []),
+      captureProjectResource("SANDBOX 证据", request<SandboxEvidence[]>(`/sandbox/projects/${projectId}/evidence`), []),
+      captureProjectResource("SANDBOX 模板", request<SandboxTemplate[]>(`/sandbox/projects/${projectId}/templates`), []),
+      captureProjectResource<AspmSummary | null>("治理摘要", request<AspmSummary>(`/aspm/projects/${projectId}/summary`), null),
+      captureProjectResource<EvidenceGraph | null>("证据图谱", request<EvidenceGraph>(`/aspm/projects/${projectId}/evidence-graph`), null),
     ]);
+    if (activeProjectIdRef.current !== projectId) return [];
+    const [componentData, graphData, diffData, findingData, validationData, evidenceData, templateData, summaryData, evidenceGraphData] = dataResources.map((item) => item.value) as [Component[], DependencyGraph | null, ScaScanDiff | null, Finding[], DastValidation[], SandboxEvidence[], SandboxTemplate[], AspmSummary | null, EvidenceGraph | null];
+    warnings.push(...dataResources.flatMap((item) => item.warning ? [item.warning] : []));
     setScaScanHistory(historyData);
     setAgentScanHistory(agentHistoryData);
     setAgentSnapshot(agentSnapshotData);
@@ -430,12 +502,16 @@ function App() {
     setSandboxTemplates(templateData);
     setSummary(summaryData);
     setEvidenceGraph(evidenceGraphData);
-    const [scaRetest, sastRetest, agentRetest] = await Promise.all([
-      request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SCA`).catch(() => null),
-      request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SAST`).catch(() => null),
-      request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=AGENT`).catch(() => null),
+    const retestResources = await Promise.all([
+      captureProjectResource<FindingRetestComparison | null>("SCA 复测", request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SCA`), null),
+      captureProjectResource<FindingRetestComparison | null>("SAST 复测", request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=SAST`), null),
+      captureProjectResource<FindingRetestComparison | null>("AGENT 复测", request<FindingRetestComparison>(`/findings/projects/${projectId}/retest-comparison?source=AGENT`), null),
     ]);
+    if (activeProjectIdRef.current !== projectId) return [];
+    const [scaRetest, sastRetest, agentRetest] = retestResources.map((item) => item.value) as [FindingRetestComparison | null, FindingRetestComparison | null, FindingRetestComparison | null];
+    warnings.push(...retestResources.flatMap((item) => item.warning ? [item.warning] : []));
     setRetestComparisons({ sca: scaRetest, sast: sastRetest, agent: agentRetest });
+    return uniqueValues(warnings);
   }
 
   async function refreshGovernanceOverview(projectId: string) {
@@ -573,6 +649,9 @@ function App() {
         if (projectData.length > 0) {
           await selectProject(projectData[0], projectData);
         } else {
+          activeProjectIdRef.current = null;
+          persistLastProjectId(null);
+          projectSwitchEpochRef.current += 1;
           setProject(null);
           clearProjectData();
         }
@@ -641,28 +720,7 @@ function App() {
     if (moduleKey === "dast") {
       return { status: "skipped", detail: "DAST 需要在治理页选择风险、核对同源项目目标并输入精确确认短语；一键执行不会发起网络请求。" };
     }
-    if (!runCommand.trim()) return { status: "skipped", detail: "未配置沙箱命令" };
-    const suggestions = await request<LinkSuggestion[]>("/sandbox/link-suggestions", {
-      method: "POST",
-      body: JSON.stringify({ project_id: project.id, run_command: runCommand }),
-    }).catch(() => []);
-    const recommendation = suggestions[0]?.confidence >= 80 ? suggestions[0] : null;
-    await request("/sandbox/run", {
-      method: "POST",
-      body: JSON.stringify({
-        project_id: project.id,
-        run_command: runCommand,
-        image: emptyToNull(sandboxImage),
-        timeout_seconds: 10,
-        operator: "module-retest-runner",
-        finding_id: recommendation?.finding_id ?? null,
-        component_id: recommendation?.component_id ?? null,
-        validation_id: recommendation?.validation_id ?? null,
-        link_source: recommendation ? `${recommendation.source}-confirmed` : "unlinked",
-        link_confidence: recommendation?.confidence ?? 0,
-      }),
-    });
-    return { status: "completed", detail: "沙箱执行完成，已保留新的运行证据" };
+    return { status: "skipped", detail: "SANDBOX 只接收 DAST 审批后自动入队的固定策略；请在治理页启动目标并执行队列任务。" };
   }
 
   async function runUnifiedSecurityCheck() {
@@ -857,14 +915,15 @@ function App() {
     if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.dast) return setStatus("DAST 已有任务正在执行");
     setModuleBusy("dast", true);
     try {
-      const report = await request<DastReport>(`/dast/projects/${project.id}/report`);
-      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+      const response = await fetch(`${API_BASE}/dast/projects/${project.id}/report.html`);
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${safeFilename(project.name)}-dast-report.json`;
+      link.download = `${safeFilename(project.name)}-dast-report.html`;
       link.click();
       URL.revokeObjectURL(url);
-      setStatus("DAST JSON 专项报告已导出；内容仅来自本地已保存记录，未连接目标");
+      setStatus("DAST HTML 专项报告已导出；内容仅来自已保存证据，导出过程不会连接目标");
     } catch (error) { console.error(error); setStatus(`DAST 报告导出失败：${errorMessage(error)}`); } finally { setModuleBusy("dast", false); }
   }
 
@@ -1082,7 +1141,7 @@ function ProjectAssetConfig({ project, loading, onSave }: { project: Project | n
     });
   }, [project?.id, project?.runtime_url, project?.api_base_url, project?.sandbox_command, project?.sandbox_image]);
 
-  return <section className="panel full asset-config"><div className="panel-header"><h2>项目资产配置</h2><span>{project ? "影响 DAST 与 SANDBOX 默认参数" : "请先选择项目"}</span></div><div className="asset-config-grid"><label>运行地址<input value={draft.runtime_url} onChange={(event) => setDraft({ ...draft, runtime_url: event.target.value })} placeholder="http://localhost:3000" disabled={!project || loading} /></label><label>API 地址<input value={draft.api_base_url} onChange={(event) => setDraft({ ...draft, api_base_url: event.target.value })} placeholder="http://localhost:3000/api" disabled={!project || loading} /></label><label>沙箱命令<input value={draft.sandbox_command} onChange={(event) => setDraft({ ...draft, sandbox_command: event.target.value })} placeholder="npm test" disabled={!project || loading} /></label><label>沙箱镜像<input value={draft.sandbox_image} onChange={(event) => setDraft({ ...draft, sandbox_image: event.target.value })} placeholder="node:20-alpine" disabled={!project || loading} /></label></div><div className="asset-config-actions"><button className="primary-action" disabled={!project || loading} onClick={() => void onSave(draft)}>保存资产配置</button></div></section>;
+  return <section className="panel full asset-config"><div className="panel-header"><h2>项目资产配置</h2><span>{project ? "影响 DAST 与 SANDBOX 默认参数" : "请先选择项目"}</span></div><div className="asset-config-grid"><label>运行地址<input value={draft.runtime_url} onChange={(event) => setDraft({ ...draft, runtime_url: event.target.value })} placeholder="http://localhost:3000" disabled={!project || loading} /></label><label>API 地址<input value={draft.api_base_url} onChange={(event) => setDraft({ ...draft, api_base_url: event.target.value })} placeholder="http://localhost:3000/api" disabled={!project || loading} /></label><label>隔离目标启动命令<input value={draft.sandbox_command} onChange={(event) => setDraft({ ...draft, sandbox_command: event.target.value })} placeholder="例如：npm run start -- --host 0.0.0.0" disabled={!project || loading} /></label><label>隔离目标镜像<input value={draft.sandbox_image} onChange={(event) => setDraft({ ...draft, sandbox_image: event.target.value })} placeholder="例如：node:20-alpine" disabled={!project || loading} /></label></div><div className="asset-config-actions"><button className="primary-action" disabled={!project || loading} onClick={() => void onSave(draft)}>保存资产配置</button></div></section>;
 }
 
 function ProjectAssets({ project, assetProbe, enabledModules, components, findings, validations, evidence, summary, onOpenTasks, onOpenModules }: { project: Project | null; assetProbe: ProjectAssetProbe | null; enabledModules: Set<ModuleKey>; components: Component[]; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null; onOpenTasks: () => void; onOpenModules: () => void }) {
@@ -1275,9 +1334,9 @@ function SecurityDetectionCenter({
   }
   if (enabledModules.has("sandbox")) {
     if (!enabledModules.has("agent") && !enabledModules.has("dast")) {
-      relationNotices.push({ text: "SANDBOX 可以独立运行，但与 AGENT 或 DAST 组合后更容易形成可追溯证据。", action: "同时接入 AGENT", modules: ["agent"] });
+      relationNotices.push({ text: "SANDBOX 不再独立接收手工命令；请接入 DAST，由已审批策略自动生成隔离任务。", action: "同时接入 DAST", modules: ["dast"] });
     } else {
-      relationNotices.push({ text: "SANDBOX 将在其他检测完成后执行，为相关风险补充隔离运行证据。" });
+      relationNotices.push({ text: "SANDBOX 将接收 DAST 审批后的固定策略，在项目目标实例中执行并回传证据。" });
     }
   }
 
@@ -1308,12 +1367,12 @@ function SecurityDetectionCenter({
       {selected.length === 0 ? <div className="empty-project">请先选择需要接入的安全模块。</div> : <div className="detection-config-grid">
         {sourceEnabled ? <label><span>项目源码路径</span><input value={sourcePath} onChange={(event) => onSourcePathChange(event.target.value)} placeholder="项目源码所在目录" /></label> : null}
         {enabledModules.has("dast") ? <label><span>动态验证地址</span><input value={targetUrl} onChange={(event) => onTargetUrlChange(event.target.value)} placeholder="https://项目运行地址" /></label> : null}
-        {enabledModules.has("sandbox") ? <><label><span>沙箱运行命令</span><input value={runCommand} onChange={(event) => onRunCommandChange(event.target.value)} placeholder="例如：python app.py" /></label><label><span>沙箱镜像</span><input value={sandboxImage} onChange={(event) => onSandboxImageChange(event.target.value)} placeholder="例如：python:3.12-slim" /></label></> : null}
+        {enabledModules.has("sandbox") ? <div className="empty-project">SANDBOX 不需要在这里填写执行命令。隔离目标的镜像与启动命令在“项目资产”配置，固定验证策略由 DAST 审批后自动入队。</div> : null}
       </div>}
     </section>
 
     <section className="panel detection-run-panel">
-      <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>系统按照 SCA → SAST → AGENT → DAST → SANDBOX 的顺序执行已接入模块，单个模块失败不会阻断后续检查。</p></div>
+      <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>系统先执行 SCA、SAST、AGENT；DAST 与 SANDBOX 涉及目标授权，会生成提示并等待在治理页审批后继续。</p></div>
       <button className="primary-action run-all-button" disabled={!project || loading || runBlocked || selected.length === 0} onClick={() => void onRun()}>{loading ? "检测执行中" : runBlocked ? "单模块执行中" : "一键执行"}</button>
       {executionSteps.length > 0 ? <div className="execution-progress">{executionSteps.map((step) => <div className={`execution-step ${step.status}`} key={step.module}><span>{MODULE_DISPLAY[step.module].name}</span><strong>{executionStatusLabel(step.status)}</strong><small>{step.detail}</small></div>)}</div> : null}
     </section>
@@ -1443,15 +1502,13 @@ function GovernanceCenter({
     {scope === "sast" ? <SastGovernanceWorkspace project={project} findings={findings.filter((item) => item.source === "SAST")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.sast} loading={scopeLoading("sast")} onRunReview={onRunSastAgentReview} onRun={() => onRunModule("sast")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "agent" ? <FindingModuleGovernance project={project} moduleKey="agent" findings={findings.filter((item) => item.source === "AGENT")} validations={validations} evidence={evidence} graph={graph} comparison={retestComparisons.agent} scanHistory={agentScanHistory} agentSnapshot={agentSnapshot} agentScanDiff={agentScanDiff} agentAuditDiff={agentAuditDiff} loading={scopeLoading("agent")} onRunAgentAiReview={onRunAgentAiReview} onRun={() => onRunModule("agent")} onUpdateFinding={onUpdateFinding} /> : null}
     {scope === "dast" ? <DastGovernanceView project={project} findings={findings} validations={validations} strategies={dastStrategies} strategyId={dastStrategyId} targetUrl={targetUrl} targetConfirmation={dastTargetConfirmation} selectedFindingId={selectedFindingId} loading={scopeLoading("dast")} onTargetUrlChange={onTargetUrlChange} onTargetConfirmationChange={onDastTargetConfirmationChange} onStrategyChange={onDastStrategyChange} onSelectRisk={onSelectDastRisk} onRun={onRunDast} onCreateManual={onCreateManualDast} onUpdateManual={onUpdateManualDast} onExportReport={onExportDastReport} /> : null}
-    {scope === "sandbox" ? <SandboxGovernanceView findings={findings} validations={validations} evidence={evidence} graph={graph} templates={sandboxTemplates} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={selectedFindingId} selectedValidationId={selectedValidationId} loading={scopeLoading("sandbox")} onRunCommandChange={onRunCommandChange} onSandboxImageChange={onSandboxImageChange} onSelectRisk={onSelectSandboxRisk} onSelectValidation={onSelectSandboxValidation} onRun={onRunSandbox} /> : null}
+    {scope === "sandbox" ? <SandboxGovernanceView project={project} /> : null}
   </section>;
 }
 
 function SastGovernanceWorkspace({ project, findings, validations, evidence, graph, comparison, loading, onRunReview, onRun, onUpdateFinding }: { project: Project; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; loading: boolean; onRunReview: () => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
   return <section className="sast-governance-workspace">
-    <section className="panel full"><div className="panel-header"><div><h2>SAST 日常检测</h2><span>日常只需关注引擎状态、风险列表和 DeepSeek 审计</span></div></div><p>点击“重新扫描并复测”即可执行完整 SAST。下方高级管理仅用于 Git 增量、规则开发、CI/Worker、豁免和报告导出，不配置也不会影响基础扫描。</p></section>
-    <SastDailyEngineStatus project={project} />
-    <FindingModuleGovernance moduleKey="sast" findings={findings} validations={validations} evidence={evidence} graph={graph} comparison={comparison} loading={loading} onRunReview={onRunReview} onRun={onRun} onUpdateFinding={onUpdateFinding} />
+    <FindingModuleGovernance moduleKey="sast" findings={findings} validations={validations} evidence={evidence} graph={graph} comparison={comparison} loading={loading} onRunReview={onRunReview} onRun={onRun} onUpdateFinding={onUpdateFinding} afterMetrics={<div className="sast-daily-below-metrics"><section className="panel full"><div className="panel-header"><div><h2>SAST 日常检测</h2><span>日常只需关注引擎状态、风险列表和 DeepSeek 审计</span></div></div><p>点击“重新扫描并复测”即可执行完整 SAST。下方高级管理仅用于 Git 增量、规则开发、CI/Worker、豁免和报告导出，不配置也不会影响基础扫描。</p></section><SastDailyEngineStatus project={project} /></div>} />
     <SastAiAgentsPanel project={project} onRunReview={onRunReview} />
     <details className="advanced-details governance-advanced-details sast-advanced-hub"><summary>高级管理（规则、Git、CI/Worker、豁免与报告）</summary><div className="advanced-details-body"><p>这些能力面向安全规则维护和服务器交付，普通本地扫描可以保持默认设置。</p><SastOperationsConsole project={project} /><SastExpertDelivery project={project} /><SastRuleManagement project={project} /><SastEvidenceGovernance project={project} /></div></details>
   </section>;
@@ -1599,7 +1656,7 @@ function SastAiAgentsPanel({ project, onRunReview }: { project: Project; onRunRe
   }
 
   const latest = runs[0] ?? null;
-  return <details className="advanced-details governance-advanced-details" open><summary>DeepSeek 真实多 Agent 深度审计</summary><div className="advanced-details-body"><section className="content-grid">
+  return <details className="advanced-details governance-advanced-details"><summary>DeepSeek 真实多 Agent 深度审计</summary><div className="advanced-details-body"><section className="content-grid">
     <div className="panel full"><div className="panel-header"><h2>连接与安全边界</h2><span>{health?.configured ? "API Key 已在后端安全加载" : "尚未配置 API Key"}</span></div><div className="kv-list"><div><span>服务</span><strong>{health?.base_url ?? "https://api.deepseek.com"}</strong></div><div><span>发现 / 分析模型</span><strong>{health?.model ?? "-"}</strong></div><div><span>独立复核模型</span><strong>{health?.review_model ?? "-"}</strong></div><div><span>结构化思考模式</span><strong>{health?.thinking_enabled ? "已开启（更慢、费用更高）" : "已关闭（默认，更稳定）"}</strong></div><div><span>Key 文件</span><strong>{health?.api_key_location ?? "apps/api/.env"}</strong></div></div><p>代码上传前会脱敏密钥并移除疑似提示注入；Agent 不能执行代码、调用工具、访问扫描目标或直接修改源码。连接测试会产生一次极小的真实 API 调用。</p><div className="filter-grid"><button className="secondary-action" disabled={!health?.configured || testing} onClick={() => void testConnection()}>{testing ? "测试中" : "测试 DeepSeek 连接"}</button><button className="secondary-action" onClick={() => void load()}>刷新状态</button></div>{message ? <div className="empty-project">{message}</div> : null}</div>
     <div className="panel full"><div className="panel-header"><h2>项目级 Agent 策略</h2><span>默认关闭，防止无意消耗额度</span></div><div className="filter-grid"><label className="inline-check"><input type="checkbox" checked={profile?.ai_enabled ?? false} disabled={!profile || !health?.configured} onChange={(event) => setProfile((value) => value ? { ...value, ai_enabled: event.target.checked } : value)} />启用 DeepSeek 多 Agent</label><label className="inline-check"><input type="checkbox" checked={profile?.ai_auto_scan ?? true} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, ai_auto_scan: event.target.checked } : value)} />随 SAST 自动执行</label><label>最大上传字符数<input type="number" min={10000} max={200000} step={10000} value={profile?.ai_max_input_chars ?? 60000} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, ai_max_input_chars: Number(event.target.value) } : value)} /></label><label>正式 Finding 置信度<input type="number" min={50} max={100} value={profile?.ai_confidence_threshold ?? 80} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, ai_confidence_threshold: Number(event.target.value) } : value)} /></label><label className="inline-check"><input type="checkbox" checked={profile?.ai_include_fix_drafts ?? true} disabled={!profile} onChange={(event) => setProfile((value) => value ? { ...value, ai_include_fix_drafts: event.target.checked } : value)} />保存人工评审用补丁草案</label><button className="secondary-action" disabled={!profile} onClick={() => void save()}>保存 Agent 配置</button><button className="primary-action" disabled={!profile?.ai_enabled || !health?.configured || running} onClick={() => void runAgents()}>{running ? "七角色审计中" : "立即执行 AI 深度审计"}</button></div></div>
     <div className="panel full"><div className="panel-header"><h2>最近一次多 Agent 审计</h2><span>{latest ? `${formatDateTime(latest.finished_at ?? latest.started_at)} · ${latest.status}` : "尚未执行"}</span></div>{latest ? <><section className="module-summary"><Metric label="角色完成" value={`${latest.result_summary.completed_agent_count ?? latest.agent_steps.filter((step) => step.status === "completed").length} / ${latest.result_summary.expected_agent_count ?? 7}`} /><Metric label="候选漏洞" value={latest.result_summary.candidate_count ?? 0} /><Metric label="确认 Finding" value={latest.result_summary.confirmed_count ?? 0} /><Metric label="Token" value={(latest.token_usage.prompt_tokens ?? 0) + (latest.token_usage.completion_tokens ?? 0)} /></section><table><thead><tr><th>Agent</th><th>状态</th><th>模型</th><th>耗时</th><th>Token / 估算费用</th></tr></thead><tbody>{latest.agent_steps.map((step) => <tr key={`${latest.id}-${step.role}`}><td>{sastAgentRoleLabel(step.role)}</td><td>{step.status === "completed" ? "完成" : `失败：${step.error ?? "未知原因"}`}</td><td>{step.model ?? "-"}</td><td>{step.latency_ms != null ? `${step.latency_ms} ms` : "-"}</td><td>{(step.prompt_tokens ?? 0) + (step.completion_tokens ?? 0)}<span className="cell-subtext">{step.estimated_cost_usd == null ? "费用未计算" : `$${step.estimated_cost_usd.toFixed(6)}`}</span></td></tr>)}</tbody></table><div className="kv-list"><div><span>上传范围</span><strong>{latest.result_summary.context_summary?.uploaded_file_count ?? 0} 文件 / {latest.result_summary.context_summary?.uploaded_char_count ?? 0} 字符</strong></div><div><span>脱敏项</span><strong>{latest.result_summary.context_summary?.redaction_count ?? 0}</strong></div><div><span>未完成角色</span><strong>{latest.result_summary.incomplete_roles?.map(sastAgentRoleLabel).join("、") || "无"}</strong></div><div><span>Agent 分歧</span><strong>{latest.result_summary.disagreement_count ?? 0}</strong></div><div><span>执行错误</span><strong>{latest.error ?? "无"}</strong></div></div></> : <div className="empty-project">启用后执行 SAST 或点击“立即执行 AI 深度审计”，这里会显示七个 Agent 的真实调用状态、Token 和裁决统计。</div>}</div>
@@ -1934,6 +1991,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
   if (!project) return <div className="panel empty-project">请先选择项目，再查看该项目沉淀的安全知识。</div>;
   const projectId = project.id;
   const [report, setReport] = useState<SecurityReport | null>(null);
+  const [dastLibrary, setDastLibrary] = useState<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] } | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
   const rules = uniqueValues(findings.map((item) => item.rule_id));
@@ -1953,6 +2011,14 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
   const knowledgeItems = [...findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
   const knowledgePagination = paginate(knowledgeItems, knowledgePage);
   useEffect(() => { setKnowledgePage(1); }, [findings]);
+  useEffect(() => {
+    let cancelled = false;
+    setDastLibrary(null);
+    void request<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] }>(`/dast/projects/${projectId}/strategy-library`)
+      .then((value) => { if (!cancelled) setDastLibrary(value); })
+      .catch(() => { if (!cancelled) setDastLibrary(null); });
+    return () => { cancelled = true; };
+  }, [projectId]);
   async function generateReportPreview() {
     setReportLoading(true);
     setReportError("");
@@ -1978,12 +2044,17 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       <Metric label="规则经验" value={rules.length} />
       <Metric label="风险分类" value={categories.length} />
       <Metric label="动态验证" value={validations.length} />
+      <Metric label="DAST 策略" value={dastLibrary?.total ?? 0} />
       <Metric label="运行证据" value={evidence.length} />
       <Metric label="可信攻击链" value={summary?.attack_chains.length ?? 0} />
     </section>
     <section className="panel">
       <div className="panel-header"><h2>当前项目知识条目</h2><span>完整结果 · 每页 10 条</span></div>
       <table className="concise-table"><thead><tr><th>规则 / 分类</th><th>项目风险知识</th><th>验证与证据</th><th>治理结论</th></tr></thead><tbody>{knowledgeItems.length === 0 ? <tr><td colSpan={4} className="empty-cell">执行检测后，规则命中和复核结论会进入这里。</td></tr> : knowledgePagination.items.map((finding) => { const linkedValidations = validations.filter((item) => item.finding_id === finding.id); const validationIds = new Set(linkedValidations.map((item) => item.id)); const linkedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id))); return <tr key={finding.id}><td><strong>{finding.rule_id}</strong><span className="cell-subtext">{finding.source} · {finding.ai_review?.category ?? "未分类"}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span><strong>{finding.title}</strong><span className="cell-subtext">{truncateText(finding.ai_review?.description ?? finding.evidence ?? "暂无风险说明", 120)}</span></td><td>{linkedValidations.length ? `${linkedValidations.length} 次 DAST` : "未动态验证"}<span className="cell-subtext">{linkedEvidence.length ? `${linkedEvidence.length} 份 SANDBOX 证据` : "无运行时证据"}</span></td><td>{statusLabel(normalizeFindingStatus(finding.status))}<span className="cell-subtext">{finding.remediation_note ?? finding.ai_review?.remediation ?? "等待治理结论"}</span></td></tr>; })}</tbody></table><Pagination page={knowledgePagination.page} pageCount={knowledgePagination.pageCount} total={knowledgeItems.length} onPageChange={setKnowledgePage} />
+    </section>
+    <section className="panel">
+      <div className="panel-header"><h2>DAST 策略模板库</h2><span>{dastLibrary ? `${dastLibrary.builtin.length} 个内置 · ${dastLibrary.learned.length} 个 DeepSeek 项目经验` : "正在读取本地策略"}</span></div>
+      <table className="concise-table"><thead><tr><th>策略</th><th>来源</th><th>验证范围</th><th>复用规则</th></tr></thead><tbody>{!dastLibrary?.total ? <tr><td colSpan={4} className="empty-cell">当前没有可用的 DAST 策略。</td></tr> : [...dastLibrary.builtin, ...dastLibrary.learned].map((item) => <tr key={String(item.id)}><td><strong>{String(item.name)}</strong><span className="cell-subtext">{String(item.id)}</span></td><td>{item.source === "deepseek_local" ? "DeepSeek 项目经验" : "内置安全模板"}</td><td>{truncateText(String(item.description ?? item.scope_summary ?? ""), 140)}</td><td>{item.source === "deepseek_local" ? "复用前重新确认目标、变量和审批" : "按漏洞类型自动匹配"}</td></tr>)}</tbody></table>
     </section>
     <section className="panel report-delivery">
       <div className="panel-header"><div><span className="section-kicker">项目安全报告</span><h2>生成可交付的项目安全快照</h2></div><span>{report ? `生成于 ${formatDateTime(report.generated_at)}` : "报告不会改变现有数据"}</span></div>
@@ -1992,7 +2063,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       {reportError ? <div className="report-error">{reportError}</div> : null}
     </section>
     {report ? <SecurityReportPreview report={report} /> : null}
-    <section className="knowledge-boundary"><strong>当前能力边界</strong><span>目前已完成知识组织和追溯视图；规则自动生成、跨项目知识推荐和基于反馈的自主演进仍属于后续能力，不会在界面中伪装成已实现。</span></section>
+    <section className="knowledge-boundary"><strong>当前能力边界</strong><span>DAST 已支持内置模板与本项目 DeepSeek 策略经验复用；跨项目自动推荐、无审批自主演进和自动修改检测规则仍未开放。</span></section>
   </section>;
 }
 
@@ -2842,7 +2913,7 @@ function AgentOfflineAuditHistoryPanel({ diff }: { diff: AgentOfflineAuditDiff |
   </section>;
 }
 
-function FindingModuleGovernance({ project, moduleKey, findings, validations, evidence, graph, comparison, scanHistory = [], agentSnapshot = null, agentScanDiff = null, agentAuditDiff = null, loading, onRunReview, onRunAgentAiReview, onRun, onUpdateFinding }: { project?: Project; moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; scanHistory?: AgentScanHistoryItem[]; agentSnapshot?: AgentScanSnapshot | null; agentScanDiff?: AgentScanDiff | null; agentAuditDiff?: AgentOfflineAuditDiff | null; loading: boolean; onRunReview?: () => Promise<void>; onRunAgentAiReview?: (confirmationPhrase: string) => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void> }) {
+function FindingModuleGovernance({ project, moduleKey, findings, validations, evidence, graph, comparison, scanHistory = [], agentSnapshot = null, agentScanDiff = null, agentAuditDiff = null, loading, onRunReview, onRunAgentAiReview, onRun, onUpdateFinding, afterMetrics }: { project?: Project; moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; scanHistory?: AgentScanHistoryItem[]; agentSnapshot?: AgentScanSnapshot | null; agentScanDiff?: AgentScanDiff | null; agentAuditDiff?: AgentOfflineAuditDiff | null; loading: boolean; onRunReview?: () => Promise<void>; onRunAgentAiReview?: (confirmationPhrase: string) => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void>; afterMetrics?: React.ReactNode }) {
   const [filters, setFilters] = useState({ keyword: "", severity: "all", status: "all", category: "all" });
   const [page, setPage] = useState(1);
   const high = findings.filter((item) => item.severity === "critical" || item.severity === "high").length;
@@ -2860,7 +2931,7 @@ function FindingModuleGovernance({ project, moduleKey, findings, validations, ev
   });
   const pagination = paginate(filtered, page);
   useEffect(() => { setPage(1); }, [filters.keyword, filters.severity, filters.status, filters.category]);
-  return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={moduleKey === "agent" ? latestAgentScan?.status ?? null : findings.length ? "completed" : null} metrics={moduleKey === "agent" ? [["已识别资产", latestAgentScan?.coverage.discovered_asset_count ?? 0], ["问题总数", findings.length], ["严重 / 高危", high], ["待人工复核", pendingReview]] : [["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : latestAgentScan?.status === "completed" ? "本批次已完成，已识别资产中未命中当前规则；可查看覆盖情况确认扫描边界。" : "当前没有检测结果，请先在安全检测中执行该模块。"} loading={loading} onRun={onRun}>
+  return <ModuleGovernanceShell moduleKey={moduleKey} lastStatus={moduleKey === "agent" ? latestAgentScan?.status ?? null : findings.length ? "completed" : null} metrics={moduleKey === "agent" ? [["已识别资产", latestAgentScan?.coverage.discovered_asset_count ?? 0], ["问题总数", findings.length], ["严重 / 高危", high], ["待人工复核", pendingReview]] : [["问题总数", findings.length], ["严重 / 高危", high], ["待处理", open], ["已复核", reviewed]]} action={high ? `优先处理 ${high} 个严重或高危问题，确认影响后分配整改负责人。` : findings.length ? "逐项确认中低风险问题，记录误报或修复结论。" : latestAgentScan?.status === "completed" ? "本批次已完成，已识别资产中未命中当前规则；可查看覆盖情况确认扫描边界。" : "当前没有检测结果，请先在安全检测中执行该模块。"} loading={loading} onRun={onRun} afterMetrics={afterMetrics}>
     <ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} format={moduleKey === "agent" ? agentCategoryLabel : (value) => value} onChange={(value) => setFilters({ ...filters, category: value })} /></ModuleFilterBar>
     <ConciseFindingTable findings={pagination.items} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} />
     <Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />
@@ -2870,7 +2941,280 @@ function FindingModuleGovernance({ project, moduleKey, findings, validations, ev
   </ModuleGovernanceShell>;
 }
 
-function DastGovernanceView({ project, findings, validations, strategies, strategyId, targetUrl, targetConfirmation, selectedFindingId, loading, onTargetUrlChange, onTargetConfirmationChange, onStrategyChange, onSelectRisk, onRun, onCreateManual, onUpdateManual, onExportReport }: { project: Project; findings: Finding[]; validations: DastValidation[]; strategies: DastStrategy[]; strategyId: string; targetUrl: string; targetConfirmation: string; selectedFindingId: string; loading: boolean; onTargetUrlChange: (value: string) => void; onTargetConfirmationChange: (value: string) => void; onStrategyChange: (strategyId: string) => void; onSelectRisk: (findingId: string) => void; onRun: () => Promise<void>; onCreateManual: (draft: ManualDastValidationDraft) => Promise<void>; onUpdateManual: (validationId: string, draft: ManualDastValidationDraft) => Promise<void>; onExportReport: () => Promise<void> }) {
+type DastGovernanceProps = { project: Project; findings: Finding[]; validations: DastValidation[]; strategies: DastStrategy[]; strategyId: string; targetUrl: string; targetConfirmation: string; selectedFindingId: string; loading: boolean; onTargetUrlChange: (value: string) => void; onTargetConfirmationChange: (value: string) => void; onStrategyChange: (strategyId: string) => void; onSelectRisk: (findingId: string) => void; onRun: () => Promise<void>; onCreateManual: (draft: ManualDastValidationDraft) => Promise<void>; onUpdateManual: (validationId: string, draft: ManualDastValidationDraft) => Promise<void>; onExportReport: () => Promise<void> };
+
+function DastGovernanceView({ project, loading: parentLoading, onExportReport }: DastGovernanceProps) {
+  const workspaceProjectIdRef = React.useRef(project.id);
+  workspaceProjectIdRef.current = project.id;
+  const [candidates, setCandidates] = useState<DastBusinessCandidate[]>([]);
+  const [flows, setFlows] = useState<DastBusinessFlow[]>([]);
+  const [runs, setRuns] = useState<DastBusinessRun[]>([]);
+  const [snapshots, setSnapshots] = useState<DastBusinessSnapshot[]>([]);
+  const [report, setReport] = useState<DastReport | null>(null);
+  const [discovery, setDiscovery] = useState<DastDiscovery | null>(null);
+  const [preflight, setPreflight] = useState<DastPreflight | null>(null);
+  const [aiHealth, setAiHealth] = useState<{ configured: boolean; status: string; model?: string } | null>(null);
+  const [strategyLibrary, setStrategyLibrary] = useState<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] } | null>(null);
+  const [runtimeTargets, setRuntimeTargets] = useState<SandboxTarget[]>([]);
+  const [candidateId, setCandidateId] = useState("");
+  const [flowId, setFlowId] = useState("");
+  const [runId, setRunId] = useState("");
+  const [approval, setApproval] = useState({ reference: "", approved_by: "" });
+  const [operator, setOperator] = useState("dast-operator");
+  const [strategyJson, setStrategyJson] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [activeAction, setActiveAction] = useState("");
+  const [executionFeedback, setExecutionFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState("");
+  const [queueFilters, setQueueFilters] = useState({ keyword: "", validation: "all", verdict: "all" });
+  const [verdictPanelFilter, setVerdictPanelFilter] = useState("all");
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
+  const executionConsoleRef = React.useRef<HTMLElement | null>(null);
+  const sandboxRuntime = runtimeTargets.find((item) => item.status === "running")?.runtime_url ?? "";
+  const target = project.api_base_url || project.runtime_url || sandboxRuntime;
+  const selectedCandidate = candidates.find((item) => item.id === candidateId) ?? candidates.find((item) => item.readiness === "ready") ?? candidates[0];
+  const selectedFlow = flows.find((item) => item.id === flowId) ?? flows.find((item) => item.finding_id === selectedCandidate?.id) ?? (!selectedCandidate ? flows[0] : undefined);
+  const selectedRun = runs.find((item) => item.id === runId) ?? runs[0];
+  const stateSnapshots = snapshots.filter((item) => item.step_kind === "state_transition").sort((a, b) => Number(a.detail.sequence ?? 0) - Number(b.detail.sequence ?? 0));
+  const requestSnapshots = snapshots.filter((item) => item.step_kind === "http_request" || item.step_kind === "login");
+  const sandboxEvidenceSnapshots = snapshots.filter((item) => item.step_kind === "sandbox_evidence");
+  const selectedEvidenceComplete = selectedRun?.status === "completed" && Boolean(selectedRun.verdict) && sandboxEvidenceSnapshots.some((item) => Boolean(item.detail.complete) && Boolean(item.detail.request_id));
+  const triColor = report?.summary.tri_color ?? { total: 0, exploitable: 0, uncertain: 0, not_exploitable: 0 };
+  const verifiedCandidates = candidates.filter((item) => item.validation_status === "verified" && item.latest_verdict);
+  const visibleVerdictResults = verifiedCandidates
+    .filter((item) => verdictPanelFilter === "all" || item.latest_verdict === verdictPanelFilter)
+    .sort((left, right) => apiDateTime(right.latest_verified_at ?? "").getTime() - apiDateTime(left.latest_verified_at ?? "").getTime());
+  const filteredCandidates = candidates.filter((item) => {
+    const keyword = queueFilters.keyword.trim().toLowerCase();
+    const searchable = [item.title, item.rule_id, item.vulnerability_type, item.file_path, item.recommended_strategy_name].filter(Boolean).join(" ").toLowerCase();
+    return (!keyword || searchable.includes(keyword))
+      && (queueFilters.validation === "all" || item.validation_status === queueFilters.validation)
+      && (queueFilters.verdict === "all" || item.latest_verdict === queueFilters.verdict);
+  });
+  const readyCount = candidates.filter((item) => item.readiness === "ready").length;
+  const blockedCount = candidates.filter((item) => item.readiness !== "ready").length;
+  const identityContextCount = candidates.filter((item) => item.missing.some((value) => value.includes("身份") || value.includes("凭据"))).length;
+  const mappingPendingCount = candidates.filter((item) => item.missing.some((value) => value.includes("参数"))).length;
+  const templateNames = uniqueValues(candidates.map((item) => item.recommended_strategy_name));
+  const linkedSelectedFlow = flows.find((flow) => flow.finding_id === selectedCandidate?.id);
+  const selectedMappingItems = selectedCandidate?.missing.filter((item) => item.includes("参数")) ?? [];
+  const selectedBlockingItems = selectedCandidate?.missing.filter((item) => !item.includes("参数")) ?? [];
+
+  async function load(nextFlowId?: string, nextRunId?: string, resetSelection = false) {
+    const loadingProjectId = project.id;
+    try {
+      const [nextCandidates, nextFlows, nextReport, nextHealth, nextLibrary, latestDiscovery, nextTargets] = await Promise.all([
+        request<DastBusinessCandidate[]>(`/dast/projects/${project.id}/business-candidates`),
+        request<DastBusinessFlow[]>(`/dast/projects/${project.id}/business-flows`),
+        request<DastReport>(`/dast/projects/${project.id}/report`),
+        request<{ configured: boolean; status: string; model?: string }>("/dast/business-draft-health"),
+        request<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] }>(`/dast/projects/${project.id}/strategy-library`),
+        request<DastDiscovery | null>(`/dast/projects/${project.id}/discoveries/latest`),
+        request<SandboxTarget[]>(`/sandbox/projects/${project.id}/targets`).catch(() => [] as SandboxTarget[]),
+      ]);
+      if (workspaceProjectIdRef.current !== loadingProjectId) return;
+      setCandidates(nextCandidates); setFlows(nextFlows); setReport(nextReport); setAiHealth(nextHealth); setStrategyLibrary(nextLibrary); setDiscovery(latestDiscovery); setRuntimeTargets(nextTargets);
+      const preservedCandidate = !resetSelection && nextCandidates.some((item) => item.id === candidateId) ? candidateId : "";
+      const activeCandidate = preservedCandidate || nextCandidates.find((item) => item.readiness === "ready")?.id || nextCandidates[0]?.id || "";
+      if (activeCandidate) setCandidateId(activeCandidate);
+      const activeFlow = nextFlowId || nextFlows.find((item) => item.finding_id === activeCandidate)?.id || "";
+      if (activeFlow) {
+        setFlowId(activeFlow);
+        const [nextRuns, nextPreflight] = await Promise.all([request<DastBusinessRun[]>(`/dast/business-flows/${activeFlow}/runs`), request<DastPreflight>(`/dast/business-flows/${activeFlow}/preflight`)]);
+        if (workspaceProjectIdRef.current !== loadingProjectId) return;
+        setRuns(nextRuns); setPreflight(nextPreflight);
+        const activeRun = nextRunId || (!resetSelection && runId) || nextRuns[0]?.id || "";
+        if (activeRun) { const nextSnapshots = await request<DastBusinessSnapshot[]>(`/dast/business-runs/${activeRun}/snapshots`); if (workspaceProjectIdRef.current !== loadingProjectId) return; setRunId(activeRun); setSnapshots(nextSnapshots); }
+        else { setRunId(""); setSnapshots([]); }
+      } else { setRuns([]); setSnapshots([]); setPreflight(null); }
+    } catch (error) { if (workspaceProjectIdRef.current === loadingProjectId) setMessage(`DAST 工作台加载失败：${errorMessage(error)}`); }
+  }
+  useEffect(() => {
+    setCandidates([]); setFlows([]); setRuns([]); setSnapshots([]); setReport(null); setDiscovery(null); setPreflight(null); setRuntimeTargets([]);
+    setCandidateId(""); setFlowId(""); setRunId(""); setMessage(""); setActiveAction(""); setExecutionFeedback(null);
+    setQueueFilters({ keyword: "", validation: "all", verdict: "all" }); setVerdictPanelFilter("all"); setEvidenceDrawerOpen(false);
+    void load(undefined, undefined, true);
+  }, [project.id]);
+  useEffect(() => { if (selectedFlow) setStrategyJson(JSON.stringify(selectedFlow.steps, null, 2)); }, [selectedFlow?.id]);
+  useEffect(() => {
+    if (!evidenceDrawerOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setEvidenceDrawerOpen(false); };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", closeOnEscape); };
+  }, [evidenceDrawerOpen]);
+
+  function beginAction(action: string, statusMessage: string) {
+    setActiveAction(action);
+    setMessage(statusMessage);
+    setBusy(true);
+  }
+  function finishAction() {
+    setBusy(false);
+    setActiveAction("");
+  }
+  function revealExecutionConsole() {
+    window.requestAnimationFrame(() => executionConsoleRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  async function materialize() {
+    if (!selectedCandidate) return setMessage("请先选择一条 SAST / AGENT 漏洞。");
+    const existingFlow = flows.find((flow) => flow.finding_id === selectedCandidate.id);
+    if (selectedCandidate.target_status !== "configured") return setMessage("当前还没有可访问的运行目标：已上线项目请在项目资产配置运行地址；只有源码的项目请先到 SANDBOX 启动项目隔离实例，启动成功后返回这里同步。");
+    if (selectedCandidate.missing.some((item) => item.includes("参数"))) return setMessage("系统尚未唯一定位运行时输入点。请先“同步运行资产”；系统会自动重新映射，不需要在此手工填写。");
+    beginAction(existingFlow ? "open-strategy" : "materialize", existingFlow ? "正在校验已生成策略是否仍与当前源码路由和运行资产一致…" : "正在把上游漏洞转换为 DAST 策略，并校验目标、参数和证据要求…");
+    try {
+      const flow = await request<DastBusinessFlow>(`/dast/business-candidates/${selectedCandidate.id}/materialize`, { method: "POST" });
+      await load(flow.id); setFlowId(flow.id); setMessage(existingFlow ? "已校验并打开与当前源码及运行资产一致的策略。" : "已把上游漏洞自动转换为 DAST 策略草案；无需重复填写目标、方法、参数和证据标准。"); revealExecutionConsole();
+    } catch (error) { await load(undefined, undefined, false); setMessage(`${existingFlow ? "策略校验或打开" : "策略生成"}失败：${errorMessage(error)}`); } finally { finishAction(); }
+  }
+  async function saveStrategy() {
+    if (!selectedFlow) return;
+    try {
+      const steps = JSON.parse(strategyJson) as Record<string, unknown>[];
+      beginAction("save-strategy", "正在保存策略修改并重新执行安全校验…"); await request(`/dast/business-flows/${selectedFlow.id}`, { method: "PATCH", body: JSON.stringify({ steps }) });
+      await load(selectedFlow.id); setMessage("策略修改已保存；已审批策略若发生变化会自动退回草稿。");
+    } catch (error) { setMessage(error instanceof SyntaxError ? "策略 JSON 格式不正确。" : `策略保存失败：${errorMessage(error)}`); } finally { finishAction(); }
+  }
+  async function generateAiStrategy() {
+    if (!selectedCandidate) return setMessage("请先选择一条 SAST / AGENT 漏洞。");
+    if (!aiHealth?.configured) return setMessage("DeepSeek 当前未配置；可继续使用本地策略模板，或由管理员配置 DeepSeek 后再生成草案。");
+    if (!target) return setMessage("DeepSeek 生成运行时策略需要一个可访问目标。已上线项目请配置运行地址；只有源码的项目请先在 SANDBOX 启动隔离实例。");
+    beginAction("ai-strategy", "DeepSeek 正在分析漏洞上下文并生成待审批策略草案…");
+    try {
+      const result = await request<{ draft: { name: string; flow_mode: "api" | "browser" | "hybrid"; roles: Record<string, unknown>[]; steps: Record<string, unknown>[]; sufficiency_criteria: Record<string, unknown>; safety_notes: string[]; missing_information: string[] }; model: string }>(`/dast/business-candidates/${selectedCandidate.id}/ai-draft`, { method: "POST", body: JSON.stringify({ business_description: `${selectedCandidate.title}。${selectedCandidate.evidence ?? ""}`, target_description: selectedCandidate.attack_surface.urls.join("、") || target, confirmation_phrase: `DAST_DEEPSEEK_DRAFT:${selectedCandidate.id}` }) });
+      const allowedPaths = selectedCandidate.attack_surface.urls.map((url) => { try { return new URL(url).pathname || "/"; } catch { return "/"; } });
+      const flow = await request<DastBusinessFlow>("/dast/business-flows", { method: "POST", body: JSON.stringify({ project_id: project.id, finding_id: selectedCandidate.id, name: result.draft.name, target_url: selectedCandidate.attack_surface.urls[0] || target, flow_mode: result.draft.flow_mode, strategy_source: "ai_draft", authorized_scope: `仅限项目已配置同源目标 ${target}；禁止业务副作用。`, allowed_paths: uniqueValues(allowedPaths), roles: result.draft.roles, steps: result.draft.steps, sufficiency_criteria: { ...result.draft.sufficiency_criteria, safety_notes: result.draft.safety_notes, missing_information: result.draft.missing_information }, requester: "deepseek-dast-adapter" }) });
+      await load(flow.id); setFlowId(flow.id); setMessage(`DeepSeek ${result.model} 已生成待审批策略，并作为本地知识中枢中的项目策略经验保存。`);
+    } catch (error) { setMessage(`DeepSeek 策略生成失败：${errorMessage(error)}`); } finally { finishAction(); }
+  }
+  async function approve() {
+    if (!selectedFlow || !approval.reference.trim() || !approval.approved_by.trim()) return setMessage("连接目标前必须填写真实审批依据和审批人；漏洞信息本身不需要重复填写。");
+    beginAction("approve", "正在锁定策略范围并记录审批信息…");
+    try { await request(`/dast/business-flows/${selectedFlow.id}`, { method: "PATCH", body: JSON.stringify({ status: "approved", approval_reference: approval.reference, approved_by: approval.approved_by }) }); await load(selectedFlow.id); setMessage("策略范围已锁定并记录审批。"); }
+    catch (error) { setMessage(`审批失败：${errorMessage(error)}`); } finally { finishAction(); }
+  }
+  async function execute(mode: "dry_run" | "api_execution") {
+    if (!selectedFlow) return;
+    setExecutionFeedback(null);
+    beginAction(mode, mode === "dry_run" ? "正在进行策略预执行：只校验步骤、角色、路径和安全边界，不连接目标…" : "DAST HTTP 执行中：正在按已审批策略发送有界请求、分析差分并归档证据…");
+    try {
+      const run = await request<DastBusinessRun>(`/dast/business-flows/${selectedFlow.id}/runs`, { method: "POST", body: JSON.stringify({ operator, execution_mode: mode, target_confirmation: mode === "api_execution" ? `DAST_BUSINESS_FLOW:${selectedFlow.id}:${selectedFlow.target_url}` : null }) });
+      await load(selectedFlow.id, run.id);
+      const completed = !["blocked", "failed", "canceled"].includes(run.status);
+      const resultMessage = mode === "dry_run"
+        ? `预执行已结束：${run.verdict_reason ?? "未连接目标，校验结果已归档。"}`
+        : `DAST HTTP 执行已结束（${run.status.toUpperCase()}）：${run.verdict_reason ?? "请求、证据和状态已归档。"}`;
+      setExecutionFeedback({ tone: completed ? "success" : "error", text: resultMessage });
+      setMessage(resultMessage);
+    } catch (error) {
+      const resultMessage = `执行失败：${errorMessage(error)}`;
+      setExecutionFeedback({ tone: "error", text: resultMessage });
+      setMessage(resultMessage);
+    } finally { finishAction(); }
+  }
+  async function handoffSandbox() {
+    if (!selectedFlow) return;
+    setExecutionFeedback(null);
+    beginAction("sandbox-handoff", "正在生成 SANDBOX 隔离执行合同并加入验证队列…");
+    try {
+      const result = await request<{ run: DastBusinessRun; preflight: DastPreflight; handoff: { required_capabilities: string[] } }>(`/dast/business-flows/${selectedFlow.id}/sandbox-runs`, { method: "POST", body: JSON.stringify({ operator }) });
+      await load(selectedFlow.id, result.run.id); const resultMessage = `已生成 SANDBOX 隔离执行任务，等待能力 ${result.handoff.required_capabilities.join(" / ")} 接管并回传证据。`; setExecutionFeedback({ tone: "success", text: resultMessage }); setMessage(resultMessage);
+    } catch (error) { const resultMessage = `SANDBOX 任务创建失败：${errorMessage(error)}`; setExecutionFeedback({ tone: "error", text: resultMessage }); setMessage(resultMessage); } finally { finishAction(); }
+  }
+  async function discover() {
+    if (!target) return setMessage("当前没有可同步的运行目标。已上线项目请在项目资产配置 runtime_url/api_base_url；只有源码的项目不需要虚构 URL，请先在 SANDBOX 启动隔离实例，DAST 会自动使用其临时地址。");
+    beginAction("discover", "正在同步运行资产：抓取授权范围内的 URL、表单、API 和参数…");
+    try { const result = await request<DastDiscovery>(`/dast/projects/${project.id}/discover`, { method: "POST", body: JSON.stringify({ target_url: target, target_confirmation: `DAST_DISCOVERY:${target}`, max_pages: 12 }) }); setDiscovery(result); setMessage(`资产发现完成：${result.urls.length} 个 URL、${result.forms.length} 个表单、${result.parameters.length} 个参数。`); }
+    catch (error) { setMessage(`资产发现未完成：${errorMessage(error)}`); } finally { finishAction(); }
+  }
+  async function selectFlow(nextId: string, preferredRunId = "") {
+    setFlowId(nextId); setRunId(""); setSnapshots([]);
+    if (!nextId) { setPreflight(null); return setRuns([]); }
+    try { const [nextRuns, nextPreflight] = await Promise.all([request<DastBusinessRun[]>(`/dast/business-flows/${nextId}/runs`), request<DastPreflight>(`/dast/business-flows/${nextId}/preflight`)]); setRuns(nextRuns); setPreflight(nextPreflight); const nextRun = nextRuns.find((item) => item.id === preferredRunId) ?? nextRuns[0]; if (nextRun) { setRunId(nextRun.id); setSnapshots(await request<DastBusinessSnapshot[]>(`/dast/business-runs/${nextRun.id}/snapshots`)); } } catch (error) { setMessage(`运行记录加载失败：${errorMessage(error)}`); }
+  }
+  async function selectRun(nextId: string) { setRunId(nextId); setSnapshots(nextId ? await request<DastBusinessSnapshot[]>(`/dast/business-runs/${nextId}/snapshots`) : []); }
+  async function openVerdictResult(item: DastBusinessCandidate) {
+    setCandidateId(item.id);
+    const linkedFlowId = item.latest_flow_id ?? flows.find((flow) => flow.finding_id === item.id)?.id ?? "";
+    if (!linkedFlowId) return setMessage("该裁决的历史策略已归档，结果仍保留在专项报告中。");
+    await selectFlow(linkedFlowId, item.latest_run_id ?? "");
+  }
+
+  return <ModuleGovernanceShell moduleKey="dast" lastStatus={runs.length ? "completed" : candidates.length ? "waiting" : null} metrics={[["待验证场景", candidates.length], ["可直接生成", readyCount], ["待运行上下文", blockedCount], ["已执行任务", report?.summary.business_run_count ?? 0]]} action={blockedCount ? `${blockedCount} 个场景尚待运行上下文，其中 ${identityContextCount} 个需要统一测试身份配置；这不是要求逐条补录漏洞信息。` : candidates.length ? "上游风险已自动归一化，可直接生成策略并预执行。" : "请先运行 SAST 或 AGENT，新的 Finding 会自动进入此工作台。"} loading={parentLoading || busy} hideRunButton onRun={() => execute("dry_run")}>
+    <section className="dast-verdict-panel dast-verdict-overview">
+      <div className="panel-header"><div><h3>三色裁决</h3><p>结果来自已完成且证据完整的 SANDBOX 任务；点击颜色筛选，点击结果查看任务与证据。</p></div><span>{Math.max(0, candidates.length - verifiedCandidates.length)} 条未验证</span></div>
+      <div className="dast-verdict-metrics">
+        {(["exploitable", "uncertain", "not_exploitable"] as const).map((verdict) => <button type="button" key={verdict} className={verdict} aria-pressed={verdictPanelFilter === verdict} onClick={() => setVerdictPanelFilter(verdictPanelFilter === verdict ? "all" : verdict)}><b>{triColor[verdict]}</b>{dastVerdictLabel(verdict)}<small>{verdict === "exploitable" ? "明确触发且造成实际影响" : verdict === "uncertain" ? "存在异常但证据尚不充分" : "多组验证未触发且确认防护有效"}</small></button>)}
+      </div>
+      <div className="dast-verdict-results-heading"><strong>{verdictPanelFilter === "all" ? "全部已验证结果" : dastVerdictLabel(verdictPanelFilter)}</strong><span>{visibleVerdictResults.length} 条</span>{verdictPanelFilter !== "all" ? <button type="button" onClick={() => setVerdictPanelFilter("all")}>查看全部</button> : null}</div>
+      <div className="dast-verdict-results">{visibleVerdictResults.length === 0 ? <div className="workbench-empty">当前筛选下暂无已形成三色裁决的漏洞。</div> : visibleVerdictResults.map((item) => <button type="button" key={item.id} className={selectedCandidate?.id === item.id ? "active" : ""} onClick={() => void openVerdictResult(item)}><span className={`dast-result-verdict ${item.latest_verdict}`}>{dastVerdictLabel(item.latest_verdict ?? "")}</span><strong>{item.title}</strong><small>{item.recommended_strategy_name} · {formatDateTime(item.latest_verified_at)}</small><ArrowRight size={16} /></button>)}</div>
+      {selectedCandidate?.latest_verdict ? <div className={`dast-current-verdict ${selectedCandidate.latest_verdict}`}><div><strong>{dastVerdictLabel(selectedCandidate.latest_verdict)} · {selectedCandidate.title}</strong><p>{selectedCandidate.latest_verdict_reason || "已形成证据门控裁决。"}</p><small>Task {selectedCandidate.latest_run_id} · 已持久化 {formatDateTime(selectedCandidate.latest_verified_at)}</small></div><button className="secondary-action" type="button" onClick={() => { void openVerdictResult(selectedCandidate).then(() => setEvidenceDrawerOpen(true)); }}>查看任务与证据</button></div> : null}
+    </section>
+    <section className="dast-auto-hero">
+      <div><span>DAST VERIFICATION ORCHESTRATOR</span><h3>从静态风险到动态证据，一条自动化链路完成</h3><p>SAST / AGENT Finding 自动映射目标、方法、参数和策略；同漏洞类型、同路径和同方法的重复代码命中会合并为一个动态场景，纯静态风险留在上游模块，不会为了凑数进入 DAST。</p></div>
+      <div className="dast-pipeline">{["自动接入", "资产发现", "策略生成", "动态执行", "证据分析", "三色报告"].map((item, index) => <React.Fragment key={item}><b><i>{index + 1}</i>{item}</b>{index < 5 ? <ArrowRight size={16} /> : null}</React.Fragment>)}</div>
+    </section>
+    {message ? <div className="dast-message">{message}</div> : null}
+    <section className="dast-overview-grid">
+      <article className="dast-overview-card"><span>目标与资产</span><strong>{target || "未配置运行目标"}</strong><p>{sandboxRuntime ? `当前使用 SANDBOX 临时运行目标。${discovery ? `已识别 ${discovery.urls.length} URL、${discovery.forms.length} 表单、${discovery.api_urls.length} API、${discovery.parameters.length} 参数。` : "可直接同步运行资产。"}` : discovery ? `${discovery.urls.length} URL · ${discovery.forms.length} 表单 · ${discovery.api_urls.length} API · ${discovery.parameters.length} 参数` : "同源、GET 限定、自动去重，最多抓取 12 个页面。"}</p><button className="secondary-action" disabled={busy} onClick={() => void discover()}>{activeAction === "discover" ? <><LoaderCircle className="sandbox-spin" size={16} />正在同步…</> : discovery ? "重新同步资产" : "同步运行资产"}</button></article>
+      <article className="dast-overview-card"><span>会话管理</span><strong>Cookie Jar + 环境变量凭据</strong><p>每个业务角色使用独立 Cookie 会话；Token / OAuth 测试凭据仅允许通过后端 env: 引用，不回显到页面或日志。</p><em>{selectedCandidate?.preconditions.required_roles.length ? `需要：${selectedCandidate.preconditions.required_roles.join(" / ")}` : "当前策略可使用匿名会话"}</em></article>
+      <article className="dast-overview-card"><span>策略智能</span><strong>{strategyLibrary?.total ?? templateNames.length} 个本地策略 · {strategyLibrary?.learned.length ?? 0} 个 AI 经验</strong><p>{aiHealth?.configured ? `DeepSeek ${aiHealth.model ?? ""} 已就绪：无匹配模板时可生成待审批草案并沉淀为本地流程模板。` : "DeepSeek 未配置；当前使用可审计的本地模板，不影响自动归一化。"}</p><em>{aiHealth?.configured ? "AI 只生成草案，不绕过审批" : "本地模板模式"}</em></article>
+    </section>
+    <section className="dast-auto-layout">
+      <div className="dast-candidate-panel">
+        <div className="panel-header"><div><h3>漏洞验证队列</h3><p>SAST / AGENT 输出已转换为 DAST 格式</p></div><span>{verifiedCandidates.length} 已验证 · {candidates.length - verifiedCandidates.length} 未完成</span></div>
+        <div className="dast-queue-filters"><input value={queueFilters.keyword} onChange={(event) => setQueueFilters({ ...queueFilters, keyword: event.target.value })} placeholder="搜索漏洞、规则或策略" /><select aria-label="按验证状态筛选" value={queueFilters.validation} onChange={(event) => setQueueFilters({ ...queueFilters, validation: event.target.value })}><option value="all">全部验证状态</option><option value="verified">已验证</option><option value="unverified">未验证</option><option value="verifying">验证中</option><option value="failed">验证失败</option></select><select aria-label="按三色裁决筛选" value={queueFilters.verdict} onChange={(event) => setQueueFilters({ ...queueFilters, verdict: event.target.value })}><option value="all">全部三色裁决</option><option value="exploitable">可利用</option><option value="uncertain">不确定</option><option value="not_exploitable">不可利用</option></select></div>
+        <div className="dast-candidate-list">{candidates.length === 0 ? <div className="workbench-empty">暂无可验证线索。执行 SAST 或 AGENT 后会自动出现在这里。</div> : filteredCandidates.length === 0 ? <div className="workbench-empty">没有符合当前筛选条件的漏洞。</div> : [...filteredCandidates].sort((left, right) => Number(right.readiness === "ready") - Number(left.readiness === "ready")).map((item) => <button key={item.id} className={selectedCandidate?.id === item.id ? "active" : ""} onClick={() => { setCandidateId(item.id); const linkedFlowId = item.latest_flow_id ?? flows.find((flow) => flow.finding_id === item.id)?.id ?? ""; void selectFlow(linkedFlowId, item.latest_run_id ?? ""); }}><span><i className={`dast-ready-dot ${item.readiness}`} />{item.source} · {severityLabel(item.severity)}<b className={`dast-validation-badge ${item.validation_status}`}>{validationStatusLabel(item.validation_status)}</b></span><strong>{item.title}</strong><small>{item.latest_verdict ? `${dastVerdictLabel(item.latest_verdict)} · ${item.recommended_strategy_name}` : item.recommended_strategy_name}</small><em>{item.validation_status === "verified" ? `已验证 ${item.validation_count} 次 · ${formatDateTime(item.latest_verified_at)}` : item.validation_status === "verifying" ? `任务 ${item.latest_run_status ?? "运行中"}` : item.validation_status === "failed" ? `最近任务 ${item.latest_run_status ?? "失败"}` : item.readiness === "ready" ? "尚未验证 · 已自动补全" : item.readiness === "blocked" ? "尚未验证 · 等待目标配置" : item.missing.some((value) => value.includes("参数")) ? "尚未验证 · 等待系统自动定位输入点" : item.missing.some((value) => value.includes("身份") || value.includes("凭据")) ? "尚未验证 · 等待项目统一测试身份" : `尚未验证 · 还缺 ${item.missing.length} 项运行上下文`}</em></button>)}</div>
+      </div>
+      <div className="dast-candidate-detail">
+        {selectedCandidate ? <>
+          <div className="dast-detail-title"><div><span className={`severity ${selectedCandidate.severity}`}>{severityLabel(selectedCandidate.severity)}</span><b>{selectedCandidate.vulnerability_type}</b></div><h3>{selectedCandidate.title}</h3><p>{selectedCandidate.source} · {selectedCandidate.rule_id} · {selectedCandidate.file_path ?? "项目级风险"}</p></div>
+          <div className="dast-detail-grid"><div><span>系统已自动补全</span><p>{selectedCandidate.auto_filled.join("、") || "等待识别"}</p></div><div><span>目标 / 接口</span><p>{selectedCandidate.attack_surface.urls.join("、") || "未识别"}</p></div><div><span>方法 / 注入点</span><p>{selectedCandidate.attack_surface.methods.join(" / ")} · {selectedCandidate.attack_surface.injection_points?.map((item) => `${item.location}:${item.name}`).join("、") || selectedCandidate.attack_surface.parameters.join("、") || "无显式参数"}</p></div><div><span>证据要求</span><p>{selectedCandidate.evidence_requirements.join("、")}</p></div></div>
+          {selectedBlockingItems.length ? <div className="dast-blockers"><strong>执行所需运行上下文（不是漏洞信息补录）</strong>{selectedBlockingItems.map((item) => <span key={item}><b>{item}</b><small>{item.includes("运行地址") || item.includes("API 地址") ? "不是在此处手工填写。已上线项目在“项目资产”配置；只有源码时到 SANDBOX 启动临时目标。" : item.includes("身份") || item.includes("凭据") ? "由管理员为项目统一配置一次测试身份，队列内同类场景自动复用；页面不会要求逐条填写或暴露明文 Cookie、Token、密码。" : "系统会尽量从项目配置、上游证据和资产发现结果中补全。"}</small></span>)}</div> : null}
+          {selectedMappingItems.length ? <div className="dast-mapping-notice"><strong>系统正在自动定位运行时输入点</strong><span>当前 SAST 证据还不能唯一确定“哪个 URL 的哪个参数”。系统会继续结合源码数据流和“同步运行资产”结果自动匹配；这不是要求您填写。定位前不会生成空参数攻击请求。</span></div> : !selectedBlockingItems.length ? <div className="dast-ready-banner"><Check size={16} />运行时验证所需字段已由系统补全</div> : null}
+          <div className="dast-strategy-match"><span>匹配策略</span><strong>{selectedCandidate.recommended_strategy_name}</strong><p>{selectedCandidate.strategy_description}</p><code>{selectedCandidate.recommended_strategy_id}</code>{selectedCandidate.required_capabilities.length ? <small>隔离执行能力：{selectedCandidate.required_capabilities.join(" / ")}</small> : <small>可由 DAST 有界 HTTP 执行器完成</small>}</div>
+          <div className="dast-generate-actions"><button className="primary-action" disabled={busy || (!linkedSelectedFlow && (selectedMappingItems.length > 0 || selectedCandidate.strategy_match === "ai_required"))} onClick={() => void materialize()}>{activeAction === "materialize" ? <><LoaderCircle className="sandbox-spin" size={16} />正在生成策略…</> : activeAction === "open-strategy" ? <><LoaderCircle className="sandbox-spin" size={16} />正在打开…</> : linkedSelectedFlow ? "打开已生成策略" : selectedMappingItems.length ? "等待自动定位输入点" : selectedCandidate.strategy_match === "builtin" ? "自动生成 DAST 策略" : "等待新策略模板"}</button>{aiHealth?.configured && selectedCandidate.strategy_match === "ai_required" ? <button className="secondary-action" disabled={busy} onClick={() => void generateAiStrategy()}>{activeAction === "ai-strategy" ? <><LoaderCircle className="sandbox-spin" size={16} />DeepSeek 生成中…</> : "DeepSeek 生成待审批模板"}</button> : null}</div>
+        </> : <div className="workbench-empty">选择一条漏洞查看自动识别结果。</div>}
+      </div>
+    </section>
+    <section className="dast-execution-console" ref={executionConsoleRef}>
+      <div className="panel-header"><div><h3>策略与动态执行器</h3><p>策略 ID、任务 ID、请求 ID 全程关联；任何策略修改都会撤销原审批。</p></div><select value={selectedFlow?.id ?? ""} onChange={(event) => void selectFlow(event.target.value)}><option value="">尚未生成策略</option>{flows.map((flow) => <option key={flow.id} value={flow.id}>{flow.status === "approved" ? "已审批" : "草稿"} · {flow.name}</option>)}</select></div>
+      {selectedFlow ? <div className="dast-console-grid">
+        <div className="dast-strategy-editor"><div className="dast-id-line"><span>STRATEGY ID</span><code>{selectedFlow.id}</code></div><div className="dast-flow-meta"><span>{selectedFlow.flow_mode.toUpperCase()}</span><span>{selectedFlow.strategy_source}</span><span>{selectedFlow.allowed_paths.length} 条授权路径</span><span>{selectedFlow.roles.length} 个隔离会话</span></div><details><summary>人工修改策略步骤（可选）</summary><textarea rows={14} value={strategyJson} onChange={(event) => setStrategyJson(event.target.value)} /><button className="secondary-action" disabled={busy} onClick={() => void saveStrategy()}>{activeAction === "save-strategy" ? <><LoaderCircle className="sandbox-spin" size={16} />正在保存…</> : "保存策略修改"}</button></details></div>
+        <div className="dast-run-controls"><h4>执行前控制</h4><label>审批依据<input value={approval.reference} onChange={(event) => setApproval({ ...approval, reference: event.target.value })} placeholder="真实授权工单 / 书面审批编号" /></label><label>审批人<input value={approval.approved_by} onChange={(event) => setApproval({ ...approval, approved_by: event.target.value })} /></label><button className="secondary-action" disabled={busy || selectedFlow.status === "approved"} onClick={() => void approve()}>{activeAction === "approve" ? <><LoaderCircle className="sandbox-spin" size={16} />正在记录审批…</> : selectedFlow.status === "approved" ? "范围已审批" : "审批并锁定范围"}</button><label>操作人<input value={operator} onChange={(event) => setOperator(event.target.value)} /></label><div className="dast-run-buttons"><button className="secondary-action" disabled={busy} onClick={() => void execute("dry_run")}>{activeAction === "dry_run" ? <><LoaderCircle className="sandbox-spin" size={17} />正在预执行…</> : "预执行（不联网）"}</button><button className="primary-action" disabled={busy || !preflight?.can_execute_local} onClick={() => void execute("api_execution")}>{activeAction === "api_execution" ? <><LoaderCircle className="sandbox-spin" size={17} />DAST HTTP 执行中…</> : "DAST HTTP 执行"}</button>{preflight?.can_handoff_sandbox ? <button className="primary-action" disabled={busy} onClick={() => void handoffSandbox()}>{activeAction === "sandbox-handoff" ? <><LoaderCircle className="sandbox-spin" size={17} />正在移交…</> : "交给 SANDBOX 隔离执行"}</button> : null}</div>{["dry_run", "api_execution", "sandbox-handoff"].includes(activeAction) ? <div className="dast-execution-progress"><LoaderCircle className="sandbox-spin" size={19} /><div><strong>{activeAction === "api_execution" ? "DAST 正在执行已审批 HTTP 策略" : activeAction === "dry_run" ? "正在进行不联网预执行" : "正在创建 SANDBOX 隔离任务"}</strong><span>{activeAction === "api_execution" ? "请求、响应、耗时和状态变化完成后会自动归档到下方任务记录。" : "操作完成后会自动刷新执行前检查、任务和证据。"}</span></div></div> : executionFeedback ? <div className={`dast-execution-result ${executionFeedback.tone}`} role="status">{executionFeedback.text}</div> : null}</div>
+      </div> : <div className="workbench-empty">从左侧漏洞队列生成策略后，执行器会在这里就绪。</div>}
+    </section>
+    {selectedFlow ? <section className="dast-preflight-panel"><div className="panel-header"><div><h3>执行前检查</h3><p>运行目标、审批范围、会话、路径和执行后端必须分别满足。</p></div><span className={`dast-preflight-status ${preflight?.status ?? "blocked"}`}>{preflight?.status === "ready" ? "可由 DAST 执行" : preflight?.status === "waiting_sandbox" ? "等待 SANDBOX" : "存在阻塞"}</span></div><div className="dast-preflight-grid">{preflight?.checks.map((item) => <div key={item.code} className={item.status}><b>{item.label}</b><span>{item.detail}</span>{item.remediation ? <small>{item.remediation}</small> : null}</div>)}</div>{preflight?.required_capabilities.length ? <p className="dast-capability-contract">SANDBOX 合同能力：{preflight.required_capabilities.join(" / ")}。DAST 只下发已审批策略并接收事实证据，三色裁决仍由 DAST 完成。</p> : null}</section> : null}
+    <section className="dast-state-panel"><div className="panel-header"><div><h3>过程状态机</h3><p>成功路径与 BLOCKED / FAILED / CANCELED 等终止分支分别记录</p></div>{runs.length ? <select value={selectedRun?.id ?? ""} onChange={(event) => void selectRun(event.target.value)}>{runs.map((run) => <option key={run.id} value={run.id}>{run.status} · {formatDateTime(run.created_at)}</option>)}</select> : null}</div>{selectedRun ? <><div className="dast-id-line"><span>TASK ID</span><code>{selectedRun.id}</code></div><div className="dast-state-track">{stateSnapshots.map((log) => { const state = String(log.detail.state ?? log.step_id); return <div className="complete" key={log.id}><i><Check size={13} /></i><b>{state}</b><small>{String(log.response_summary ?? "已记录")}</small></div>; })}</div></> : <div className="workbench-empty">运行策略后显示完整状态轨迹。</div>}</section>
+    <section className="dast-evidence-panel dast-evidence-summary">
+      <div className="panel-header"><div><h3>证据归档</h3><p>主页面仅显示当前任务的证据完整性；原始事实和诊断日志按需查看。</p></div><div className="dast-evidence-actions"><button className="primary-action" disabled={!selectedRun && !discovery} onClick={() => setEvidenceDrawerOpen(true)}>查看证据详情</button><button className="secondary-action" disabled={busy} onClick={() => void onExportReport()}>导出专项报告</button></div></div>
+      <div className="dast-evidence-summary-grid">
+        <article><span>当前任务</span><strong>{selectedRun?.id ?? "尚未选择任务"}</strong><small>{selectedRun ? `${selectedRun.execution_mode} · ${selectedRun.status}` : "选择已执行任务后查看"}</small></article>
+        <article><span>证据状态</span><strong>{selectedEvidenceComplete ? "完整并已裁决" : requestSnapshots.length + sandboxEvidenceSnapshots.length ? "已采集，尚未满足裁决门槛" : "尚无运行证据"}</strong><small>Dry Run 和等待任务不计为已验证</small></article>
+        <article><span>HTTP 交换</span><strong>{requestSnapshots.length} 条</strong><small>脱敏请求、响应与时延</small></article>
+        <article><span>SANDBOX 事实</span><strong>{sandboxEvidenceSnapshots.length} 条</strong><small>差分、截图、HAR、Console、OAST 等</small></article>
+      </div>
+    </section>
+    {evidenceDrawerOpen ? <div className="dast-evidence-drawer-backdrop" role="presentation" onMouseDown={() => setEvidenceDrawerOpen(false)}>
+      <aside className="dast-evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="dast-evidence-drawer-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="dast-evidence-drawer-header"><div><span>DAST EVIDENCE</span><h3 id="dast-evidence-drawer-title">证据详情与执行日志</h3><p>{selectedCandidate?.title ?? "项目运行证据"} · Task {selectedRun?.id ?? "未选择"}</p></div><button type="button" aria-label="关闭证据详情" onClick={() => setEvidenceDrawerOpen(false)}>×</button></div>
+        <div className="dast-evidence-drawer-body">
+          <div className="dast-evidence-coverage">{[["原始请求 / 响应", requestSnapshots.length ? "已脱敏归档" : "等待执行"], ["截图 / 录屏", sandboxEvidenceSnapshots.some((item) => ["browser", "screenshot", "video", "har"].includes(String(item.detail.evidence_type))) ? "已归档" : "等待隔离浏览器"], ["DNS / HTTP 外带", sandboxEvidenceSnapshots.some((item) => item.detail.evidence_type === "oast_callback") ? "已归档" : "等待 OAST 回调"], ["时间延迟", requestSnapshots.length || sandboxEvidenceSnapshots.some((item) => item.detail.evidence_type === "timing") ? "已记录" : "等待执行"], ["环境信息", discovery || sandboxEvidenceSnapshots.some((item) => item.detail.evidence_type === "environment") ? "已识别" : "等待资产同步"]].map(([name, status]) => <span key={name}><b>{name}</b><small>{status}</small></span>)}</div>
+          <details className="dast-evidence-guide"><summary>这些证据分别代表什么？</summary><div><p><b>原始请求 / 响应</b><span>实际执行时保存的脱敏 HTTP 交换，用于证明输入、响应和状态差异。</span></p><p><b>截图 / HAR / Console</b><span>隔离浏览器的页面截图、网络归档和控制台日志；每条都保存状态及内容哈希。</span></p><p><b>DNS / HTTP 外带</b><span>OAST 回调，用于证明 SSRF、XXE 或命令执行产生了目标外的网络行为。</span></p><p><b>时间延迟 / 环境信息</b><span>多次时延样本与沙箱运行时元数据，用于时延型验证和结果复核。</span></p></div></details>
+          <section className="dast-drawer-evidence-section"><div><h4>当前任务 HTTP 证据</h4><span>{requestSnapshots.length} 条</span></div>{requestSnapshots.length ? <div className="dast-request-log">{requestSnapshots.map((item) => <details key={item.id}><summary><code>{String(item.detail.request_id ?? item.id)}</code><span>{item.step_id} · {item.status}</span><b>{item.evidence_hash.slice(0, 12)}…</b></summary><dl><div><dt>Task ID</dt><dd>{String(item.detail.task_id ?? item.run_id)}</dd></div><div><dt>Strategy ID</dt><dd>{String(item.detail.strategy_id ?? item.flow_id)}</dd></div><div><dt>请求</dt><dd>{item.request_summary ?? "未发起"}</dd></div><div><dt>响应</dt><dd>{item.response_summary ?? "未记录"}</dd></div><div><dt>脱敏原始报文与时延</dt><dd><pre className="code-preview">{JSON.stringify(item.detail.exchange ?? {}, null, 2)}</pre></dd></div></dl></details>)}</div> : <div className="workbench-empty">暂无 HTTP 请求证据。Dry Run 和等待 SANDBOX 的任务不会伪造网络证据。</div>}</section>
+          <section className="dast-drawer-evidence-section"><div><h4>SANDBOX 事实证据</h4><span>{sandboxEvidenceSnapshots.length} 条</span></div>{sandboxEvidenceSnapshots.length ? <div className="dast-discovery-log dast-sandbox-fact-list">{sandboxEvidenceSnapshots.map((item) => <p key={item.id}><code>{String(item.detail.evidence_id ?? item.id)}</code><span>{String(item.detail.evidence_type ?? "runtime_trace")}</span><b>{item.status} · {item.evidence_hash.slice(0, 12)}…</b></p>)}</div> : <div className="workbench-empty">当前任务没有 SANDBOX 事实证据。</div>}</section>
+          {discovery?.request_logs.length ? <details className="dast-discovery-log dast-advanced-log"><summary>高级诊断：资产发现请求日志 · Task {discovery.task_id}</summary><p className="dast-log-explanation">这些同源只读 GET 仅用于发现 URL、表单和 API，不属于漏洞裁决证据。</p>{discovery.request_logs.map((item) => <p key={item.request_id}><code>{item.request_id}</code><span>{item.method} {item.url}</span><b>HTTP {item.status_code ?? item.status} · {item.duration_ms} ms</b></p>)}</details> : null}
+        </div>
+      </aside>
+    </div> : null}
+  </ModuleGovernanceShell>;
+}
+
+// Kept intentionally for rollback/reference while the automated DAST workbench is validated.
+// The component is no longer rendered; none of its data-entry workflows have been deleted.
+function LegacyDastGovernanceView({ project, findings, validations, strategies, strategyId, targetUrl, targetConfirmation, selectedFindingId, loading, onTargetUrlChange, onTargetConfirmationChange, onStrategyChange, onSelectRisk, onRun, onCreateManual, onUpdateManual, onExportReport }: DastGovernanceProps) {
   const [filters, setFilters] = useState({ keyword: "", verdict: "all", linked: "all" });
   const [page, setPage] = useState(1);
   const [entryMode, setEntryMode] = useState<"baseline" | "manual">("baseline");
@@ -3097,7 +3441,183 @@ function DastBusinessFlowWorkspace({ project }: { project: Project }) {
   </div></details>;
 }
 
-function SandboxGovernanceView({ findings, validations, evidence, graph, templates, runCommand, sandboxImage, selectedFindingId, selectedValidationId, loading, onRunCommandChange, onSandboxImageChange, onSelectRisk, onSelectValidation, onRun }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; templates: SandboxTemplate[]; runCommand: string; sandboxImage: string; selectedFindingId: string; selectedValidationId: string; loading: boolean; onRunCommandChange: (value: string) => void; onSandboxImageChange: (value: string) => void; onSelectRisk: (findingId: string) => void; onSelectValidation: (validationId: string) => void; onRun: (plan: SandboxExecutionPlan) => Promise<void> }) {
+function SandboxGovernanceView({ project }: { project: Project }) {
+  const [health, setHealth] = useState<SandboxCapabilityHealth | null>(null);
+  const [templates, setTemplates] = useState<SandboxTemplate[]>([]);
+  const [launchPlan, setLaunchPlan] = useState<SandboxLaunchPlan | null>(null);
+  const [targets, setTargets] = useState<SandboxTarget[]>([]);
+  const [tasks, setTasks] = useState<SandboxTask[]>([]);
+  const [events, setEvents] = useState<SandboxTaskEvent[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [authorized, setAuthorized] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState("");
+  const selectedTask = tasks.find((item) => item.id === selectedTaskId) ?? tasks[0];
+  const runningTargets = targets.filter((item) => item.status === "running");
+  const activeTargets = targets.filter((item) => item.status !== "stopped");
+  const stoppedTargetCount = targets.length - activeTargets.length;
+  const suggestedStart = templates.find((item) => item.command_type === "start");
+  const plannedStart = launchPlan?.recommended;
+  const effectiveSandboxImage = project.sandbox_image || plannedStart?.image || suggestedStart?.image || "";
+  const effectiveSandboxCommand = project.sandbox_command || plannedStart?.command || suggestedStart?.command || "";
+  const dockerTargetReady = Boolean(project.source_path && ((project.sandbox_image && project.sandbox_command) || plannedStart || suggestedStart));
+
+  async function reload() {
+    const [nextHealth, nextTargets, nextTasks, nextTemplates] = await Promise.all([
+      request<SandboxCapabilityHealth>("/sandbox/capabilities"),
+      request<SandboxTarget[]>(`/sandbox/projects/${project.id}/targets`),
+      request<SandboxTask[]>(`/sandbox/projects/${project.id}/tasks`),
+      request<SandboxTemplate[]>(`/sandbox/projects/${project.id}/templates`),
+    ]);
+    const activeTaskId = nextTasks.some((item) => item.id === selectedTaskId) ? selectedTaskId : nextTasks[0]?.id ?? "";
+    const nextEvents = activeTaskId ? await request<SandboxTaskEvent[]>(`/sandbox/tasks/${activeTaskId}/events`) : [];
+    setHealth(nextHealth);
+    setTargets(nextTargets);
+    setTasks(nextTasks);
+    setTemplates(nextTemplates);
+    setSelectedTaskId(activeTaskId);
+    setEvents(nextEvents);
+    return { targetCount: nextTargets.length, taskCount: nextTasks.length, eventCount: nextEvents.length };
+  }
+
+  async function refreshWorkspace() {
+    if (busy) return;
+    setBusy("refresh");
+    setMessage("正在重新检查执行能力、目标健康状态、任务队列和状态日志…");
+    try {
+      const refreshableTargets = targets.filter((target) => target.status !== "stopped");
+      const healthResults = await Promise.allSettled(
+        refreshableTargets.map((target) => request(`/sandbox/targets/${target.id}/health`, { method: "POST" })),
+      );
+      const failedHealthChecks = healthResults.filter((item) => item.status === "rejected").length;
+      const summary = await reload();
+      const refreshedAt = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date());
+      setMessage(`刷新完成（${refreshedAt}）：${summary.targetCount} 个目标、${summary.taskCount} 个任务、当前任务 ${summary.eventCount} 条状态日志${failedHealthChecks ? `；${failedHealthChecks} 个目标健康检查失败` : ""}。`);
+    } catch (error) {
+      setMessage(`工作台刷新失败：${errorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    setTargets([]); setTasks([]); setTemplates([]); setLaunchPlan(null); setEvents([]); setSelectedTaskId(""); setAuthorized(false); setMessage("");
+    Promise.all([
+      request<SandboxCapabilityHealth>("/sandbox/capabilities"),
+      request<SandboxTarget[]>(`/sandbox/projects/${project.id}/targets`),
+      request<SandboxTask[]>(`/sandbox/projects/${project.id}/tasks`),
+      request<SandboxTemplate[]>(`/sandbox/projects/${project.id}/templates`),
+      request<SandboxLaunchPlan>(`/sandbox/projects/${project.id}/launch-plan?use_ai=true`),
+    ]).then(([nextHealth, nextTargets, nextTasks, nextTemplates, nextLaunchPlan]) => {
+      if (!active) return;
+      setHealth(nextHealth); setTargets(nextTargets); setTasks(nextTasks); setTemplates(nextTemplates); setLaunchPlan(nextLaunchPlan); setSelectedTaskId(nextTasks[0]?.id ?? "");
+    }).catch((error) => { if (active) setMessage(`工作台加载失败：${errorMessage(error)}`); });
+    return () => { active = false; };
+  }, [project.id]);
+
+  useEffect(() => {
+    if (!selectedTask?.id) { setEvents([]); return; }
+    let active = true;
+    request<SandboxTaskEvent[]>(`/sandbox/tasks/${selectedTask.id}/events`).then((items) => { if (active) setEvents(items); }).catch((error) => { if (active) setMessage(`状态日志加载失败：${errorMessage(error)}`); });
+    return () => { active = false; };
+  }, [selectedTask?.id, selectedTask?.updated_at]);
+
+  async function createTarget(mode: "external" | "docker") {
+    setBusy(`target-${mode}`);
+    setMessage(mode === "docker" ? `正在启动项目隔离实例：检查或拉取白名单镜像、在临时构建网络准备依赖、切换到隔离网络并等待 HTTP 健康检查。首次启动可能需要数分钟，请不要重复点击。` : "正在注册目标并执行可达性检查…");
+    try {
+      const created = await request<SandboxTarget>(`/sandbox/projects/${project.id}/targets`, { method: "POST", body: JSON.stringify({ mode, operator: "web-operator", operator_confirmed: authorized, browser_session_id: mode === "docker" ? SANDBOX_BROWSER_SESSION_ID : null, image: mode === "docker" ? effectiveSandboxImage : null, command: mode === "docker" ? effectiveSandboxCommand : null, container_port: mode === "docker" ? plannedStart?.container_port ?? suggestedStart?.container_port ?? null : null, health_path: mode === "docker" ? plannedStart?.health_path ?? "/" : "/" }) });
+      if (mode === "docker") registerSandboxUnloadProject(project.id);
+      await reload();
+      setMessage(mode === "docker" ? created.status === "running" ? "项目专属隔离实例已启动；返回 DAST 刷新后会自动使用这个临时地址。" : `隔离实例已创建，但健康检查状态为“${sandboxStatusLabel(created.status)}”。请查看目标卡片的健康信息；依赖、数据库或启动环境未就绪时，DAST 不会使用该地址。` : created.status === "running" ? "已上线目标已注册并完成可达性检查。" : "目标已登记，但当前不可达；DAST 不会把它当作可运行目标。"
+      );
+    } catch (error) { setMessage(`目标创建失败：${errorMessage(error)}`); }
+    finally { setBusy(""); }
+  }
+
+  async function refreshTarget(target: SandboxTarget) {
+    setBusy(`health-${target.id}`); setMessage("");
+    try { await request(`/sandbox/targets/${target.id}/health`, { method: "POST" }); await reload(); }
+    catch (error) { setMessage(`健康检查失败：${errorMessage(error)}`); }
+    finally { setBusy(""); }
+  }
+
+  async function bootstrapIdentity(target: SandboxTarget) {
+    setBusy(`identity-${target.id}`);
+    setMessage("正在识别注册/登录流程并创建一次性测试身份；凭据不会显示在页面或写入日志…");
+    try {
+      const updated = await request<SandboxTarget>(`/sandbox/targets/${target.id}/identities/bootstrap`, { method: "POST" });
+      await reload();
+      const identity = updated.health_detail?.identity as { status?: string; role_count?: number; detail?: string } | undefined;
+      setMessage(identity?.status === "ready" ? `测试身份已就绪：${identity.role_count ?? 0} 个业务角色可由 DAST 自动复用。` : `自动身份初始化未完成：${identity?.detail ?? "项目需要登录适配器或管理员密钥引用。"}`);
+    } catch (error) { setMessage(`测试身份初始化失败：${errorMessage(error)}`); }
+    finally { setBusy(""); }
+  }
+
+  async function stopRuntime(target: SandboxTarget) {
+    setBusy(`stop-${target.id}`); setMessage("");
+    try { await request(`/sandbox/targets/${target.id}/stop`, { method: "POST" }); await reload(); setMessage("目标实例已停止；Docker 容器与专属网络已移除，任务和证据记录仍保留。"); }
+    catch (error) { setMessage(`停止失败：${errorMessage(error)}`); }
+    finally { setBusy(""); }
+  }
+
+  async function executeSelected() {
+    if (!selectedTask) return;
+    setBusy(`execute-${selectedTask.id}`); setMessage("");
+    try {
+      const target = runningTargets[0];
+      const updated = await request<SandboxTask>(`/sandbox/tasks/${selectedTask.id}/execute`, { method: "POST", body: JSON.stringify({ operator: "web-operator", target_instance_id: target?.id ?? null }) });
+      await reload();
+      setSelectedTaskId(updated.id);
+      setMessage(updated.status === "completed" ? "隔离执行完成，事实证据已回传 DAST 并完成三色裁决。" : `任务已进入 ${sandboxStatusLabel(updated.status)}。`);
+    } catch (error) { setMessage(`执行失败：${errorMessage(error)}`); }
+    finally { setBusy(""); }
+  }
+
+  async function cancelSelected() {
+    if (!selectedTask) return;
+    setBusy(`cancel-${selectedTask.id}`); setMessage("");
+    try { await request(`/sandbox/tasks/${selectedTask.id}/cancel`, { method: "POST", body: JSON.stringify({ operator: "web-operator", reason: "操作员在 SANDBOX 工作台取消" }) }); await reload(); setMessage("任务已取消并同步回 DAST。" ); }
+    catch (error) { setMessage(`取消失败：${errorMessage(error)}`); }
+    finally { setBusy(""); }
+  }
+
+  const capabilityEntries = Object.entries(health?.capabilities ?? {});
+  return <section className="sandbox-workbench">
+    <section className="panel full sandbox-hero"><div><span className="eyebrow">DAST ISOLATED EXECUTION</span><h2>SANDBOX 隔离验证中心</h2><p>这里不再要求填写命令或补录漏洞信息。DAST 审批后的策略会自动入队，SANDBOX 只负责启动目标、执行固定探针、固化事实证据并回传。</p></div><button className="secondary-action" disabled={Boolean(busy)} onClick={() => void refreshWorkspace()}>{busy === "refresh" ? "刷新中…" : "刷新工作台"}</button></section>
+    {message ? <div className="panel full sandbox-message">{message}</div> : null}
+
+    <section className="panel full"><div className="panel-header"><div><h2>1. 执行能力预检</h2><span>{health?.docker.detail ?? "正在检查执行环境"}</span></div><span className={`sandbox-state ${health?.status ?? "checking"}`}>{health?.status === "ready" ? "基础执行器就绪" : "存在阻塞项"}</span></div>
+      <div className="sandbox-capability-grid">{capabilityEntries.map(([key, item]) => <article key={key} className={`sandbox-capability ${item.status}`}><div><strong>{sandboxCapabilityLabel(key)}</strong><span>{sandboxStatusLabel(item.status)}</span></div><p>{item.detail}</p></article>)}</div>
+    </section>
+
+    <section className="panel full"><div className="panel-header"><div><h2>2. 项目测试目标</h2><span>已上线地址可直接注册；只有源码时由 SANDBOX 生成临时 URL，不需要手工编写地址</span></div></div>
+      <label className="sandbox-authorization"><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} /><span>我确认这些目标属于当前项目，且本次动态测试已获授权。</span></label>
+      <div className="sandbox-target-actions"><button className="primary-action" disabled={!authorized || !Boolean(project.runtime_url || project.api_base_url) || Boolean(busy)} onClick={() => void createTarget("external")}>{busy === "target-external" ? <><LoaderCircle className="sandbox-spin" size={17} />正在检查目标…</> : "注册已上线目标"}</button><button className="secondary-action" disabled={!authorized || !dockerTargetReady || Boolean(busy)} onClick={() => void createTarget("docker")}>{busy === "target-docker" ? <><LoaderCircle className="sandbox-spin" size={17} />正在启动隔离实例…</> : "启动项目隔离实例"}</button></div>
+      {busy === "target-docker" ? <div className="sandbox-start-progress"><LoaderCircle className="sandbox-spin" size={20} /><div><strong>隔离实例正在启动</strong><span>正在完成镜像校验/拉取 → 依赖准备 → 候选试运行 → 端口绑定 → HTTP 健康检查；首次启动可能需要几分钟</span></div></div> : null}
+      {!project.runtime_url && !project.api_base_url ? effectiveSandboxImage && effectiveSandboxCommand ? <div className="dast-info-strip">{project.sandbox_image && project.sandbox_command ? "项目已保存运行方案" : plannedStart?.source === "deepseek_validated" ? "DeepSeek 候选已通过本地安全校验" : "已从源码确定启动方案"}：<strong>{effectiveSandboxImage}</strong> · <code>{effectiveSandboxCommand}</code> · 端口 {plannedStart?.container_port ?? suggestedStart?.container_port ?? 8000}。{launchPlan?.orchestration?.support_services.length ? ` 将同时编排：${launchPlan.orchestration.support_services.map((item) => `${item.kind}(${item.image})`).join("、")}；依赖不暴露宿主端口。` : " 当前为单服务运行方案。"}{launchPlan?.ai.status === "completed" ? ` DeepSeek（${launchPlan.ai.model ?? "configured"}）已参与依赖与入口分析。` : ` DeepSeek 状态：${launchPlan?.ai.rationale ?? launchPlan?.ai.status ?? "分析中"}。`} 启动时会按锁文件准备依赖；缺失的官方白名单镜像可自动拉取，成功方案会保存到当前项目。</div> : <div className="empty-project">{launchPlan?.message ?? "只有源码但尚未识别出可运行入口。"} DeepSeek 会尝试从 README、Dockerfile、CI 和框架配置补充候选；仍无法通过安全校验时才需要专用运行适配器。</div> : null}
+      <div className="sandbox-target-list">{activeTargets.length === 0 ? <div className="empty-project">还没有可用目标实例。创建后系统会自动进行健康检查。</div> : activeTargets.map((target) => { const identity = target.health_detail?.identity as { status?: string; role_count?: number; detail?: string } | undefined; const services = Array.isArray(target.policy?.support_services) ? target.policy.support_services as Record<string, unknown>[] : []; return <article key={target.id} className="sandbox-target-card"><div><span className={`sandbox-state ${target.status}`}>{sandboxStatusLabel(target.status)}</span><strong>{target.mode === "docker" ? "项目专属 Docker 实例" : "已上线项目地址"}</strong><code>{target.runtime_url}</code><small>{String(target.health_detail?.status_code ?? "-")} · {String(target.health_detail?.latency_ms ?? "-")} ms · {formatDateTime(target.updated_at)}</small>{services.length ? <small>依赖服务：{services.map((item) => `${String(item.kind)} ${String(item.status)}`).join("、")}</small> : null}{target.health_detail?.error ? <small>诊断：{String(target.health_detail.error)} · {String(target.health_detail.remediation ?? "请核对监听地址、端口和健康路径")}</small> : null}<small>测试身份：{identity?.status === "ready" ? `已自动准备 ${identity.role_count ?? 0} 个角色` : identity?.detail ?? "等待初始化"}</small></div><div className="sandbox-row-actions"><button className="secondary-action" disabled={Boolean(busy)} onClick={() => void refreshTarget(target)}>检查</button>{target.mode === "docker" && identity?.status !== "ready" ? <button className="secondary-action" disabled={Boolean(busy)} onClick={() => void bootstrapIdentity(target)}>{busy === `identity-${target.id}` ? "初始化中…" : "重试测试身份"}</button> : null}<button className="secondary-action danger" disabled={Boolean(busy)} onClick={() => void stopRuntime(target)}>停止</button></div></article>; })}</div>
+      {stoppedTargetCount ? <p className="retest-note">已保留 {stoppedTargetCount} 条停止记录用于审计，默认不在演示工作区展示。</p> : null}
+    </section>
+
+    <section className="sandbox-task-layout"><section className="panel"><div className="panel-header"><div><h2>3. DAST 自动验证队列</h2><span>仅接收 DAST 已批准的隔离合同</span></div><span>{tasks.length} 个任务</span></div><div className="sandbox-task-list">{tasks.length === 0 ? <div className="empty-project">暂无任务。在 DAST 中批准策略并提交隔离执行后会自动出现在这里。</div> : tasks.map((task) => <button key={task.id} className={`sandbox-task-item ${selectedTask?.id === task.id ? "active" : ""}`} onClick={() => setSelectedTaskId(task.id)}><span className={`sandbox-state ${task.status}`}>{sandboxStatusLabel(task.status)}</span><strong>{String((task.contract as { target?: { url?: string } }).target?.url ?? task.strategy_id)}</strong><small>{task.required_capabilities.map(sandboxCapabilityLabel).join("、") || "基础 HTTP"} · {formatDateTime(task.created_at)}</small></button>)}</div></section>
+      <section className="panel sandbox-task-detail"><div className="panel-header"><div><h2>4. 执行与证据回传</h2><span>{selectedTask ? `任务 ${selectedTask.id}` : "请选择任务"}</span></div></div>{!selectedTask ? <div className="empty-project">当前没有可执行任务。</div> : <>
+        <dl className="sandbox-contract-summary"><div><dt>来源 / 策略</dt><dd>{selectedTask.source_module} / {selectedTask.strategy_id}</dd></div><div><dt>目标实例</dt><dd>{selectedTask.target_instance_id ?? "执行时自动选择健康实例"}</dd></div><div><dt>所需能力</dt><dd>{selectedTask.required_capabilities.map(sandboxCapabilityLabel).join("、") || "基础 HTTP"}</dd></div><div><dt>结果</dt><dd>{selectedTask.result_summary ?? selectedTask.error ?? "等待执行"}</dd></div></dl>
+        <div className="sandbox-target-actions"><button className="primary-action" disabled={Boolean(busy) || !["queued", "blocked"].includes(selectedTask.status) || runningTargets.length === 0} onClick={() => void executeSelected()}>{busy.startsWith("execute-") ? "隔离执行中…" : "执行固定验证策略"}</button><button className="secondary-action" disabled={Boolean(busy) || !["queued", "blocked"].includes(selectedTask.status)} onClick={() => void cancelSelected()}>取消任务</button></div>
+        {runningTargets.length === 0 ? <div className="empty-project">没有健康目标实例，暂不能执行；任务与策略不会丢失。</div> : null}
+        <details className="record-evidence" open><summary>状态机日志（{events.length}）</summary><ol className="sandbox-event-list">{events.map((event) => <li key={event.id}><b>{event.state}</b><span>{sandboxStatusLabel(event.status)}</span><p>{String(event.detail.message ?? "状态已记录")}</p><small>{formatDateTime(event.created_at)}</small></li>)}</ol></details>
+        <details className="record-evidence" open><summary>事实证据（{selectedTask.evidence.length}）</summary><div className="sandbox-evidence-list">{selectedTask.evidence.length === 0 ? <p>尚未产生证据。</p> : selectedTask.evidence.map((item, index) => <article key={String(item.evidence_id ?? index)}><strong>{String(item.type ?? "runtime_trace")} · {item.confirmed ? "已确认触发" : "已记录"}</strong><p>{String(item.facts ?? "")}</p><small>request_id: {String(item.request_id ?? "-")} · sha256: {String(item.artifact_sha256 ?? "-")}</small></article>)}</div></details>
+      </>}</section>
+    </section>
+  </section>;
+}
+
+function sandboxCapabilityLabel(value: string): string { return ({ isolated_http: "隔离 HTTP", timing_probe: "时延差分", oast: "外带回调", browser: "浏览器取证", agent_runtime: "Agent 运行时" } as Record<string, string>)[value] ?? value; }
+function sandboxStatusLabel(value: string): string { return ({ ready: "就绪", blocked: "阻塞", waiting_adapter: "待接入", queued: "待执行", running: "执行中", analyzing: "分析中", completed: "已完成", failed: "失败", cancelled: "已取消", unhealthy: "不可达", stopped: "已停止", starting: "启动中", pending: "等待中", reported: "已回传" } as Record<string, string>)[value] ?? value; }
+
+// 旧的手工命令/证据关联界面暂时保留，默认入口已切换到闭环工作台。
+function LegacySandboxGovernanceView({ findings, validations, evidence, graph, templates, runCommand, sandboxImage, selectedFindingId, selectedValidationId, loading, onRunCommandChange, onSandboxImageChange, onSelectRisk, onSelectValidation, onRun }: { findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; templates: SandboxTemplate[]; runCommand: string; sandboxImage: string; selectedFindingId: string; selectedValidationId: string; loading: boolean; onRunCommandChange: (value: string) => void; onSandboxImageChange: (value: string) => void; onSelectRisk: (findingId: string) => void; onSelectValidation: (validationId: string) => void; onRun: (plan: SandboxExecutionPlan) => Promise<void> }) {
   const [filters, setFilters] = useState({ keyword: "", linked: "all", result: "all", runtime: "all" });
   const [page, setPage] = useState(1);
   const [templatePage, setTemplatePage] = useState(1);
@@ -3144,10 +3664,11 @@ function SandboxGovernanceView({ findings, validations, evidence, graph, templat
   </ModuleGovernanceShell>;
 }
 
-function ModuleGovernanceShell({ moduleKey, lastStatus, metrics, action, loading, runDisabled = false, runLabel, hideRunButton = false, onRun, children }: { moduleKey: Exclude<ModuleKey, "aspm">; lastStatus: string | null; metrics: Array<[string, string | number]>; action: string; loading: boolean; runDisabled?: boolean; runLabel?: string; hideRunButton?: boolean; onRun: () => Promise<void>; children: React.ReactNode }) {
+function ModuleGovernanceShell({ moduleKey, lastStatus, metrics, action, loading, runDisabled = false, runLabel, hideRunButton = false, onRun, children, afterMetrics }: { moduleKey: Exclude<ModuleKey, "aspm">; lastStatus: string | null; metrics: Array<[string, string | number]>; action: string; loading: boolean; runDisabled?: boolean; runLabel?: string; hideRunButton?: boolean; onRun: () => Promise<void>; children: React.ReactNode; afterMetrics?: React.ReactNode }) {
   return <div className="governance-view module-governance-view">
     <section className="module-governance-heading"><div className="module-icon">{moduleIcons[moduleKey]}</div><div><h2>{MODULE_DISPLAY[moduleKey].name}</h2><p>{MODULE_DISPLAY[moduleKey].purpose}</p></div><div className="module-run-actions"><span>{lastStatus ? scanStatusLabel(lastStatus) : "尚未执行"}</span>{hideRunButton ? null : <button className="primary-action" disabled={loading || runDisabled} onClick={() => void onRun()}>{loading ? "执行中" : runLabel ?? (moduleKey === "dast" || moduleKey === "sandbox" ? "再次执行" : moduleKey === "agent" ? "重新扫描并对比" : "重新扫描并复测")}</button>}</div></section>
     <section className="governance-metrics">{metrics.map(([label, value]) => <Metric key={label} label={label} value={value} />)}</section>
+    {afterMetrics}
     <section className="panel"><div className="panel-header"><h2>主要结果</h2><span>完整结果 · 每页 10 条</span></div>{children}</section>
     <section className="next-action-panel"><strong>建议动作</strong><span>{action}</span></section>
   </div>;
@@ -3191,13 +3712,23 @@ function Pagination({ page, pageCount, total, onPageChange }: { page: number; pa
 function RetestComparisonPanel({ comparison }: { comparison: FindingRetestComparison | null }) {
   const [resultFilter, setResultFilter] = useState("all");
   const [page, setPage] = useState(1);
-  if (!comparison?.has_comparison) return <section className="retest-panel"><div className="panel-header"><h3>扫描批次对比</h3><span>等待第二次扫描</span></div><p>再次扫描后，系统会比较最近两个批次，显示风险记录仍存在、消失、新增或变化；首次扫描不会被表述为已经完成复测。</p></section>;
+  const sourceLabel = comparison?.source === "SAST" ? "SAST" : comparison?.source === "AGENT" ? "AGENT" : comparison?.source === "SCA" ? "SCA" : "当前模块";
+  const sourceNote = comparison?.source === "SCA"
+    ? "这里统计的是 SCA 风险记录，不是组件数量；一个组件可能对应多个漏洞、许可证或版本风险，因此风险记录数可能大于组件数。"
+    : comparison?.source === "SAST"
+      ? "这里仅比较最近两次 SAST 扫描的代码漏洞记录，不包含 SCA 组件或依赖风险。"
+      : comparison?.source === "AGENT"
+        ? "这里仅比较最近两次 AGENT 扫描的 Agent 配置、能力边界与数据流风险，不包含 SCA 组件风险。"
+        : "这里仅比较当前模块最近两次扫描的风险记录。";
+  if (!comparison?.has_comparison) return <section className="retest-panel"><div className="panel-header"><h3>{sourceLabel} 扫描批次对比</h3><span>等待第二次扫描</span></div><p>再次扫描后，系统会比较最近两个批次，显示风险记录仍存在、消失、新增或变化；首次扫描不会被表述为已经完成复测。</p></section>;
   const filtered = comparison.items.filter((item) => resultFilter === "all" || item.result === resultFilter);
   const pagination = paginate(filtered, page);
+  const currentBatchCount = comparison.still_present_count + comparison.new_count + comparison.changed_count;
+  const previousBatchCount = comparison.still_present_count + comparison.resolved_count + comparison.changed_count;
   return <section className="retest-panel">
-    <div className="panel-header"><h3>最近两个扫描批次对比</h3><span>{formatDateTime(comparison.previous_scan_at)} → {formatDateTime(comparison.current_scan_at)}</span></div>
+    <div className="panel-header"><h3>最近两个 {sourceLabel} 扫描批次对比</h3><span>{formatDateTime(comparison.previous_scan_at)} → {formatDateTime(comparison.current_scan_at)}</span></div>
     <div className="retest-summary"><Metric label="仍然存在的风险记录" value={comparison.still_present_count} /><Metric label="已消失的风险记录" value={comparison.resolved_count} /><Metric label="新增风险记录" value={comparison.new_count} /><Metric label="内容发生变化" value={comparison.changed_count} /></div>
-    <p className="retest-note">这里统计的是风险记录，不是组件数量。SCA 中一个组件可能同时对应多个漏洞、许可证或版本风险，因此风险记录数可能大于组件数。“已消失”表示本次未再次发现；“仍然存在”表示需要继续整改。</p>
+    <p className="retest-note">{sourceNote} 当前批次共 {currentBatchCount} 条（仍存在 + 新增 + 变化），上一批次共 {previousBatchCount} 条（仍存在 + 已消失 + 变化）；四张卡展示的是两个批次的变化分类，不能直接相加后与当前问题总数比较。“已消失”表示本次未再次发现；“仍然存在”表示需要继续整改。</p>
     <details className="retest-details">
       <summary>查看全部风险记录复测明细（{comparison.items.length} 条）</summary>
       <div className="module-filter-bar"><SimpleFilter value={resultFilter} label="全部复测结果" options={["still_present", "resolved", "new", "changed"]} format={retestResultLabel} onChange={(value) => { setResultFilter(value); setPage(1); }} /></div>
@@ -3724,7 +4255,8 @@ function toolHealthStatusLabel(value?: string | null) { return value === "succes
 function relationTypeLabel(value: string) { return value === "reported_by" ? "产生风险" : value === "validated_by" ? "动态验证" : value === "observed_by" ? "运行时取证" : value; }
 function confidenceLevelLabel(value: string) { return value === "high" ? "高置信度" : value === "medium" ? "中置信度" : "低置信度"; }
 function executionStatusLabel(value: ExecutionStatus) { return value === "waiting" ? "等待执行" : value === "running" ? "正在执行" : value === "completed" ? "已完成" : value === "failed" ? "执行失败" : "已跳过"; }
-function dastVerdictLabel(value: string) { return value === "baseline_attention" ? "基础观察：需复核" : value === "baseline_clear" ? "基础观察：未发现异常" : value === "exploitable" ? "人工裁决：可利用" : value === "uncertain" ? "观察未完成 / 人工裁决不确定" : value === "not_exploitable" ? "人工裁决：限定范围内未复现" : value; }
+function dastVerdictLabel(value: string) { return value === "baseline_attention" ? "基础观察：需复核" : value === "baseline_clear" ? "基础观察：未发现异常" : value === "exploitable" ? "可利用" : value === "uncertain" ? "不确定" : value === "not_exploitable" ? "不可利用" : value; }
+function validationStatusLabel(value: string) { return value === "verified" ? "已验证" : value === "verifying" ? "验证中" : value === "failed" ? "验证失败" : "未验证"; }
 function retestResultLabel(value: string) { return value === "still_present" ? "仍然存在" : value === "resolved" ? "已经消失" : value === "new" ? "新增问题" : value === "changed" ? "位置或等级变化" : value; }
 function evidenceNodeStage(node: EvidenceGraphNode) { return node.kind === "component" ? "关联供应链组件" : node.kind === "validation" ? "动态验证" : node.kind === "evidence" ? "沙箱运行证据" : "关联风险"; }
 function severityRank(value: Severity) { return value === "critical" ? 5 : value === "high" ? 4 : value === "medium" ? 3 : value === "low" ? 2 : 1; }
@@ -3839,8 +4371,10 @@ function paginate<T>(items: T[], requestedPage: number, pageSize = 10) { const p
 function emptyToNull(value: string) { const trimmed = value.trim(); return trimmed ? trimmed : null; }
 async function enableProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}`, { method: "POST", body: JSON.stringify({ module_key: moduleKey, enabled, config: {} }) }); }
 async function updateProjectModule(projectId: string, moduleKey: ModuleKey, enabled: boolean) { return request<ProjectModule>(`/modules/projects/${projectId}/${moduleKey}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }
+function readLastProjectId() { try { return window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY); } catch { return null; } }
+function persistLastProjectId(projectId: string | null) { try { if (projectId) window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, projectId); else window.localStorage.removeItem(LAST_PROJECT_STORAGE_KEY); } catch { /* Browsers with storage disabled still keep the in-memory selection. */ } }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : "未知错误"; }
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : detail; } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const method = String(init.method ?? "GET").toUpperCase(); const response = await fetch(`${API_BASE}${path}`, { ...init, cache: method === "GET" ? "no-store" : init.cache, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message ? String(payload.detail.message) : JSON.stringify(payload.detail ?? payload); } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><Root /></React.StrictMode>);
 

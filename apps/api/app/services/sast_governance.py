@@ -10,7 +10,7 @@ from uuid import uuid4
 from app.services.sast_scanner import ParsedFinding
 from app.services.sast_semgrep_rules import BUILTIN_CONFIG, validate_semgrep_yaml
 
-BUILTIN_RULE_PACK_VERSION = "local-2026.08.09.1"
+BUILTIN_RULE_PACK_VERSION = "local-2026.08.21.1"
 
 DEFAULT_SAST_PROFILE: dict[str, object] = {
     "profile_version": 1,

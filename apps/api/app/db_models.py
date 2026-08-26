@@ -393,6 +393,18 @@ class DastBusinessSnapshotRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class DastAssetDiscoveryRecord(Base):
+    __tablename__ = "dast_asset_discoveries"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    target_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class SandboxEvidenceRecord(Base):
     __tablename__ = "sandbox_evidence"
 
@@ -418,6 +430,68 @@ class SandboxEvidenceRecord(Base):
     limitations: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SandboxTargetInstanceRecord(Base):
+    __tablename__ = "sandbox_target_instances"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    mode: Mapped[str] = mapped_column(String(40), nullable=False, default="external")
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
+    runtime_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    internal_url: Mapped[str | None] = mapped_column(String(1000))
+    image: Mapped[str | None] = mapped_column(String(300))
+    command: Mapped[str | None] = mapped_column(String(1000))
+    container_id: Mapped[str | None] = mapped_column(String(160))
+    container_name: Mapped[str | None] = mapped_column(String(160))
+    network_name: Mapped[str | None] = mapped_column(String(160))
+    container_port: Mapped[int | None] = mapped_column(Integer)
+    health_path: Mapped[str] = mapped_column(String(300), nullable=False, default="/")
+    health_detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    policy: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    operator: Mapped[str] = mapped_column(String(120), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SandboxTaskRecord(Base):
+    __tablename__ = "sandbox_tasks"
+    __table_args__ = (UniqueConstraint("source_module", "source_task_id", name="uq_sandbox_source_task"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    target_instance_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("sandbox_target_instances.id"))
+    source_module: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_task_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    strategy_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    finding_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("findings.id"))
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued")
+    required_capabilities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    contract: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    callback_token: Mapped[str] = mapped_column(String(200), nullable=False)
+    execution_id: Mapped[str | None] = mapped_column(String(200))
+    evidence: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    result_summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    operator: Mapped[str | None] = mapped_column(String(120))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SandboxTaskEventRecord(Base):
+    __tablename__ = "sandbox_task_events"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    task_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("sandbox_tasks.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(60), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 

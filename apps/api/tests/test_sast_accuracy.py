@@ -43,3 +43,36 @@ def test_javascript_direct_sources_reach_redirect_xss_and_xxe_sinks(tmp_path):
     assert "SAST.TAINT.JAVASCRIPT.XXE" in rules
     assert "SAST.XSS.EJS_UNESCAPED_OUTPUT" in rules
     assert "SAST.XML.EXTERNAL_ENTITY_ENABLED" in rules
+
+
+def test_express_project_checks_find_auth_access_csrf_exposure_and_logging(tmp_path):
+    (tmp_path / "routes.js").write_text(
+        "router.get('/admin/usersapi', authHandler.isAuthenticated, appHandler.listUsersAPI);\n"
+        "router.post('/useredit', authHandler.isAuthenticated, appHandler.userEditSubmit);\n"
+        "router.post('/login', passport.authenticate('login'));\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "handler.js").write_text(
+        "module.exports.userEditSubmit = function(req, res) {\n"
+        "  db.User.find({where: {'id': req.body.id}}).then(user => user.save());\n"
+        "};\n"
+        "module.exports.listUsersAPI = function(req, res) {\n"
+        "  db.User.findAll({}).then(users => res.json({users: users}));\n"
+        "};\n"
+        "module.exports.reset = function(req, res) {\n"
+        "  if (req.query.token == md5(req.query.login)) res.send('ok');\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "view.ejs").write_text("<script>row.innerHTML = user.name;</script>\n", encoding="utf-8")
+
+    findings = scan_source_tree(str(tmp_path)).findings
+    rules = {item.rule_id for item in findings}
+
+    assert "SAST.ACCESS.ADMIN_ROUTE_ROLE_MISSING" in rules
+    assert "SAST.ACCESS.USER_ID_FROM_BODY" in rules
+    assert "SAST.CSRF.STATE_CHANGE_WITHOUT_TOKEN" in rules
+    assert "SAST.DATA.FULL_USER_OBJECT_RESPONSE" in rules
+    assert "SAST.AUTH.PREDICTABLE_RESET_TOKEN" in rules
+    assert "SAST.XSS.DOM_INNERHTML" in rules
+    assert "SAST.LOGGING.AUTH_EVENTS_NOT_AUDITED" in rules

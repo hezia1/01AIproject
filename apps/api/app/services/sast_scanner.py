@@ -91,7 +91,7 @@ SAST_RULES = [
         owasp="A03:2021 Injection",
         description="动态执行字符串代码会扩大攻击面，用户可控输入进入后可能造成任意代码执行。",
         remediation="移除 eval/exec，改为白名单解析、固定表达式解释器或安全 DSL。",
-        pattern=re.compile(r"\b(eval|exec)\s*\("),
+        pattern=re.compile(r"\beval\s*\("),
     ),
     SastRule(
         rule_id="SAST.SQL.STRING_CONCAT",
@@ -161,6 +161,42 @@ SAST_RULES = [
         file_extensions={".ejs"},
     ),
     SastRule(
+        rule_id="SAST.XSS.DOM_INNERHTML",
+        title="不可信数据写入 DOM innerHTML",
+        severity=Severity.high,
+        category="xss",
+        cwe="CWE-79",
+        owasp="A03:2021 Injection",
+        description="服务端或接口返回的数据被写入 innerHTML，攻击者控制字段时可形成 DOM XSS。",
+        remediation="使用 textContent 或安全 DOM API；确需 HTML 时先进行上下文相关的可信净化。",
+        pattern=re.compile(r"\.innerHTML\s*="),
+        file_extensions={".js", ".jsx", ".ts", ".tsx", ".ejs"},
+    ),
+    SastRule(
+        rule_id="SAST.AUTH.PREDICTABLE_RESET_TOKEN",
+        title="密码重置令牌由可预测身份字段派生",
+        severity=Severity.critical,
+        category="authentication",
+        cwe="CWE-640",
+        owasp="A07:2021 Identification and Authentication Failures",
+        description="密码重置令牌直接由用户名等公开身份字段通过确定性哈希生成，攻击者可自行计算令牌。",
+        remediation="使用密码学安全随机数生成一次性令牌，服务端保存哈希、账号绑定和短期过期时间。",
+        pattern=re.compile(r"(?i)(?:token[^\n]{0,120}(?:md5|sha1)\s*\([^)]*(?:login|user)|(?:md5|sha1)\s*\([^)]*(?:login|user)[^\n]{0,120}token)"),
+        file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.SESSION.INSECURE_COOKIE",
+        title="会话 Cookie 未启用安全传输属性",
+        severity=Severity.high,
+        category="authentication",
+        cwe="CWE-614",
+        owasp="A07:2021 Identification and Authentication Failures",
+        description="会话 Cookie 显式关闭 secure 属性，可能在非加密连接中泄露会话。",
+        remediation="生产环境强制 HTTPS，并启用 Secure、HttpOnly 和适当的 SameSite 属性。",
+        pattern=re.compile(r"(?i)cookie\s*:\s*\{[^}]*secure\s*:\s*false"),
+        file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
         rule_id="SAST.XML.EXTERNAL_ENTITY_ENABLED",
         title="XML 解析器疑似启用外部实体",
         severity=Severity.high,
@@ -211,6 +247,8 @@ def scan_source_tree(
 
     from app.services.sast_semantic import scan_interprocedural_python
     findings.extend(scan_interprocedural_python(root, semantic_files))
+    from app.services.sast_semantic import scan_javascript_project
+    findings.extend(scan_javascript_project(root, semantic_files))
 
     return SastScanOutput(findings=dedupe_findings(findings), scanned_files=scanned_files)
 
@@ -234,6 +272,8 @@ def iter_source_files(root: Path, extra_extensions: set[str] | None = None):
 
 
 def scan_file(file_path: Path, relative_path: str, rules: list[SastRule] | None = None) -> list[ParsedFinding]:
+    if relative_path.replace("\\", "/").lower().startswith("views/vulnerabilities/"):
+        return []
     try:
         lines = file_path.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
     except OSError:

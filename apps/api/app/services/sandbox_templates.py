@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from app.models import SandboxCommandTemplate
@@ -19,7 +20,40 @@ def discover_sandbox_templates(source_path: str | None) -> list[SandboxCommandTe
     templates.extend(discover_go_templates(root))
     templates.extend(discover_maven_templates(root))
     templates.extend(discover_docker_templates(root))
-    return dedupe_templates(templates)
+    runtime_port = discover_runtime_port(root)
+    return [
+        template.model_copy(update={"container_port": runtime_port})
+        if template.command_type == "start" else template
+        for template in dedupe_templates(templates)
+    ]
+
+
+def discover_runtime_port(root: Path) -> int | None:
+    """Infer a declared application port from common source configuration files."""
+    candidates = [
+        root / "Dockerfile", root / "docker-compose.yml", root / "docker-compose.yaml",
+        root / ".env.example", root / "package.json", root / "server.js",
+        root / "config" / "server.js", root / "app.py", root / "main.py",
+    ]
+    patterns = [
+        r"(?im)^\s*EXPOSE\s+(\d{2,5})\b",
+        r"(?i)(?:process\.env\.)?PORT\s*\|\|\s*['\"]?(\d{2,5})",
+        r"(?i)(?:APP_PORT|SERVER_PORT|PORT)\s*[:=]\s*['\"]?(\d{2,5})",
+        r"(?i)listen\s*\(\s*(\d{2,5})",
+        r"(?i)--port(?:=|\s+)(\d{2,5})",
+    ]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8-sig", errors="ignore")[:200_000]
+        except OSError:
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match and 1 <= int(match.group(1)) <= 65535:
+                return int(match.group(1))
+    return None
 
 
 def discover_node_templates(root: Path) -> list[SandboxCommandTemplate]:
@@ -58,6 +92,14 @@ def discover_python_templates(root: Path) -> list[SandboxCommandTemplate]:
     if not has_python and not py_files:
         return []
     templates: list[SandboxCommandTemplate] = []
+    fastapi_entry = root / "app" / "main.py"
+    if fastapi_entry.is_file():
+        try:
+            content = fastapi_entry.read_text(encoding="utf-8-sig", errors="replace")[:50_000]
+        except OSError:
+            content = ""
+        if "FastAPI(" in content:
+            templates.append(python_template("uvicorn app.main:app --host 0.0.0.0 --port 8000", "start", "medium", "Run the detected FastAPI application on the sandbox interface."))
     if "app.py" in py_files:
         templates.append(python_template("python app.py", "start", "medium", "Run app.py inside an isolated Python container."))
     if "main.py" in py_files:

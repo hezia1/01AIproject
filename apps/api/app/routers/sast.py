@@ -645,7 +645,7 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
             "scanned_files": len(local_output.scanned_files),
             "rule_pack_version": profile.get("rule_pack_version"),
             "custom_rule_count": len([item for item in custom_rules if isinstance(item, dict) and item.get("enabled", True)]),
-            "semantic_analysis": "Python AST with bounded intraprocedural and direct local interprocedural source/sink/sanitizer tracking; JS/TS conservative local data-flow",
+            "semantic_analysis": "Python AST with bounded intraprocedural and direct local interprocedural tracking; JS/TS conservative local taint plus bounded Express route/handler security analysis",
             "scan_scope": "git-diff" if include_paths else "source-tree",
         }
     else:
@@ -670,7 +670,7 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
         ),
         "limitations": [
             "静态分析不能证明所有业务权限、CSRF 和运行时可利用性",
-            "Python 仅支持有限本地跨函数数据流；JS/TS 为保守的文件内数据流",
+            "Python 仅支持有限本地跨函数数据流；JS/TS 支持保守文件内数据流和有限 Express 路由/处理器关联，不等同于全程序分析",
             "未命中不等于不存在漏洞，关键结果需要人工或动态验证",
         ],
     }

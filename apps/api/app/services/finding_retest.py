@@ -1,3 +1,4 @@
+from collections import defaultdict
 from uuid import UUID
 
 from sqlalchemy import select
@@ -93,34 +94,68 @@ def compare_finding_records(
     previous_records: list[FindingRecord],
     current_records: list[FindingRecord],
 ) -> list[FindingRetestItem]:
-    previous = {finding_identity(record): record for record in previous_records}
-    current = {finding_identity(record): record for record in current_records}
+    previous: dict[str, list[FindingRecord]] = defaultdict(list)
+    current: dict[str, list[FindingRecord]] = defaultdict(list)
+    for record in previous_records:
+        previous[finding_identity(record)].append(record)
+    for record in current_records:
+        current[finding_identity(record)].append(record)
+
     items: list[FindingRetestItem] = []
-    for identity in sorted(previous.keys() | current.keys()):
-        old = previous.get(identity)
-        new = current.get(identity)
-        if old and new:
-            result = "changed" if finding_changed(old, new) else "still_present"
-        elif old:
-            result = "resolved"
-        else:
-            result = "new"
-        record = new or old
-        items.append(
-            FindingRetestItem(
-                identity=identity,
-                result=result,
-                title=record.title,
-                file_path=record.file_path,
-                previous_line_start=old.line_start if old else None,
-                current_line_start=new.line_start if new else None,
-                previous_severity=severity(old.severity) if old else None,
-                current_severity=severity(new.severity) if new else None,
-                previous_finding_id=UUID(str(old.id)) if old else None,
-                current_finding_id=UUID(str(new.id)) if new else None,
+    for base_identity in sorted(previous.keys() | current.keys()):
+        pairs = pair_finding_occurrences(previous.get(base_identity, []), current.get(base_identity, []))
+        for index, (old, new) in enumerate(pairs):
+            if old and new:
+                result = "changed" if finding_changed(old, new) else "still_present"
+            elif old:
+                result = "resolved"
+            else:
+                result = "new"
+            record = new or old
+            items.append(
+                FindingRetestItem(
+                    identity=f"{base_identity}|{old.id if old else '-'}|{new.id if new else '-'}|{index}",
+                    result=result,
+                    title=record.title,
+                    file_path=record.file_path,
+                    previous_line_start=old.line_start if old else None,
+                    current_line_start=new.line_start if new else None,
+                    previous_severity=severity(old.severity) if old else None,
+                    current_severity=severity(new.severity) if new else None,
+                    previous_finding_id=UUID(str(old.id)) if old else None,
+                    current_finding_id=UUID(str(new.id)) if new else None,
+                )
             )
-        )
     return sorted(items, key=retest_rank)
+
+
+def pair_finding_occurrences(
+    previous: list[FindingRecord],
+    current: list[FindingRecord],
+) -> list[tuple[FindingRecord | None, FindingRecord | None]]:
+    """Match repeated findings one-to-one without collapsing occurrences in the same file."""
+    old_remaining = sorted(previous, key=finding_occurrence_sort_key)
+    new_remaining = sorted(current, key=finding_occurrence_sort_key)
+    pairs: list[tuple[FindingRecord | None, FindingRecord | None]] = []
+
+    # Exact locations are the strongest match. Pair these first so an inserted line does not
+    # make every later occurrence look changed.
+    unmatched_old: list[FindingRecord] = []
+    for old in old_remaining:
+        location = finding_location(old)
+        match_index = next((index for index, new in enumerate(new_remaining) if finding_location(new) == location), None)
+        if match_index is None:
+            unmatched_old.append(old)
+        else:
+            pairs.append((old, new_remaining.pop(match_index)))
+
+    # Remaining records share the same rule/title/file identity. Pair them deterministically
+    # as moved/changed occurrences, then retain any cardinality difference as resolved/new.
+    pair_count = min(len(unmatched_old), len(new_remaining))
+    pairs.extend(zip(unmatched_old[:pair_count], new_remaining[:pair_count]))
+    pairs.extend((old, None) for old in unmatched_old[pair_count:])
+    pairs.extend((None, new) for new in new_remaining[pair_count:])
+    return pairs
 
 
 def latest_completed_scan(
@@ -162,6 +197,14 @@ def findings_for_scan(
 def finding_identity(record: FindingRecord) -> str:
     path = (record.file_path or "").replace("\\", "/").lower()
     return "|".join((record.source.upper(), record.rule_id.lower(), path, record.title.lower()))
+
+
+def finding_location(record: FindingRecord) -> tuple[int | None, int | None]:
+    return record.line_start, record.line_end
+
+
+def finding_occurrence_sort_key(record: FindingRecord) -> tuple[int, int, str]:
+    return record.line_start or -1, record.line_end or -1, str(record.id)
 
 
 def finding_changed(old: FindingRecord, new: FindingRecord) -> bool:

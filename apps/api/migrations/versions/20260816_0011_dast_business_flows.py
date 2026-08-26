@@ -14,7 +14,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("""
-        CREATE TABLE dast_business_flows (
+        CREATE TABLE IF NOT EXISTS dast_business_flows (
             id UUID PRIMARY KEY,
             project_id UUID NOT NULL REFERENCES projects(id),
             finding_id UUID REFERENCES findings(id),
@@ -37,7 +37,7 @@ def upgrade() -> None:
         )
     """)
     op.execute("""
-        CREATE TABLE dast_business_runs (
+        CREATE TABLE IF NOT EXISTS dast_business_runs (
             id UUID PRIMARY KEY,
             project_id UUID NOT NULL REFERENCES projects(id),
             flow_id UUID NOT NULL REFERENCES dast_business_flows(id),
@@ -53,7 +53,7 @@ def upgrade() -> None:
         )
     """)
     op.execute("""
-        CREATE TABLE dast_business_snapshots (
+        CREATE TABLE IF NOT EXISTS dast_business_snapshots (
             id UUID PRIMARY KEY,
             project_id UUID NOT NULL REFERENCES projects(id),
             flow_id UUID NOT NULL REFERENCES dast_business_flows(id),
