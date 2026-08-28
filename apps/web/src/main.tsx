@@ -1990,80 +1990,179 @@ function AttackChainSummary({ chains }: { chains: AttackChain[] }) {
 function KnowledgeHubView({ project, findings, validations, evidence, summary }: { project: Project | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null }) {
   if (!project) return <div className="panel empty-project">请先选择项目，再查看该项目沉淀的安全知识。</div>;
   const projectId = project.id;
+  const [activeTab, setActiveTab] = useState<"overview" | "candidates" | "library" | "effects">("overview");
   const [report, setReport] = useState<SecurityReport | null>(null);
   const [dastLibrary, setDastLibrary] = useState<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] } | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
+  const [candidatePage, setCandidatePage] = useState(1);
+
   const rules = uniqueValues(findings.map((item) => item.rule_id));
   const categories = uniqueValues(findings.map((item) => item.ai_review?.category ?? "未分类"));
   const falsePositiveCount = findings.filter((item) => item.status === "false_positive").length;
   const fixedCount = findings.filter((item) => item.status === "fixed" || item.status === "closed").length;
+  const confirmedCount = findings.filter((item) => ["confirmed", "fixing", "retest", "fixed", "closed"].includes(item.status)).length;
   const linkedValidationCount = validations.filter((item) => item.finding_id || item.component_id).length;
   const linkedEvidenceCount = evidence.filter((item) => item.finding_id || item.component_id || item.validation_id).length;
-  const knowledgeStages = [
-    ["业务上下文", project.name, `仓库、源码、运行地址和负责人共同限定扫描范围`],
-    ["规则与 Skill", `${rules.length} 条规则`, `${categories.length} 类风险知识用于发现与复核`],
-    ["动态验证经验", `${linkedValidationCount} 条`, `保存目标、请求响应、三色裁决和复现过程`],
-    ["运行时证据", `${linkedEvidenceCount} 份`, `保存隔离策略、进程、文件、网络和工具调用账本`],
-    ["治理经验", `${fixedCount + falsePositiveCount} 条`, `修复结论与误报判断形成后续可复用上下文`],
+  const validatedFindingIds = new Set(validations.flatMap((item) => item.finding_id ? [item.finding_id] : []));
+  const validationIds = new Set(validations.map((item) => item.id));
+  const evidenceBackedFindingIds = new Set(evidence.flatMap((item) => item.finding_id ? [item.finding_id] : []));
+  evidence.forEach((item) => {
+    if (!item.validation_id || !validationIds.has(item.validation_id)) return;
+    const linked = validations.find((validation) => validation.id === item.validation_id);
+    if (linked?.finding_id) evidenceBackedFindingIds.add(linked.finding_id);
+  });
+
+  const knowledgeCandidates = findings.map((finding) => {
+    const findingValidations = validations.filter((item) => item.finding_id === finding.id);
+    const findingValidationIds = new Set(findingValidations.map((item) => item.id));
+    const findingEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && findingValidationIds.has(item.validation_id)));
+    const type = finding.status === "false_positive" ? "误报经验" : finding.status === "fixed" || finding.status === "closed" ? "修复方案" : findingValidations.length ? "验证剧本" : "漏洞模式";
+    const state = finding.status === "false_positive" ? "待审核" : finding.status === "fixed" || finding.status === "closed" ? "可沉淀" : findingEvidence.length ? "证据就绪" : findingValidations.length ? "验证中" : "待验证";
+    const tone = state === "可沉淀" || state === "证据就绪" ? "ready" : state === "待审核" ? "review" : "collecting";
+    return { finding, type, state, tone, validationCount: findingValidations.length, evidenceCount: findingEvidence.length };
+  }).sort((left, right) => severityRank(right.finding.severity) - severityRank(left.finding.severity));
+  const candidatePagination = paginate(knowledgeCandidates, candidatePage, 8);
+  const reusableCandidateCount = knowledgeCandidates.filter((item) => item.tone === "ready").length;
+  const dynamicCoverage = findings.length ? Math.round((validatedFindingIds.size / findings.length) * 100) : 0;
+  const evidenceCoverage = findings.length ? Math.round((evidenceBackedFindingIds.size / findings.length) * 100) : 0;
+  const governanceCoverage = findings.length ? Math.round(((fixedCount + falsePositiveCount) / findings.length) * 100) : 0;
+  const ruleStats = rules.map((rule) => ({ rule, count: findings.filter((item) => item.rule_id === rule).length, categories: uniqueValues(findings.filter((item) => item.rule_id === rule).map((item) => item.ai_review?.category ?? "未分类")) })).sort((a, b) => b.count - a.count);
+  const tabs = [
+    ["overview", "知识总览", "组织事实与闭环"],
+    ["candidates", "知识候选", reusableCandidateCount + " 条证据就绪"],
+    ["library", "规则与 Skill", rules.length + " 条项目规则"],
+    ["effects", "效果追踪", "观察复用与治理"],
   ] as const;
-  const [knowledgePage, setKnowledgePage] = useState(1);
-  const knowledgeItems = [...findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
-  const knowledgePagination = paginate(knowledgeItems, knowledgePage);
-  useEffect(() => { setKnowledgePage(1); }, [findings]);
+  const lifecycle = [
+    ["01", "业务上下文", project.name, "仓库、源码、运行地址与责任人限定知识适用范围"],
+    ["02", "多源发现", findings.length + " 条", "SCA、SAST 与 AGENT 结果形成事实入口"],
+    ["03", "动态证明", linkedValidationCount + " 条", "DAST 目标、策略、裁决与复现过程"],
+    ["04", "证据固化", linkedEvidenceCount + " 份", "SANDBOX 隔离策略和固定探针证据"],
+    ["05", "治理沉淀", fixedCount + falsePositiveCount + " 条", "修复、关闭与误报结论进入候选"],
+  ] as const;
+
+  useEffect(() => { setCandidatePage(1); }, [activeTab, findings.length]);
   useEffect(() => {
     let cancelled = false;
     setDastLibrary(null);
-    void request<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] }>(`/dast/projects/${projectId}/strategy-library`)
+    void request<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] }>(("/dast/projects/" + projectId + "/strategy-library"))
       .then((value) => { if (!cancelled) setDastLibrary(value); })
       .catch(() => { if (!cancelled) setDastLibrary(null); });
     return () => { cancelled = true; };
   }, [projectId]);
+
   async function generateReportPreview() {
     setReportLoading(true);
     setReportError("");
     try {
-      setReport(await request<SecurityReport>(`/aspm/projects/${projectId}/report`));
+      setReport(await request<SecurityReport>("/aspm/projects/" + projectId + "/report"));
     } catch (error) {
       console.error(error);
-      setReportError(`报告生成失败：${errorMessage(error)}`);
+      setReportError("报告生成失败：" + errorMessage(error));
     } finally {
       setReportLoading(false);
     }
   }
-  return <section className="knowledge-hub">
-    <section className="knowledge-hero panel">
-      <div><span className="section-kicker">安全知识中枢</span><h2>让检测结果变成企业可以复用的安全经验</h2><p>当前版本先把项目上下文、规则命中、动态证据、修复和误报结论组织在一起；后续再将这些经验反馈给规则和安全 Skill。</p></div>
-      <div className="knowledge-core"><BookOpen size={30} /><strong>{project.name}</strong><span>项目安全上下文</span></div>
+
+  return <section className="knowledge-command-center">
+    <section className="knowledge-command-hero">
+      <div className="knowledge-command-copy">
+        <span className="knowledge-command-kicker"><BookOpen size={15} /> SECURITY KNOWLEDGE CORE</span>
+        <h2>把项目事实组织成可复用、可追溯的安全知识</h2>
+        <p>以业务上下文为边界，将规则命中、动态验证、运行证据和治理结论连接成统一知识资产；所有候选保留来源证据，发布与跨项目复用仍需后续审核能力。</p>
+        <div className="knowledge-command-facts"><span><ShieldCheck size={15} />当前项目：{project.name}</span><span><GitBranch size={15} />默认分支：{project.default_branch}</span><span><Lock size={15} />作用域：仅当前项目</span></div>
+      </div>
+      <div className="knowledge-orbit" aria-label="安全知识中枢数据来源">
+        <span className="orbit-node orbit-code"><Bug size={16} />规则</span>
+        <span className="orbit-node orbit-supply"><Boxes size={16} />供应链</span>
+        <span className="orbit-node orbit-runtime"><FlaskConical size={16} />证据</span>
+        <span className="orbit-node orbit-agent"><Network size={16} />Agent</span>
+        <div className="orbit-core"><BookOpen size={28} /><strong>{rules.length + (dastLibrary?.total ?? 0)}</strong><small>知识资产</small></div>
+      </div>
     </section>
-    <section className="knowledge-flow panel">
-      <div className="panel-header"><h2>知识如何形成</h2><span>上下文更专 → 多源发现 → 动态证明 → 知识组织</span></div>
-      <div className="knowledge-stage-grid">{knowledgeStages.map(([label, value, description], index) => <React.Fragment key={label}><article><span>0{index + 1}</span><h3>{label}</h3><strong>{value}</strong><p>{description}</p></article>{index < knowledgeStages.length - 1 ? <ArrowRight size={18} /> : null}</React.Fragment>)}</div>
-    </section>
-    <section className="knowledge-metrics">
-      <Metric label="规则经验" value={rules.length} />
-      <Metric label="风险分类" value={categories.length} />
-      <Metric label="动态验证" value={validations.length} />
-      <Metric label="DAST 策略" value={dastLibrary?.total ?? 0} />
-      <Metric label="运行证据" value={evidence.length} />
-      <Metric label="可信攻击链" value={summary?.attack_chains.length ?? 0} />
-    </section>
-    <section className="panel">
-      <div className="panel-header"><h2>当前项目知识条目</h2><span>完整结果 · 每页 10 条</span></div>
-      <table className="concise-table"><thead><tr><th>规则 / 分类</th><th>项目风险知识</th><th>验证与证据</th><th>治理结论</th></tr></thead><tbody>{knowledgeItems.length === 0 ? <tr><td colSpan={4} className="empty-cell">执行检测后，规则命中和复核结论会进入这里。</td></tr> : knowledgePagination.items.map((finding) => { const linkedValidations = validations.filter((item) => item.finding_id === finding.id); const validationIds = new Set(linkedValidations.map((item) => item.id)); const linkedEvidence = evidence.filter((item) => item.finding_id === finding.id || Boolean(item.validation_id && validationIds.has(item.validation_id))); return <tr key={finding.id}><td><strong>{finding.rule_id}</strong><span className="cell-subtext">{finding.source} · {finding.ai_review?.category ?? "未分类"}</span></td><td><span className={`severity ${finding.severity}`}>{severityLabel(finding.severity)}</span><strong>{finding.title}</strong><span className="cell-subtext">{truncateText(finding.ai_review?.description ?? finding.evidence ?? "暂无风险说明", 120)}</span></td><td>{linkedValidations.length ? `${linkedValidations.length} 次 DAST` : "未动态验证"}<span className="cell-subtext">{linkedEvidence.length ? `${linkedEvidence.length} 份 SANDBOX 证据` : "无运行时证据"}</span></td><td>{statusLabel(normalizeFindingStatus(finding.status))}<span className="cell-subtext">{finding.remediation_note ?? finding.ai_review?.remediation ?? "等待治理结论"}</span></td></tr>; })}</tbody></table><Pagination page={knowledgePagination.page} pageCount={knowledgePagination.pageCount} total={knowledgeItems.length} onPageChange={setKnowledgePage} />
-    </section>
-    <section className="panel">
-      <div className="panel-header"><h2>DAST 策略模板库</h2><span>{dastLibrary ? `${dastLibrary.builtin.length} 个内置 · ${dastLibrary.learned.length} 个 DeepSeek 项目经验` : "正在读取本地策略"}</span></div>
-      <table className="concise-table"><thead><tr><th>策略</th><th>来源</th><th>验证范围</th><th>复用规则</th></tr></thead><tbody>{!dastLibrary?.total ? <tr><td colSpan={4} className="empty-cell">当前没有可用的 DAST 策略。</td></tr> : [...dastLibrary.builtin, ...dastLibrary.learned].map((item) => <tr key={String(item.id)}><td><strong>{String(item.name)}</strong><span className="cell-subtext">{String(item.id)}</span></td><td>{item.source === "deepseek_local" ? "DeepSeek 项目经验" : "内置安全模板"}</td><td>{truncateText(String(item.description ?? item.scope_summary ?? ""), 140)}</td><td>{item.source === "deepseek_local" ? "复用前重新确认目标、变量和审批" : "按漏洞类型自动匹配"}</td></tr>)}</tbody></table>
-    </section>
-    <section className="panel report-delivery">
-      <div className="panel-header"><div><span className="section-kicker">项目安全报告</span><h2>生成可交付的项目安全快照</h2></div><span>{report ? `生成于 ${formatDateTime(report.generated_at)}` : "报告不会改变现有数据"}</span></div>
-      <p>报告汇总当前项目的已接入模块、风险、动态验证、运行时证据、可信关系、攻击链、复测结果和能力边界。先生成预览确认内容，再导出 JSON 或 HTML。</p>
-      <div className="report-actions"><button className="primary-action" disabled={reportLoading} onClick={() => void generateReportPreview()}>{reportLoading ? "正在生成报告…" : report ? "刷新报告预览" : "生成报告预览"}</button><button className="secondary-action" disabled={!report} onClick={() => report && downloadSecurityReport(report, "json")}>导出 JSON</button><button className="secondary-action" disabled={!report} onClick={() => report && downloadSecurityReport(report, "html")}>导出 HTML</button></div>
+
+    <nav className="knowledge-tabs" aria-label="安全知识中枢工作区">
+      {tabs.map(([key, label, detail]) => <button className={activeTab === key ? "active" : ""} key={key} onClick={() => setActiveTab(key)}><span>{label}</span><small>{detail}</small></button>)}
+    </nav>
+
+    {activeTab === "overview" ? <>
+      <section className="knowledge-lifecycle">
+        <div className="knowledge-section-heading"><div><span>知识形成链路</span><h3>上下文更专 → 多源发现 → 动态证明 → 知识组织</h3></div><strong>所有数字来自当前项目</strong></div>
+        <div className="knowledge-lifecycle-track">{lifecycle.map(([index, label, value, description], position) => <React.Fragment key={label}><article><i>{index}</i><span>{label}</span><strong>{value}</strong><p>{description}</p></article>{position < lifecycle.length - 1 ? <ArrowRight size={18} /> : null}</React.Fragment>)}</div>
+      </section>
+
+      <section className="knowledge-domain-grid">
+        <article className="knowledge-domain-card indigo"><div><Bug size={21} /><span>漏洞与规则知识</span></div><strong>{confirmedCount}</strong><p>已确认、修复中或已关闭的风险，可继续形成漏洞模式与审计规则候选。</p><small>{rules.length} 条规则 · {categories.length} 类风险</small></article>
+        <article className="knowledge-domain-card cyan"><div><Activity size={21} /><span>验证剧本</span></div><strong>{dastLibrary?.total ?? 0}</strong><p>保存可审计的验证范围、固定步骤、证据要求与三色裁决条件。</p><small>{dastLibrary?.learned.length ?? 0} 个项目策略经验</small></article>
+        <article className="knowledge-domain-card emerald"><div><ShieldCheck size={21} /><span>修复与误报经验</span></div><strong>{fixedCount + falsePositiveCount}</strong><p>治理结论只有绑定原始 Finding 与复测证据后，才能成为后续可复用上下文。</p><small>{fixedCount} 条修复 · {falsePositiveCount} 条误报</small></article>
+        <article className="knowledge-domain-card amber"><div><FlaskConical size={21} /><span>运行时事实</span></div><strong>{linkedEvidenceCount}</strong><p>固定探针、隔离策略和运行账本作为知识依据，不将命令成功等同于漏洞成立。</p><small>{linkedValidationCount} 次关联验证</small></article>
+      </section>
+
+      <section className="knowledge-overview-grid">
+        <article className="knowledge-governance-card">
+          <div className="knowledge-section-heading"><div><span>知识治理</span><h3>从事实到发布必须经过四道门</h3></div><ShieldCheck size={26} /></div>
+          <div className="knowledge-guardrails">
+            <div><i>1</i><span><strong>证据绑定</strong><small>必须关联 Finding、验证、证据或复测记录</small></span></div>
+            <div><i>2</i><span><strong>适用范围</strong><small>明确项目、语言、框架、漏洞类型和前置条件</small></span></div>
+            <div><i>3</i><span><strong>人工审核</strong><small>AI 只能生成候选，不能自行发布或修改规则</small></span></div>
+            <div><i>4</i><span><strong>版本回滚</strong><small>每次应用记录知识版本、命中和最终结论</small></span></div>
+          </div>
+        </article>
+        <article className="knowledge-ready-card">
+          <div className="knowledge-section-heading"><div><span>当前准备度</span><h3>{reusableCandidateCount} 条候选具备进一步沉淀条件</h3></div><strong>{knowledgeCandidates.length ? Math.round((reusableCandidateCount / knowledgeCandidates.length) * 100) : 0}%</strong></div>
+          <div className="knowledge-ready-meter"><i style={{ width: (knowledgeCandidates.length ? Math.round((reusableCandidateCount / knowledgeCandidates.length) * 100) : 0) + "%" }} /></div>
+          <p>“具备条件”仅表示已有动态或运行证据，不代表已经通过知识审核或发布。</p>
+          <button className="secondary-action" onClick={() => setActiveTab("candidates")}>查看知识候选 <ArrowRight size={15} /></button>
+        </article>
+      </section>
+    </> : null}
+
+    {activeTab === "candidates" ? <section className="knowledge-workspace">
+      <div className="knowledge-section-heading"><div><span>知识候选池</span><h3>从真实 Finding、验证和治理状态中识别可沉淀经验</h3></div><strong>{knowledgeCandidates.length} 条候选</strong></div>
+      <div className="knowledge-candidate-grid">{candidatePagination.items.length ? candidatePagination.items.map(({ finding, type, state, tone, validationCount, evidenceCount }) => <article className="knowledge-candidate-card" key={finding.id}>
+        <div className="knowledge-candidate-top"><span className={"knowledge-type " + tone}>{type}</span><span className={"severity " + finding.severity}>{severityLabel(finding.severity)}</span></div>
+        <h4>{finding.title}</h4>
+        <p>{truncateText(finding.ai_review?.description ?? finding.evidence ?? "尚未形成完整风险说明", 150)}</p>
+        <dl><div><dt>来源</dt><dd>{finding.source} · {finding.rule_id}</dd></div><div><dt>证据</dt><dd>{validationCount} 次验证 · {evidenceCount} 份运行证据</dd></div><div><dt>范围</dt><dd>{finding.file_path ?? "项目级知识"}</dd></div></dl>
+        <footer><span className={"knowledge-state " + tone}>{state}</span><small>当前仅为项目知识候选</small></footer>
+      </article>) : <div className="knowledge-empty">执行扫描并完成复核后，符合条件的项目经验会出现在这里。</div>}</div>
+      <Pagination page={candidatePagination.page} pageCount={candidatePagination.pageCount} total={knowledgeCandidates.length} onPageChange={setCandidatePage} />
+    </section> : null}
+
+    {activeTab === "library" ? <section className="knowledge-library-workspace">
+      <section className="knowledge-library-panel">
+        <div className="knowledge-section-heading"><div><span>规则资产</span><h3>当前项目已出现的检测规则与风险分类</h3></div><strong>{rules.length} 条</strong></div>
+        <div className="knowledge-rule-list">{ruleStats.slice(0, 12).map((item) => <article key={item.rule}><div><Bug size={16} /><span><strong>{item.rule}</strong><small>{item.categories.join("、")}</small></span></div><b>{item.count} 次命中</b></article>)}{ruleStats.length === 0 ? <div className="knowledge-empty">当前项目还没有规则命中。</div> : null}</div>
+      </section>
+      <section className="knowledge-library-panel">
+        <div className="knowledge-section-heading"><div><span>验证策略库</span><h3>内置剧本与当前项目策略经验</h3></div><strong>{dastLibrary?.total ?? 0} 个</strong></div>
+        <div className="knowledge-strategy-list">{dastLibrary?.total ? [...dastLibrary.builtin, ...dastLibrary.learned].slice(0, 12).map((item) => <article key={String(item.id)}><div><Activity size={16} /><span><strong>{String(item.name)}</strong><small>{truncateText(String(item.description ?? item.scope_summary ?? "未记录策略范围"), 90)}</small></span></div><b>{item.source === "deepseek_local" ? "项目经验" : "内置模板"}</b></article>) : <div className="knowledge-empty">当前没有可用的 DAST 策略。</div>}</div>
+      </section>
+      <section className="knowledge-consumer-map">
+        <div className="knowledge-section-heading"><div><span>模块消费关系</span><h3>知识发布后应通过统一版本进入六模块</h3></div><GitBranch size={24} /></div>
+        <div>{[["SAST", "漏洞模式、误报经验、项目规则"], ["SCA", "组件影响、VEX、修复版本经验"], ["AGENT", "权限策略、危险配置模式"], ["DAST", "验证剧本、证据条件、裁决门槛"], ["SANDBOX", "固定探针合同、隔离策略"], ["ASPM", "审核、版本、效果与废弃治理"]].map(([module, knowledge]) => <article key={module}><b>{module}</b><ArrowRight size={15} /><span>{knowledge}</span></article>)}</div>
+      </section>
+    </section> : null}
+
+    {activeTab === "effects" ? <section className="knowledge-effects-workspace">
+      <div className="knowledge-section-heading"><div><span>效果与闭环</span><h3>先观察证据覆盖和治理进展，再建设精确率与召回率基准</h3></div><strong>项目级实时视图</strong></div>
+      <section className="knowledge-effect-grid">
+        {[["动态验证覆盖", dynamicCoverage, validatedFindingIds.size + " / " + findings.length, "已关联 DAST 的 Finding"], ["运行证据覆盖", evidenceCoverage, evidenceBackedFindingIds.size + " / " + findings.length, "已关联 SANDBOX 证据的 Finding"], ["治理沉淀覆盖", governanceCoverage, fixedCount + falsePositiveCount + " / " + findings.length, "已修复、关闭或误报"], ["可信攻击链", summary?.attack_chains.length ?? 0, String(summary?.attack_chains.length ?? 0), "只统计显式关系"]].map(([label, value, fraction, description], index) => <article key={String(label)}><span>{label}</span><strong>{index < 3 ? value + "%" : value}</strong><div><i style={{ width: (index < 3 ? Number(value) : Math.min(Number(value) * 20, 100)) + "%" }} /></div><small>{fraction} · {description}</small></article>)}
+      </section>
+      <section className="knowledge-feedback-grid">
+        <article><div><SlidersHorizontal size={21} /><span><strong>当前可以观测</strong><small>项目级事实</small></span></div><ul><li>{findings.length} 条 Finding 的治理状态</li><li>{validations.length} 次动态验证与裁决</li><li>{evidence.length} 份隔离运行证据</li><li>{fixedCount + falsePositiveCount} 条修复或误报结论</li></ul></article>
+        <article><div><Lock size={21} /><span><strong>尚未建立基线</strong><small>不填造指标</small></span></div><ul><li>SAST / AGENT 精确率与召回率</li><li>DAST 重复运行裁决一致率</li><li>跨项目知识复用效果</li><li>自动规则优化收益</li></ul></article>
+      </section>
+    </section> : null}
+
+    <section className="knowledge-report-bar">
+      <div><span>治理交付</span><h3>把当前知识、证据关系与能力边界汇总为项目安全报告</h3><p>报告只读取当前项目已保存事实，不会自动发布知识或修改检测规则。</p></div>
+      <div><button className="primary-action" disabled={reportLoading} onClick={() => void generateReportPreview()}>{reportLoading ? "正在生成…" : report ? "刷新报告" : "生成报告预览"}</button><button className="secondary-action" disabled={!report} onClick={() => report && downloadSecurityReport(report, "json")}>导出 JSON</button><button className="secondary-action" disabled={!report} onClick={() => report && downloadSecurityReport(report, "html")}>导出 HTML</button></div>
       {reportError ? <div className="report-error">{reportError}</div> : null}
     </section>
     {report ? <SecurityReportPreview report={report} /> : null}
-    <section className="knowledge-boundary"><strong>当前能力边界</strong><span>DAST 已支持内置模板与本项目 DeepSeek 策略经验复用；跨项目自动推荐、无审批自主演进和自动修改检测规则仍未开放。</span></section>
+    <section className="knowledge-boundary"><strong>当前能力边界</strong><span>本页面已按知识形成、候选、规则资产和效果组织真实项目数据；知识审核发布、版本回滚、跨项目推荐和自动修改规则仍需后端知识模型支持。</span></section>
   </section>;
 }
 
