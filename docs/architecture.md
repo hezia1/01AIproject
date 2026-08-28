@@ -1,208 +1,74 @@
-# 技术架构设计
+# 当前技术架构
 
-## 1. 架构原则
+更新日期：2026-08-28。
 
-- 平台先模块化单体，后续再拆微服务。
-- 扫描任务异步执行，避免阻塞 Web 请求。
-- 扫描执行环境和平台控制面隔离。
-- AI 能力通过统一网关封装，不绑定单一模型供应商。
-- 漏洞、组件、证据、任务和知识资产使用结构化数据保存。
+## 1. 架构结论
 
-## 2. 推荐技术栈
+项目当前是面向单机研发与演示的模块化单体，不是微服务产品：
 
-MVP 推荐：
+- React Web 控制台通过 REST 调用 FastAPI。
+- FastAPI 路由负责协议和参数，扫描、验证、证据和报告逻辑集中在服务层。
+- PostgreSQL 是项目、模块配置、扫描、组件、Finding、DAST、SANDBOX 和治理数据的事实源。
+- Alembic 管理数据库演进；当前迁移链已覆盖六模块所需实体。
+- `scripts/sast_worker.py` 轮询 PostgreSQL 中的 SAST 作业。Redis 随本地 Compose 启动，但尚未承担生产级分布式队列。
+- Docker 只用于受控目标、辅助服务和固定执行器；项目自带命令、挂载、端口和密钥不会未经校验直接执行。
 
-- 前端：React + TypeScript + Vite
-- 后端：Python FastAPI
-- 数据库：PostgreSQL
-- 缓存与任务队列：Redis + RQ 或 Celery
-- 扫描执行：Docker 容器或本地隔离工作目录
-- 对象存储：本地文件系统起步，后续替换为 MinIO
-- AI 网关：后端统一封装 LLM 调用
-
-## 3. 系统模块
-
-### 3.1 Web 控制台
-
-负责：
-
-- 登录和权限。
-- 项目管理。
-- 扫描任务管理。
-- 漏洞列表与治理。
-- 报告查看和导出。
-- 平台配置。
-
-### 3.2 API 服务
-
-负责：
-
-- 对外提供 REST API。
-- 管理用户、项目、任务、漏洞、组件、报告。
-- 创建扫描任务并投递到队列。
-- 聚合扫描结果和 AI 复核结果。
-
-### 3.3 扫描 Worker
-
-负责：
-
-- 拉取代码。
-- 识别语言和依赖文件。
-- 执行 SCA 解析。
-- 执行基础 SAST 规则扫描。
-- 生成结构化 findings。
-- 保存原始日志和扫描证据。
-
-### 3.4 AI 复核服务
-
-负责：
-
-- 对 finding 构造上下文。
-- 调用 LLM 进行风险解释。
-- 输出误报可能性、影响分析和修复建议。
-- 将 AI 结论作为辅助字段写入漏洞记录。
-
-### 3.5 知识中枢
-
-MVP 先以表结构实现，后续再图谱化。
-
-包括：
-
-- 漏洞类型知识库。
-- 规则库。
-- 误报样本库。
-- 组件漏洞知识。
-- 修复建议模板。
-- 后续扩展 Skill 库和业务知识图谱。
-
-## 4. 数据流
-
-1. 用户创建项目并配置 Git 仓库。
-2. 用户触发扫描任务。
-3. API 服务创建扫描任务，写入数据库，投递队列。
-4. Worker 拉取代码到隔离目录。
-5. Worker 识别依赖文件和代码文件。
-6. SCA 引擎解析依赖，匹配漏洞和许可证风险。
-7. SAST 引擎执行规则扫描，生成 finding。
-8. API 或 Worker 将高风险 finding 投递给 AI 复核。
-9. AI 复核服务生成解释、误报判断和修复建议。
-10. 平台将结果归并为漏洞记录。
-11. 用户在控制台确认、分派、修复、复测和关闭。
-12. 平台导出报告并沉淀误报经验。
-
-## 5. 核心数据模型
-
-### User
-
-- id
-- username
-- password_hash
-- role
-- created_at
-
-### Project
-
-- id
-- name
-- business_owner
-- security_owner
-- repository_url
-- default_branch
-- created_at
-
-### ScanTask
-
-- id
-- project_id
-- scan_type
-- status
-- commit_hash
-- started_at
-- finished_at
-- log_path
-
-### Component
-
-- id
-- project_id
-- scan_task_id
-- ecosystem
-- name
-- version
-- dependency_type
-- license
-
-### Finding
-
-- id
-- project_id
-- scan_task_id
-- source
-- rule_id
-- title
-- severity
-- file_path
-- line_start
-- line_end
-- evidence
-- status
-
-### Vulnerability
-
-- id
-- finding_id
-- project_id
-- severity
-- category
-- title
-- description
-- impact
-- remediation
-- status
-- assignee
-- ai_review_id
-
-### AiReview
-
-- id
-- finding_id
-- model
-- summary
-- false_positive_likelihood
-- reasoning
-- remediation
-- created_at
-
-### Report
-
-- id
-- project_id
-- scan_task_id
-- format
-- file_path
-- created_at
-
-## 6. MVP 目录结构建议
+## 2. 运行拓扑
 
 ```text
-apps/
-  web/
-  api/
-packages/
-  scanner/
-  rules/
-  ai-gateway/
-docs/
-infra/
-  docker-compose.yml
+浏览器
+  │
+  ▼
+React / Vite 控制台
+  │ REST
+  ▼
+FastAPI 模块化单体
+  ├── 项目与模块配置
+  ├── SCA / SAST / AGENT 扫描服务
+  ├── DAST 策略、审批、执行、裁决
+  ├── SANDBOX 启动规划、Docker 编排、固定探针
+  └── ASPM 汇总、证据图、整改、复测、报告
+  │
+  ├── PostgreSQL 16：结构化事实和审计证据
+  ├── 本地 artifacts：离线情报、可选工具产物和报告
+  ├── Redis 7：基础设施预留，当前非核心任务总线
+  └── Docker Engine：隔离目标、PostgreSQL/Redis、固定执行镜像
 ```
 
-## 7. 二期扩展方向
+API 和 Web 尚无仓库内的生产部署编排；`infra/docker-compose.yml` 只启动 PostgreSQL 与 Redis。
 
-- 将扫描 Worker 独立为可横向扩展服务。
-- 引入 MinIO 保存证据、报告和代码快照。
-- 引入 OpenSearch 支持全文检索。
-- 引入 Neo4j 或 PostgreSQL graph 扩展承载代码/依赖/业务图谱。
-- 引入沙箱执行环境支持 DAST 和 Agent 行为观测。
-- 引入 CI/CD 插件和安全门禁。
+## 3. 六模块数据流
 
+1. 项目保存源码路径、仓库信息、运行地址和可选沙箱参数。
+2. SCA 解析依赖和离线/在线情报，生成组件、风险、SBOM、VEX 和门禁结果。
+3. SAST 使用本地规则、项目规则、有限数据流、Git 基线和可选 AI 复核生成代码 Finding。
+4. AGENT 解析 Agent 指令、Prompt、Skill、MCP、工具和插件配置，生成资产、权限与信任证据。
+5. DAST 只接收当前支持类型且上下文完整的 SAST/AGENT Finding，生成有界策略和待审批合同；SCA 风险当前不进入 DAST 队列。
+6. 已上线目标由固定 HTTP/浏览器执行器验证；需隔离启动的目标由 SANDBOX 创建一次性 Docker 实例并采集证据。
+7. 裁决服务只基于已归档证据产生红/黄/绿或“未验证”状态。
+8. ASPM 在单项目范围汇总组件、Finding、动态验证、沙箱证据、整改与复测。
+
+## 4. 执行与证据边界
+
+- SANDBOX 采用内部网络、能力删除、只读根文件系统、非 root、资源限制和平台标签；其实现是隔离执行与固定探针，不是完整 EDR 或系统调用监控。
+- DAST 只允许同源、审批路径、请求上限、身份引用和声明式步骤，不接受任意攻击脚本或 Shell。
+- Agent 运行时红/绿裁决要求目标接入 `dast_runtime_evidence` 合同；仅有文本回显时保持黄色。
+- AI 可生成候选、解释和修复草案，但不能代替证据裁决，也不会自动修改源码或提交代码。
+- 离线漏洞情报、固定镜像和模型密钥缺失时，相关能力会降级或阻塞，不得展示为完整执行。
+
+## 5. 真实持久化模型
+
+当前核心实体包括：租户/用户/成员关系与审计模型、项目、项目模块配置、扫描任务、组件、Finding、SCA 情报与 VEX、SAST 规则/基线/复核、Agent 资产与权限、DAST 策略/运行/证据/裁决、SANDBOX 目标/任务/事件/证据，以及整改、复测和报告所需关系。
+
+虽然数据库存在身份与租户相关模型，应用入口尚未设置可用的请求身份中间件，大部分接口仍运行在默认开发租户下。因此这些表结构不能被描述成已交付的登录、授权或租户隔离。
+
+## 6. 尚未交付的生产架构
+
+- 生产级 IAM、SSO、RBAC 执行和租户数据隔离。
+- Redis/Celery/RQ 等可横向扩展的可靠任务系统。
+- API/Web 的镜像、反向代理、TLS、HA、备份和灾难恢复方案。
+- 独立对象存储、敏感证据加密、签名报告和不可抵赖审计。
+- 跨项目风险图谱、组织级趋势与 SLA/工单系统。
+- 完整主机/容器文件、网络、进程、环境变量及系统调用观测。
+
+这些内容是后续架构方向，不属于当前可验收能力。

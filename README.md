@@ -273,9 +273,16 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 ### 后端测试
 
 ```powershell
+$testTemp = Join-Path (Resolve-Path .) '.tmp\pytest'
+New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+$env:TEMP = $testTemp
+$env:TMP = $testTemp
+$env:TMPDIR = $testTemp
 cd apps\api
 ..\..\.venv\Scripts\python.exe -m pytest tests -q
 ```
+
+Agent 运行时暂存目录必须位于 `D:` 盘；直接沿用系统默认的 `C:` 盘临时目录会触发安全边界测试失败。上述目录已被 Git 忽略。
 
 ### 前端构建
 
@@ -330,8 +337,8 @@ npm run build
 | [`docs/sandbox-adapter-protocol.md`](docs/sandbox-adapter-protocol.md) | SANDBOX 通用适配与运行证据协议 |
 | [`docs/SAST_CI_INTEGRATIONS.md`](docs/SAST_CI_INTEGRATIONS.md) | SAST CI 集成方式 |
 | [`docs/sca-ci-gate.md`](docs/sca-ci-gate.md) | SCA 质量门禁 |
-| [`docs/mvp-roadmap.md`](docs/mvp-roadmap.md) | MVP 路线与验收计划 |
-| [`docs/PROJECT_HANDOFF_2026-07-26.md`](docs/PROJECT_HANDOFF_2026-07-26.md) | 历史交接记录 |
+| [`docs/mvp-roadmap.md`](docs/mvp-roadmap.md) | 已交付里程碑与后续路线 |
+| [`docs/PROJECT_HANDOFF_2026-07-26.md`](docs/PROJECT_HANDOFF_2026-07-26.md) | 当前交接快照（沿用历史文件名） |
 
 ## 许可证
 

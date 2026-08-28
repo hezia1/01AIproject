@@ -1,5 +1,9 @@
 # SAST CI integrations
 
+Status: implemented local/CI templates, reviewed 2026-08-28. The platform does
+not provide production IAM or a hosted CI service; credentials and enforcement
+remain the responsibility of the selected CI environment.
+
 The repository ships deterministic templates for GitHub Actions, GitLab CI,
 Jenkins and Azure DevOps. Every template invokes `scripts/sast_ci.py`, retains
 JSON/SARIF evidence and returns a non-zero exit code when the configured local
@@ -7,7 +11,7 @@ quality threshold is met.
 
 No template downloads Semgrep images or remote rule packs. If an organization
 enables the optional Semgrep engine, it must preload the pinned image and rules
-under `D:\project\PYproject\AI网安项目\artifacts\sast-offline\` on its own runner.
+under `<repository>\artifacts\sast-offline\` on its own runner.
 
 For a pull request, pass the merge-base or target commit with `--baseline` and
 `--changed-files-only`. Keep a full Git history for history-secret scanning.
@@ -32,6 +36,8 @@ cd D:\project\PYproject\AI网安项目
 ```
 
 `--once` processes at most one queued job for maintenance and tests. The worker
-does not download engines, images or rules. Supervise the long-running process
-with the deployment platform's service manager, and keep cancellation as a
-cooperative operation before execution begins.
+polls PostgreSQL rather than Redis and does not download engines, images or
+rules. Supervise the long-running process with the deployment platform's
+service manager, and keep cancellation as a cooperative operation before
+execution begins. It is not yet a horizontally scalable distributed task
+system.

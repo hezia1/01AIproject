@@ -1,5 +1,7 @@
 # SCA CI 门禁接入
 
+状态：已实现的项目级门禁接口与 CI 示例，更新于 2026-08-28。
+
 SCA 扫描完成后，可通过下列接口获取稳定、机器可读的门禁结论：
 
 ```text
@@ -14,7 +16,7 @@ GET /api/sca/projects/{project_id}/gate?scan_task_id={scan_task_id}
 SCA_API_BASE=https://your-security-platform.example.com
 ```
 
-该工作流不上传源码、不执行扫描，也不绕过登录或权限边界；它只对已经完成的 SCA 扫描调用门禁接口。应由受控的扫描流程先创建并完成扫描，再将项目和扫描批次 UUID 传给该工作流。
+该工作流不上传源码、不执行扫描；它只对已经完成的 SCA 扫描调用门禁接口。当前仓库版本尚无生产级登录鉴权，因此 `SCA_API_BASE` 只能指向受控环境，不能把该示例视为已经具备身份或权限边界。应由受控的扫描流程先创建并完成扫描，再将项目和扫描批次 UUID 传给该工作流。
 
 仓库还提供 [.github/workflows/sca-local.yml](../.github/workflows/sca-local.yml)，可不依赖平台服务器在 GitHub Actions 中执行本地扫描，生成并上传 JSON 与 SARIF。相同命令可在任意 CI 中运行：
 
