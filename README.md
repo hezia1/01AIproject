@@ -16,6 +16,7 @@
 - [新项目适配范围](#新项目适配范围)
 - [本地扫描与 CI](#本地扫描与-ci)
 - [测试](#测试)
+- [验收基线](#验收基线)
 - [项目结构](#项目结构)
 - [能力边界与安全说明](#能力边界与安全说明)
 - [项目文档](#项目文档)
@@ -294,6 +295,16 @@ npm run build
 
 部分 SANDBOX 和增强扫描能力依赖本机 Docker、固定镜像或离线漏洞库；缺少外部条件时，相应测试或能力会按设计显示跳过、阻塞或降级。
 
+## 验收基线
+
+仓库使用机器可读的 [`acceptance/criteria.json`](acceptance/criteria.json) 记录当前证据和缺口，并通过 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 校验。P0 门禁只验证已经具备可复现证据的交付项；精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度在缺少版本化语料时保持“未建立基线”，不得用演示数据替代。
+
+```powershell
+.\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0
+```
+
+详见 [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md)。
+
 ## 项目结构
 
 ```text
@@ -332,6 +343,7 @@ npm run build
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/prd.md`](docs/prd.md) | 产品目标、用户、范围和验收方向 |
+| [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与未建立基线项 |
 | [`docs/architecture.md`](docs/architecture.md) | 架构原则、模块和数据流 |
 | [`docs/module-system.md`](docs/module-system.md) | 六模块职责与关系 |
 | [`docs/sandbox-adapter-protocol.md`](docs/sandbox-adapter-protocol.md) | SANDBOX 通用适配与运行证据协议 |

@@ -1,0 +1,122 @@
+{
+  "schema_version": "1.0",
+  "baseline_id": "2026-08-28-p0",
+  "scope": "single-host development and demonstration",
+  "status_definitions": {
+    "verified": "The recorded target has reproducible repository or command evidence.",
+    "partially_verified": "Some representative evidence exists, but the stated metric or coverage is incomplete.",
+    "not_baselined": "No versioned corpus or repeatable measurement exists; no value may be claimed."
+  },
+  "checks": [
+    {
+      "id": "documentation_alignment",
+      "category": "governance",
+      "metric": "Tracked project documentation reflects current implementation and boundaries",
+      "status": "verified",
+      "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
+      "current": "12 platform documents aligned on 2026-08-28",
+      "evidence": ["commit:b19dcaf", "docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md"],
+      "limitations": "Fixture README files describe test targets and are not product capability statements.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "capability_claims",
+      "category": "governance",
+      "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
+      "status": "verified",
+      "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
+      "current": "Calibrated and protected by backend regression tests",
+      "evidence": ["apps/api/app/module_registry.py", "apps/web/src/main.tsx", "apps/api/tests/test_module_registry_claims.py"],
+      "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "backend_test_suite",
+      "category": "engineering",
+      "metric": "Backend automated test suite",
+      "status": "verified",
+      "target": "All runnable tests pass with the Agent staging directory on D:",
+      "current": {"passed": 295, "skipped": 1, "failed": 0},
+      "evidence": ["python -m pytest apps/api/tests -q with TEMP/TMP/TMPDIR on D:"],
+      "limitations": "Warnings and environment-dependent skipped tests remain visible in the command output.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "frontend_production_build",
+      "category": "engineering",
+      "metric": "Frontend TypeScript production build",
+      "status": "verified",
+      "target": "npm run build exits successfully",
+      "current": {"build": "passed", "largest_javascript_chunk_kib": 539.72},
+      "evidence": ["cd apps/web && npm run build"],
+      "limitations": "Vite reports a chunk-size warning; no automated UI test suite exists.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "database_migration_head",
+      "category": "engineering",
+      "metric": "Alembic schema is at repository head",
+      "status": "verified",
+      "target": "Current database revision equals the repository migration head",
+      "current": "20260817_0013",
+      "evidence": ["python -m alembic -c alembic.ini current"],
+      "limitations": "This verifies the local development database, not backup, rollback, or production upgrade readiness.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "detection_quality",
+      "category": "security_effectiveness",
+      "metric": "Precision, false-positive rate, and recall for SCA/SAST/AGENT",
+      "status": "not_baselined",
+      "target": "Versioned labeled positive and negative corpus with per-module thresholds",
+      "current": null,
+      "evidence": [],
+      "limitations": "Functional fixtures and live project findings are not a labeled effectiveness benchmark.",
+      "required_for": ["production"]
+    },
+    {
+      "id": "dast_reproducibility",
+      "category": "security_effectiveness",
+      "metric": "Repeated DAST verdict agreement and evidence completeness",
+      "status": "not_baselined",
+      "target": "Versioned replay corpus with repeated-run agreement and evidence-completeness thresholds",
+      "current": null,
+      "evidence": [],
+      "limitations": "Existing validations prove workflow execution, not a general reproducibility rate.",
+      "required_for": ["production"]
+    },
+    {
+      "id": "ecosystem_compatibility",
+      "category": "compatibility",
+      "metric": "Manifest parsing and scan completion across documented ecosystems",
+      "status": "partially_verified",
+      "target": "Pinned fixture matrix for every documented ecosystem, language, package manager, and supported version",
+      "current": "Parsers and representative tests exist; a versioned compatibility matrix does not",
+      "evidence": ["apps/api/tests", "docs/module-system.md"],
+      "limitations": "Documented parser support is not a certified success rate for arbitrary projects.",
+      "required_for": ["production"]
+    },
+    {
+      "id": "sandbox_isolation",
+      "category": "isolation",
+      "metric": "Sandbox policy enforcement and escape resistance",
+      "status": "partially_verified",
+      "target": "Versioned negative corpus covering network, filesystem, process, capability, resource, secret, and escape boundaries",
+      "current": "Policy tests and deterministic safe/MCP fixtures pass in the supported local environment",
+      "evidence": ["apps/api/tests/fixtures/agent_runtime_safe", "apps/api/tests/fixtures/agent_runtime_mcp", "apps/api/tests"],
+      "limitations": "The platform is not eBPF/Sysmon/EDR and has no independent container escape assessment.",
+      "required_for": ["production"]
+    },
+    {
+      "id": "production_readiness",
+      "category": "operations",
+      "metric": "Production deployment, IAM, tenant isolation, evidence protection, backup, and recovery",
+      "status": "not_baselined",
+      "target": "Threat-modeled production architecture and tested operational controls",
+      "current": null,
+      "evidence": [],
+      "limitations": "The current release is explicitly limited to a controlled single-host development environment.",
+      "required_for": ["production"]
+    }
+  ]
+}
