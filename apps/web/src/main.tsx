@@ -1164,7 +1164,7 @@ const MODULE_DISPLAY: Record<Exclude<ModuleKey, "aspm">, { name: string; purpose
   sast: { name: "SAST 代码安全", purpose: "检查源代码中的高风险实现和安全缺陷" },
   agent: { name: "AGENT 智能体安全", purpose: "检查已识别的 Agent 指令、MCP、工具与插件配置风险" },
   dast: { name: "DAST 动态验证", purpose: "对已确认的项目同源目标进行基础 Web 观察，并关联人工验证记录" },
-  sandbox: { name: "SANDBOX 沙箱证据", purpose: "隔离运行程序并采集进程、输出和策略证据" },
+  sandbox: { name: "SANDBOX 沙箱证据", purpose: "在受限 Docker 目标中执行固定探针，归档运行证据并回传 DAST" },
 };
 
 const AGENT_RULE_TITLES: Record<string, string> = {
@@ -3585,7 +3585,7 @@ function SandboxGovernanceView({ project }: { project: Project }) {
 
   const capabilityEntries = Object.entries(health?.capabilities ?? {});
   return <section className="sandbox-workbench">
-    <section className="panel full sandbox-hero"><div><span className="eyebrow">DAST ISOLATED EXECUTION</span><h2>SANDBOX 隔离验证中心</h2><p>这里不再要求填写命令或补录漏洞信息。DAST 审批后的策略会自动入队，SANDBOX 只负责启动目标、执行固定探针、固化事实证据并回传。</p></div><button className="secondary-action" disabled={Boolean(busy)} onClick={() => void refreshWorkspace()}>{busy === "refresh" ? "刷新中…" : "刷新工作台"}</button></section>
+    <section className="module-governance-heading sandbox-workbench-heading"><div className="module-icon">{moduleIcons.sandbox}</div><div><h2>{MODULE_DISPLAY.sandbox.name}</h2><p>{MODULE_DISPLAY.sandbox.purpose}</p></div><button className="secondary-action" disabled={Boolean(busy)} onClick={() => void refreshWorkspace()}>{busy === "refresh" ? "刷新中…" : "刷新工作台"}</button></section>
     {message ? <div className="panel full sandbox-message">{message}</div> : null}
 
     <section className="panel full"><div className="panel-header"><div><h2>1. 执行能力预检</h2><span>{health?.docker.detail ?? "正在检查执行环境"}</span></div><span className={`sandbox-state ${health?.status ?? "checking"}`}>{health?.status === "ready" ? "基础执行器就绪" : "存在阻塞项"}</span></div>

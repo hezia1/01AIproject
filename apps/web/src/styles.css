@@ -2877,9 +2877,7 @@ th {
 }
 
 .sandbox-workbench { display: grid; gap: 18px; }
-.sandbox-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; background: linear-gradient(135deg, #f7faff 0%, #edf4ff 100%); }
-.sandbox-hero h2 { margin: 4px 0 8px; }
-.sandbox-hero p { margin: 0; max-width: 880px; color: #52647f; line-height: 1.7; }
+.sandbox-workbench-heading > button { justify-self: end; }
 .sandbox-message { border-left: 4px solid #356de8; color: #24456f; }
 .sandbox-capability-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .sandbox-capability { border: 1px solid #dbe4f2; border-radius: 12px; padding: 14px; background: #fbfdff; }
@@ -2931,7 +2929,8 @@ th {
 }
 
 @media (max-width: 720px) {
-  .sandbox-hero, .sandbox-target-card { align-items: flex-start; flex-direction: column; }
+  .sandbox-target-card { align-items: flex-start; flex-direction: column; }
+  .sandbox-workbench-heading > button { justify-self: stretch; }
   .sandbox-capability-grid, .sandbox-contract-summary { grid-template-columns: 1fr; }
   .sandbox-event-list li { grid-template-columns: auto 1fr; }
 }
