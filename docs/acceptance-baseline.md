@@ -80,3 +80,5 @@ python -m alembic -c alembic.ini current
 ## 后续补齐方式
 
 每个未建立基线的指标都需要固定语料版本、样本来源、正负标签、重复次数、计算公式、阈值、失败样例和产物哈希。完成测量后更新 `criteria.json` 的 `current`、`evidence` 与 `status`，并将语料或可验证引用纳入版本控制；不能仅修改文档中的数字。
+
+当前决定暂缓的检测语料、DAST 重放、生产 IAM 和 SANDBOX 完整安全评估统一在 [`deferred-work.md`](deferred-work.md) 跟踪；任一事项开始或完成时必须同步更新该文档。

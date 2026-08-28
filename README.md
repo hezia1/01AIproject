@@ -344,6 +344,7 @@ npm run build
 | --- | --- |
 | [`docs/prd.md`](docs/prd.md) | 产品目标、用户、范围和验收方向 |
 | [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与未建立基线项 |
+| [`docs/deferred-work.md`](docs/deferred-work.md) | 暂缓事项、重新启动条件、完成标准和进展记录 |
 | [`docs/architecture.md`](docs/architecture.md) | 架构原则、模块和数据流 |
 | [`docs/module-system.md`](docs/module-system.md) | 六模块职责与关系 |
 | [`docs/sandbox-adapter-protocol.md`](docs/sandbox-adapter-protocol.md) | SANDBOX 通用适配与运行证据协议 |
