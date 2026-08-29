@@ -82,4 +82,7 @@ def create_db_schema() -> None:
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_sandbox_evidence_finding_id ON sandbox_evidence (finding_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_sandbox_evidence_component_id ON sandbox_evidence (component_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_sandbox_evidence_validation_id ON sandbox_evidence (validation_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_entries_tenant_status ON knowledge_entries (tenant_id, status)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_entries_project ON knowledge_entries (source_project_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_versions_entry ON knowledge_entry_versions (entry_id)"))
 

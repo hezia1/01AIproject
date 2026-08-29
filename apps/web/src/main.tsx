@@ -153,6 +153,9 @@ type ScaGovernanceComponent = { ecosystem: string; name: string; version: string
 type ScaGovernanceSummary = { latest_scan_id: string | null; latest_scan_status: string | null; latest_scan_finished_at: string | null; component_count: number; risky_component_count: number; vulnerable_component_count: number; critical_high_component_count: number; total_finding_count: number; latest_scan_finding_count: number; vulnerability_finding_count: number; license_finding_count: number; version_review_finding_count: number; tool_status: ScaToolStatus | null; top_components: ScaGovernanceComponent[] };
 type AspmSummary = { project_id: string; project_name: string; enabled_modules: ModuleKey[]; risk_score: number; component_count: number; finding_count: number; dast_validation_count: number; sandbox_evidence_count: number; scan_task_count: number; findings_by_source: Record<string, number>; findings_by_severity: Record<string, number>; findings_by_status: Record<string, number>; dast_by_verdict: Record<string, number>; sca_governance: ScaGovernanceSummary; attack_chains: AttackChain[] };
 type SecurityReport = { generated_at: string; project: Project; summary: AspmSummary; components: Component[]; findings: Finding[]; validations: DastValidation[]; sandbox_evidence: SandboxEvidence[]; dependency_graph: DependencyGraph; evidence_graph: EvidenceGraph; retest_comparisons: Record<string, FindingRetestComparison>; capability_boundaries: Record<string, string[]> };
+type KnowledgeEntry = { id: string; tenant_id: string; source_project_id: string; source_project_name: string; source_finding_id: string; knowledge_type: string; title: string; summary: string; rule_id: string; source_module: string; severity: Severity; category: string | null; status: "pending_review" | "published" | "rejected" | "archived"; applicability: Record<string, unknown>; evidence_refs: Record<string, unknown>[]; tags: string[]; version: number; submitted_by: string; reviewer: string | null; review_note: string | null; reviewed_at: string | null; published_at: string | null; publish_ready: boolean; created_at: string; updated_at: string };
+type KnowledgeRecommendation = { entry: KnowledgeEntry; score: number; reasons: string[]; matched_finding_ids: string[] };
+type KnowledgeWorkspace = { project_id: string; project_name: string; entries: KnowledgeEntry[]; recommendations: KnowledgeRecommendation[]; enterprise_published_count: number; status_counts: Record<string, number> };
 type ReportRow = { id: string; title: string; subtitle: string; summary: string; details: [string, string][] };
 
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -1990,9 +1993,13 @@ function AttackChainSummary({ chains }: { chains: AttackChain[] }) {
 function KnowledgeHubView({ project, findings, validations, evidence, summary }: { project: Project | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null }) {
   if (!project) return <div className="panel empty-project">请先选择项目，再查看该项目沉淀的安全知识。</div>;
   const projectId = project.id;
-  const [activeTab, setActiveTab] = useState<"overview" | "candidates" | "library" | "effects">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "candidates" | "enterprise" | "library" | "effects">("overview");
   const [report, setReport] = useState<SecurityReport | null>(null);
   const [dastLibrary, setDastLibrary] = useState<{ total: number; builtin: Record<string, unknown>[]; learned: Record<string, unknown>[] } | null>(null);
+  const [knowledgeWorkspace, setKnowledgeWorkspace] = useState<KnowledgeWorkspace | null>(null);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeMessage, setKnowledgeMessage] = useState("");
+  const [knowledgeBusyId, setKnowledgeBusyId] = useState<string | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
   const [candidatePage, setCandidatePage] = useState(1);
@@ -2024,13 +2031,17 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
   }).sort((left, right) => severityRank(right.finding.severity) - severityRank(left.finding.severity));
   const candidatePagination = paginate(knowledgeCandidates, candidatePage, 8);
   const reusableCandidateCount = knowledgeCandidates.filter((item) => item.tone === "ready").length;
+  const entryByFinding = new Map((knowledgeWorkspace?.entries ?? []).map((entry) => [entry.source_finding_id, entry]));
+  const publishedProjectEntries = (knowledgeWorkspace?.entries ?? []).filter((entry) => entry.status === "published");
+  const recommendationCount = knowledgeWorkspace?.recommendations.length ?? 0;
   const dynamicCoverage = findings.length ? Math.round((validatedFindingIds.size / findings.length) * 100) : 0;
   const evidenceCoverage = findings.length ? Math.round((evidenceBackedFindingIds.size / findings.length) * 100) : 0;
   const governanceCoverage = findings.length ? Math.round(((fixedCount + falsePositiveCount) / findings.length) * 100) : 0;
   const ruleStats = rules.map((rule) => ({ rule, count: findings.filter((item) => item.rule_id === rule).length, categories: uniqueValues(findings.filter((item) => item.rule_id === rule).map((item) => item.ai_review?.category ?? "未分类")) })).sort((a, b) => b.count - a.count);
   const tabs = [
     ["overview", "知识总览", "组织事实与闭环"],
-    ["candidates", "知识候选", reusableCandidateCount + " 条证据就绪"],
+    ["candidates", "知识候选", (knowledgeWorkspace?.status_counts.pending_review ?? 0) + " 条待审核"],
+    ["enterprise", "企业知识", recommendationCount + " 条跨项目推荐"],
     ["library", "规则与 Skill", rules.length + " 条项目规则"],
     ["effects", "效果追踪", "观察复用与治理"],
   ] as const;
@@ -2052,6 +2063,78 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     return () => { cancelled = true; };
   }, [projectId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setReport(null);
+    setReportError("");
+    setCandidatePage(1);
+    setKnowledgeWorkspace(null);
+    setKnowledgeMessage("");
+    setKnowledgeLoading(true);
+    void request<KnowledgeWorkspace>("/knowledge/projects/" + projectId + "/workspace")
+      .then((value) => { if (!cancelled) setKnowledgeWorkspace(value); })
+      .catch((error) => { if (!cancelled) setKnowledgeMessage("知识工作区加载失败：" + errorMessage(error)); })
+      .finally(() => { if (!cancelled) setKnowledgeLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  async function refreshKnowledgeWorkspace(message = "") {
+    const value = await request<KnowledgeWorkspace>("/knowledge/projects/" + projectId + "/workspace");
+    setKnowledgeWorkspace(value);
+    setKnowledgeMessage(message);
+  }
+
+  async function submitKnowledgeCandidate(finding: Finding) {
+    setKnowledgeBusyId(finding.id);
+    setKnowledgeMessage("");
+    try {
+      await request<KnowledgeEntry>("/knowledge/projects/" + projectId + "/candidates/" + finding.id, {
+        method: "POST",
+        body: JSON.stringify({ submitted_by: "security-operator" }),
+      });
+      await refreshKnowledgeWorkspace("候选已提交审核，来源 Finding 和证据引用已固化。");
+    } catch (error) {
+      setKnowledgeMessage("提交失败：" + errorMessage(error));
+    } finally {
+      setKnowledgeBusyId(null);
+    }
+  }
+
+  async function reviewKnowledgeEntry(entry: KnowledgeEntry, decision: "publish" | "reject") {
+    setKnowledgeBusyId(entry.id);
+    setKnowledgeMessage("");
+    try {
+      await request<KnowledgeEntry>("/knowledge/entries/" + entry.id + "/review", {
+        method: "POST",
+        body: JSON.stringify({ decision, reviewer: "security-reviewer", note: decision === "publish" ? "证据与适用范围复核通过" : "退回补充证据或适用范围" }),
+      });
+      await refreshKnowledgeWorkspace(decision === "publish" ? "知识已发布到企业库，并可向同租户其他项目推荐。" : "候选已退回，可补充证据后重新提交。");
+    } catch (error) {
+      setKnowledgeMessage("审核失败：" + errorMessage(error));
+    } finally {
+      setKnowledgeBusyId(null);
+    }
+  }
+
+  async function rollbackKnowledgeEntry(entry: KnowledgeEntry) {
+    setKnowledgeBusyId(entry.id);
+    setKnowledgeMessage("");
+    try {
+      const versions = await request<Array<{ version: number; change_action: string }>>("/knowledge/entries/" + entry.id + "/versions");
+      const target = versions.find((item) => item.version < entry.version);
+      if (!target) throw new Error("没有可回滚的历史版本");
+      await request<KnowledgeEntry>("/knowledge/entries/" + entry.id + "/rollback", {
+        method: "POST",
+        body: JSON.stringify({ target_version: target.version, reviewer: "security-reviewer", note: "从知识中枢回滚到上一版本" }),
+      });
+      await refreshKnowledgeWorkspace("已恢复历史内容并生成新的知识版本，历史记录未被覆盖。");
+    } catch (error) {
+      setKnowledgeMessage("回滚失败：" + errorMessage(error));
+    } finally {
+      setKnowledgeBusyId(null);
+    }
+  }
+
   async function generateReportPreview() {
     setReportLoading(true);
     setReportError("");
@@ -2070,17 +2153,20 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       <div className="knowledge-command-copy">
         <span className="knowledge-command-kicker"><BookOpen size={15} /> SECURITY KNOWLEDGE CORE</span>
         <h2>把项目事实组织成可复用、可追溯的安全知识</h2>
-        <p>以业务上下文为边界，将规则命中、动态验证、运行证据和治理结论连接成统一知识资产；所有候选保留来源证据，发布与跨项目复用仍需后续审核能力。</p>
-        <div className="knowledge-command-facts"><span><ShieldCheck size={15} />当前项目：{project.name}</span><span><GitBranch size={15} />默认分支：{project.default_branch}</span><span><Lock size={15} />作用域：仅当前项目</span></div>
+        <p>项目事实先在当前项目形成候选，经过证据门槛与人工审核后发布到租户级企业知识库；其他项目只有命中相同规则或风险分类时才会收到推荐。</p>
+        <div className="knowledge-command-facts"><span><ShieldCheck size={15} />当前项目：{project.name}</span><span><GitBranch size={15} />默认分支：{project.default_branch}</span><span><Lock size={15} />候选项目隔离 · 发布后租户共享</span></div>
       </div>
-      <div className="knowledge-orbit" aria-label="安全知识中枢数据来源">
+        <div className="knowledge-orbit" aria-label="安全知识中枢数据来源">
         <span className="orbit-node orbit-code"><Bug size={16} />规则</span>
         <span className="orbit-node orbit-supply"><Boxes size={16} />供应链</span>
         <span className="orbit-node orbit-runtime"><FlaskConical size={16} />证据</span>
         <span className="orbit-node orbit-agent"><Network size={16} />Agent</span>
-        <div className="orbit-core"><BookOpen size={28} /><strong>{rules.length + (dastLibrary?.total ?? 0)}</strong><small>知识资产</small></div>
+        <div className="orbit-core"><BookOpen size={28} /><strong>{knowledgeWorkspace?.enterprise_published_count ?? 0}</strong><small>已发布知识</small></div>
       </div>
     </section>
+
+    {knowledgeLoading ? <div className="knowledge-notice">正在加载 {project.name} 的知识工作区…</div> : null}
+    {knowledgeMessage ? <div className="knowledge-notice active">{knowledgeMessage}</div> : null}
 
     <nav className="knowledge-tabs" aria-label="安全知识中枢工作区">
       {tabs.map(([key, label, detail]) => <button className={activeTab === key ? "active" : ""} key={key} onClick={() => setActiveTab(key)}><span>{label}</span><small>{detail}</small></button>)}
@@ -2119,15 +2205,40 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     </> : null}
 
     {activeTab === "candidates" ? <section className="knowledge-workspace">
-      <div className="knowledge-section-heading"><div><span>知识候选池</span><h3>从真实 Finding、验证和治理状态中识别可沉淀经验</h3></div><strong>{knowledgeCandidates.length} 条候选</strong></div>
-      <div className="knowledge-candidate-grid">{candidatePagination.items.length ? candidatePagination.items.map(({ finding, type, state, tone, validationCount, evidenceCount }) => <article className="knowledge-candidate-card" key={finding.id}>
-        <div className="knowledge-candidate-top"><span className={"knowledge-type " + tone}>{type}</span><span className={"severity " + finding.severity}>{severityLabel(finding.severity)}</span></div>
-        <h4>{finding.title}</h4>
-        <p>{truncateText(finding.ai_review?.description ?? finding.evidence ?? "尚未形成完整风险说明", 150)}</p>
-        <dl><div><dt>来源</dt><dd>{finding.source} · {finding.rule_id}</dd></div><div><dt>证据</dt><dd>{validationCount} 次验证 · {evidenceCount} 份运行证据</dd></div><div><dt>范围</dt><dd>{finding.file_path ?? "项目级知识"}</dd></div></dl>
-        <footer><span className={"knowledge-state " + tone}>{state}</span><small>当前仅为项目知识候选</small></footer>
-      </article>) : <div className="knowledge-empty">执行扫描并完成复核后，符合条件的项目经验会出现在这里。</div>}</div>
+      <div className="knowledge-section-heading"><div><span>知识候选池</span><h3>提交后进入人工审核，证据不足的候选无法发布</h3></div><strong>{knowledgeCandidates.length} 条项目候选</strong></div>
+      <div className="knowledge-candidate-grid">{candidatePagination.items.length ? candidatePagination.items.map(({ finding, type, state, tone, validationCount, evidenceCount }) => {
+        const entry = entryByFinding.get(finding.id);
+        const persistedTone = entry?.status === "published" ? "ready" : entry?.status === "pending_review" ? "review" : entry?.status === "rejected" ? "collecting" : tone;
+        const persistedState = entry?.status === "published" ? `已发布 v${entry.version}` : entry?.status === "pending_review" ? "待人工审核" : entry?.status === "rejected" ? "已退回" : state;
+        return <article className="knowledge-candidate-card" key={finding.id}>
+          <div className="knowledge-candidate-top"><span className={"knowledge-type " + persistedTone}>{type}</span><span className={"severity " + finding.severity}>{severityLabel(finding.severity)}</span></div>
+          <h4>{finding.title}</h4>
+          <p>{truncateText(finding.ai_review?.description ?? finding.evidence ?? "尚未形成完整风险说明", 150)}</p>
+          <dl><div><dt>来源</dt><dd>{finding.source} · {finding.rule_id}</dd></div><div><dt>证据</dt><dd>{validationCount} 次验证 · {evidenceCount} 份运行证据</dd></div><div><dt>范围</dt><dd>{finding.file_path ?? "项目级知识"}</dd></div>{entry ? <div><dt>版本</dt><dd>v{entry.version} · 提交人 {entry.submitted_by}</dd></div> : null}</dl>
+          <footer><span className={"knowledge-state " + persistedTone}>{persistedState}</span><div className="knowledge-candidate-actions">
+            {!entry || entry.status === "rejected" ? <button className="secondary-action" disabled={knowledgeBusyId === finding.id} onClick={() => void submitKnowledgeCandidate(finding)}>{knowledgeBusyId === finding.id ? "提交中…" : entry ? "补充后重提" : "提交审核"}</button> : null}
+            {entry?.status === "pending_review" ? <><button className="primary-action" title={entry.publish_ready ? "证据门槛已满足" : "需先补充 DAST、SANDBOX 或治理结论"} disabled={!entry.publish_ready || knowledgeBusyId === entry.id} onClick={() => void reviewKnowledgeEntry(entry, "publish")}>审核发布</button><button className="secondary-action" disabled={knowledgeBusyId === entry.id} onClick={() => void reviewKnowledgeEntry(entry, "reject")}>退回</button></> : null}
+            {entry?.status === "published" ? <button className="secondary-action" disabled={knowledgeBusyId === entry.id || entry.version <= 1} onClick={() => void rollbackKnowledgeEntry(entry)}>回滚上一版</button> : null}
+          </div></footer>
+        </article>;
+      }) : <div className="knowledge-empty">执行扫描并完成复核后，符合条件的项目经验会出现在这里。</div>}</div>
       <Pagination page={candidatePagination.page} pageCount={candidatePagination.pageCount} total={knowledgeCandidates.length} onPageChange={setCandidatePage} />
+    </section> : null}
+
+    {activeTab === "enterprise" ? <section className="knowledge-enterprise-workspace">
+      <section className="knowledge-enterprise-summary">
+        <div><span>企业知识库</span><strong>{knowledgeWorkspace?.enterprise_published_count ?? 0}</strong><small>同一租户内已审核发布</small></div>
+        <div><span>本项目贡献</span><strong>{publishedProjectEntries.length}</strong><small>来源可追溯到当前项目</small></div>
+        <div><span>跨项目推荐</span><strong>{recommendationCount}</strong><small>仅规则或风险分类匹配</small></div>
+      </section>
+      <section className="knowledge-enterprise-panel">
+        <div className="knowledge-section-heading"><div><span>当前项目已发布</span><h3>经人工审核、可被其他项目复用的知识</h3></div><strong>{publishedProjectEntries.length} 条</strong></div>
+        <div className="knowledge-enterprise-grid">{publishedProjectEntries.length ? publishedProjectEntries.map((entry) => <KnowledgeEntryCard key={entry.id} entry={entry} />) : <div className="knowledge-empty">当前项目尚未发布企业知识。先在“知识候选”中提交并完成审核。</div>}</div>
+      </section>
+      <section className="knowledge-enterprise-panel">
+        <div className="knowledge-section-heading"><div><span>来自其他项目的推荐</span><h3>复用经验，但不自动修改当前项目规则</h3></div><strong>{recommendationCount} 条</strong></div>
+        <div className="knowledge-enterprise-grid">{knowledgeWorkspace?.recommendations.length ? knowledgeWorkspace.recommendations.map((item) => <article className="knowledge-recommendation-card" key={item.entry.id}><div><span>{item.entry.source_project_name}</span><strong>{item.score}% 匹配</strong></div><h4>{item.entry.title}</h4><p>{truncateText(item.entry.summary, 180)}</p><small>{item.reasons.join(" · ")} · 命中 {item.matched_finding_ids.length} 条当前 Finding</small><footer><span>{item.entry.source_module} · {item.entry.rule_id}</span><b>v{item.entry.version}</b></footer></article>) : <div className="knowledge-empty">暂时没有与当前项目规则或风险分类匹配的已发布知识。</div>}</div>
+      </section>
     </section> : null}
 
     {activeTab === "library" ? <section className="knowledge-library-workspace">
@@ -2151,8 +2262,8 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
         {[["动态验证覆盖", dynamicCoverage, validatedFindingIds.size + " / " + findings.length, "已关联 DAST 的 Finding"], ["运行证据覆盖", evidenceCoverage, evidenceBackedFindingIds.size + " / " + findings.length, "已关联 SANDBOX 证据的 Finding"], ["治理沉淀覆盖", governanceCoverage, fixedCount + falsePositiveCount + " / " + findings.length, "已修复、关闭或误报"], ["可信攻击链", summary?.attack_chains.length ?? 0, String(summary?.attack_chains.length ?? 0), "只统计显式关系"]].map(([label, value, fraction, description], index) => <article key={String(label)}><span>{label}</span><strong>{index < 3 ? value + "%" : value}</strong><div><i style={{ width: (index < 3 ? Number(value) : Math.min(Number(value) * 20, 100)) + "%" }} /></div><small>{fraction} · {description}</small></article>)}
       </section>
       <section className="knowledge-feedback-grid">
-        <article><div><SlidersHorizontal size={21} /><span><strong>当前可以观测</strong><small>项目级事实</small></span></div><ul><li>{findings.length} 条 Finding 的治理状态</li><li>{validations.length} 次动态验证与裁决</li><li>{evidence.length} 份隔离运行证据</li><li>{fixedCount + falsePositiveCount} 条修复或误报结论</li></ul></article>
-        <article><div><Lock size={21} /><span><strong>尚未建立基线</strong><small>不填造指标</small></span></div><ul><li>SAST / AGENT 精确率与召回率</li><li>DAST 重复运行裁决一致率</li><li>跨项目知识复用效果</li><li>自动规则优化收益</li></ul></article>
+        <article><div><SlidersHorizontal size={21} /><span><strong>当前可以观测</strong><small>项目级事实与知识治理</small></span></div><ul><li>{findings.length} 条 Finding 的治理状态</li><li>{validations.length} 次动态验证与裁决</li><li>{knowledgeWorkspace?.status_counts.published ?? 0} 条当前项目已发布知识</li><li>{recommendationCount} 条跨项目知识推荐</li></ul></article>
+        <article><div><Lock size={21} /><span><strong>尚未建立基线</strong><small>不填造指标</small></span></div><ul><li>SAST / AGENT 精确率与召回率</li><li>DAST 重复运行裁决一致率</li><li>推荐知识被采纳后的风险降低效果</li><li>自动规则优化收益</li></ul></article>
       </section>
     </section> : null}
 
@@ -2162,8 +2273,12 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       {reportError ? <div className="report-error">{reportError}</div> : null}
     </section>
     {report ? <SecurityReportPreview report={report} /> : null}
-    <section className="knowledge-boundary"><strong>当前能力边界</strong><span>本页面已按知识形成、候选、规则资产和效果组织真实项目数据；知识审核发布、版本回滚、跨项目推荐和自动修改规则仍需后端知识模型支持。</span></section>
+    <section className="knowledge-boundary"><strong>当前能力边界</strong><span>候选提交、证据门槛、人工审核、版本历史、回滚和同租户跨项目推荐已经持久化；当前操作人仍是显式演示身份，生产 IAM、推荐采纳反馈和自动修改规则仍未启用。</span></section>
   </section>;
+}
+
+function KnowledgeEntryCard({ entry }: { entry: KnowledgeEntry }) {
+  return <article className="knowledge-enterprise-card"><div><span>{knowledgeTypeLabel(entry.knowledge_type)}</span><b>v{entry.version}</b></div><h4>{entry.title}</h4><p>{truncateText(entry.summary, 180)}</p><dl><div><dt>来源</dt><dd>{entry.source_project_name} · {entry.source_module}</dd></div><div><dt>规则</dt><dd>{entry.rule_id}</dd></div><div><dt>审核</dt><dd>{entry.reviewer ?? "未记录"} · {formatDateTime(entry.published_at)}</dd></div></dl><footer>{entry.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}</footer></article>;
 }
 
 function SecurityReportPreview({ report }: { report: SecurityReport }) {
@@ -4355,6 +4470,7 @@ function relationTypeLabel(value: string) { return value === "reported_by" ? "�
 function confidenceLevelLabel(value: string) { return value === "high" ? "高置信度" : value === "medium" ? "中置信度" : "低置信度"; }
 function executionStatusLabel(value: ExecutionStatus) { return value === "waiting" ? "等待执行" : value === "running" ? "正在执行" : value === "completed" ? "已完成" : value === "failed" ? "执行失败" : "已跳过"; }
 function dastVerdictLabel(value: string) { return value === "baseline_attention" ? "基础观察：需复核" : value === "baseline_clear" ? "基础观察：未发现异常" : value === "exploitable" ? "可利用" : value === "uncertain" ? "不确定" : value === "not_exploitable" ? "不可利用" : value; }
+function knowledgeTypeLabel(value: string) { return value === "false_positive_experience" ? "误报经验" : value === "remediation" ? "修复方案" : value === "validation_playbook" ? "验证剧本" : "漏洞模式"; }
 function validationStatusLabel(value: string) { return value === "verified" ? "已验证" : value === "verifying" ? "验证中" : value === "failed" ? "验证失败" : "未验证"; }
 function retestResultLabel(value: string) { return value === "still_present" ? "仍然存在" : value === "resolved" ? "已经消失" : value === "new" ? "新增问题" : value === "changed" ? "位置或等级变化" : value; }
 function evidenceNodeStage(node: EvidenceGraphNode) { return node.kind === "component" ? "关联供应链组件" : node.kind === "validation" ? "动态验证" : node.kind === "evidence" ? "沙箱运行证据" : "关联风险"; }

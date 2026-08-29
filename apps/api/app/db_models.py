@@ -130,6 +130,53 @@ class FindingRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class KnowledgeEntryRecord(Base):
+    __tablename__ = "knowledge_entries"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "source_finding_id", name="uq_knowledge_tenant_finding"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=False)
+    source_project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    source_finding_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("findings.id"), nullable=False)
+    knowledge_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_module: Mapped[str] = mapped_column(String(80), nullable=False)
+    severity: Mapped[str] = mapped_column(String(40), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending_review")
+    applicability: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    evidence_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    submitted_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    reviewer: Mapped[str | None] = mapped_column(String(120))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class KnowledgeEntryVersionRecord(Base):
+    __tablename__ = "knowledge_entry_versions"
+    __table_args__ = (
+        UniqueConstraint("entry_id", "version", name="uq_knowledge_entry_version"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    entry_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("knowledge_entries.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    change_action: Mapped[str] = mapped_column(String(40), nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    change_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class SastAgentRunRecord(Base):
     """Auditable DeepSeek multi-agent execution without storing credentials or raw headers."""
 

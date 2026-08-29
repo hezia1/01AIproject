@@ -33,6 +33,77 @@ class FindingStatus(str, Enum):
     false_positive = "false_positive"
 
 
+class KnowledgeCandidateSubmit(BaseModel):
+    submitted_by: str = Field(min_length=1, max_length=120)
+    summary: str | None = Field(default=None, max_length=4000)
+
+
+class KnowledgeReview(BaseModel):
+    decision: str = Field(pattern="^(publish|reject)$")
+    reviewer: str = Field(min_length=1, max_length=120)
+    note: str | None = Field(default=None, max_length=4000)
+
+
+class KnowledgeRollback(BaseModel):
+    target_version: int = Field(ge=1)
+    reviewer: str = Field(min_length=1, max_length=120)
+    note: str = Field(min_length=1, max_length=4000)
+
+
+class KnowledgeEntry(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    source_project_id: UUID
+    source_project_name: str
+    source_finding_id: UUID
+    knowledge_type: str
+    title: str
+    summary: str
+    rule_id: str
+    source_module: str
+    severity: str
+    category: str | None = None
+    status: str
+    applicability: dict[str, object] = Field(default_factory=dict)
+    evidence_refs: list[dict[str, object]] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    version: int
+    submitted_by: str
+    reviewer: str | None = None
+    review_note: str | None = None
+    reviewed_at: datetime | None = None
+    published_at: datetime | None = None
+    publish_ready: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeRecommendation(BaseModel):
+    entry: KnowledgeEntry
+    score: int = Field(ge=0, le=100)
+    reasons: list[str] = Field(default_factory=list)
+    matched_finding_ids: list[UUID] = Field(default_factory=list)
+
+
+class KnowledgeWorkspace(BaseModel):
+    project_id: UUID
+    project_name: str
+    entries: list[KnowledgeEntry] = Field(default_factory=list)
+    recommendations: list[KnowledgeRecommendation] = Field(default_factory=list)
+    enterprise_published_count: int = 0
+    status_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class KnowledgeEntryVersion(BaseModel):
+    entry_id: UUID
+    version: int
+    snapshot: dict[str, object] = Field(default_factory=dict)
+    change_action: str
+    changed_by: str
+    change_note: str | None = None
+    created_at: datetime
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     business_owner: str | None = None
