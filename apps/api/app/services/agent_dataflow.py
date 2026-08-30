@@ -520,15 +520,19 @@ def cross_asset_injection_paths(
 def dataflow_finding(path: dict[str, object]) -> AgentFinding:
     kind = str(path.get("kind") or "prompt-to-resource")
     source_trust = str(path.get("source_trust") or "unknown-input")
+    capability = str(path.get("capability") or "sensitive-capability")
+    resource_type = str(path.get("resource_type") or "resource")
+    resource_scope = str(path.get("resource_scope") or "unspecified")
+    scope_label = f"{resource_type} {resource_scope}"
     if kind == "potential-secret-exfiltration":
         rule_id = "AGENT.FLOW.POTENTIAL_SECRET_EXFILTRATION"
-        title = "Agent declarations form a potential secret-to-network path"
+        title = f"Agent declarations form a potential secret-to-network path: {scope_label}"
     elif source_trust == "adversarial-signal":
         rule_id = "AGENT.FLOW.UNTRUSTED_TO_HIGH_RISK_TOOL"
-        title = "Suspicious instructions can reach an Agent capability"
+        title = f"Suspicious instructions can reach {capability}: {scope_label}"
     else:
         rule_id = "AGENT.FLOW.PROMPT_TO_SENSITIVE_RESOURCE"
-        title = "Prompt context can reach a sensitive Agent capability"
+        title = f"Prompt context can reach {capability}: {scope_label}"
     missing = ",".join(str(item) for item in path.get("missing_controls") or []) or "none-recorded"
     return build_finding(
         rule_id,

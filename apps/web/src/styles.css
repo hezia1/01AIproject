@@ -5184,6 +5184,286 @@ th {
   margin: 8px 0 14px;
 }
 
+.agent-formal-findings {
+  background: #ffffff;
+  border: 1px solid #d9e4f1;
+  border-radius: 14px;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  padding: 18px;
+}
+
+.agent-result-scope,
+.agent-step-intro,
+.agent-unsaved-banner,
+.agent-saved-state {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.agent-result-scope {
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+}
+
+.agent-result-scope div,
+.agent-step-intro,
+.agent-unsaved-banner div,
+.agent-saved-state {
+  min-width: 0;
+}
+
+.agent-result-scope span,
+.agent-result-scope strong,
+.agent-unsaved-banner span,
+.agent-saved-state span,
+.agent-saved-state small {
+  display: block;
+}
+
+.agent-result-scope span,
+.agent-saved-state small,
+.agent-step-intro span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.agent-result-scope strong {
+  color: #10233f;
+  font-size: 18px;
+  margin-top: 3px;
+}
+
+.agent-result-scope p {
+  color: #526174;
+  margin: 0;
+  max-width: 650px;
+}
+
+.agent-advisory-list,
+.agent-evidence-grid,
+.agent-method-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-advisory-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-advisory-list article,
+.agent-evidence-grid article {
+  background: #f8fbff;
+  border: 1px solid #d8e5f3;
+  border-radius: 12px;
+  min-width: 0;
+  padding: 15px;
+}
+
+.agent-advisory-list article > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.agent-advisory-list h4 {
+  color: #10233f;
+  margin: 12px 0 6px;
+}
+
+.agent-advisory-list p {
+  color: #526174;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.agent-advisory-list code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding-top: 6px;
+}
+
+.agent-unsaved-banner,
+.agent-saved-state {
+  border-radius: 10px;
+  margin: 12px 0;
+  padding: 12px 15px;
+}
+
+.agent-unsaved-banner {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+}
+
+.agent-unsaved-banner div span {
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.agent-unsaved-banner > span {
+  max-width: 520px;
+  text-align: right;
+}
+
+.agent-saved-state {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.agent-runtime-steps {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 12px 0 18px;
+}
+
+.agent-runtime-steps button {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #d7e1ed;
+  border-radius: 10px;
+  color: #526174;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  text-align: left;
+}
+
+.agent-runtime-steps button i {
+  align-items: center;
+  background: #e2e8f0;
+  border-radius: 50%;
+  display: flex;
+  flex: 0 0 28px;
+  font-style: normal;
+  height: 28px;
+  justify-content: center;
+}
+
+.agent-runtime-steps button span,
+.agent-runtime-steps button small {
+  display: block;
+  min-width: 0;
+}
+
+.agent-runtime-steps button small {
+  color: #7b8797;
+  margin-top: 2px;
+}
+
+.agent-runtime-steps button.active {
+  background: #eff6ff;
+  border-color: #60a5fa;
+  color: #174c91;
+}
+
+.agent-runtime-steps button.active i,
+.agent-runtime-steps button.completed i {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.agent-runtime-steps button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-step-intro {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.agent-step-intro strong {
+  color: #10233f;
+  font-size: 17px;
+}
+
+.agent-method-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-method-grid button {
+  background: #f8fbff;
+  border: 1px solid #cfe0f4;
+  border-radius: 12px;
+  color: #173a6c;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  min-height: 135px;
+  padding: 18px;
+  text-align: left;
+}
+
+.agent-method-grid button:hover {
+  border-color: #60a5fa;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.1);
+}
+
+.agent-method-grid button.danger {
+  background: #fff8f6;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.agent-method-grid button span,
+.agent-method-grid button small {
+  color: #64748b;
+}
+
+.agent-step-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.agent-step-actions span,
+.agent-runtime-message {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.agent-runtime-message {
+  background: #f8fafc;
+  border-left: 3px solid #60a5fa;
+  padding: 10px 12px;
+}
+
+.agent-evidence-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-evidence-grid article {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-evidence-grid article span,
+.agent-evidence-grid article small {
+  color: #64748b;
+}
+
+.agent-evidence-grid article strong {
+  color: #10233f;
+}
+
+.agent-evidence-grid code {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1180px) {
   .agent-workspace-tabs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5195,12 +5475,24 @@ th {
   }
 
   .agent-coverage-cards,
-  .agent-governance-summary {
+  .agent-governance-summary,
+  .agent-runtime-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 760px) {
+  .agent-workspace,
+  .agent-tab-panel,
+  .agent-tab-panel > *,
+  .agent-tab-heading,
+  .agent-formal-findings,
+  .agent-workspace .retest-panel {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+  }
+
   .agent-workspace-tabs {
     display: flex;
     overflow-x: auto;
@@ -5250,11 +5542,89 @@ th {
   .agent-time-note {
     text-align: left;
   }
+
+  .agent-result-scope,
+  .agent-unsaved-banner,
+  .agent-saved-state {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .agent-unsaved-banner > span {
+    text-align: left;
+  }
+
+  .agent-advisory-list,
+  .agent-evidence-grid,
+  .agent-method-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-workspace .mobile-card-table,
+  .agent-workspace .mobile-card-table tbody,
+  .agent-workspace .mobile-card-table tr,
+  .agent-workspace .mobile-card-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .concise-finding-table-wrap .mobile-card-table {
+    min-width: 0;
+  }
+
+  .agent-workspace .mobile-card-table thead {
+    border: 0;
+    clip: rect(0 0 0 0);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    width: 1px;
+  }
+
+  .agent-workspace .mobile-card-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .agent-workspace .mobile-card-table tr {
+    background: #ffffff;
+    border: 1px solid #dbe5f0;
+    border-radius: 11px;
+    overflow: hidden;
+  }
+
+  .agent-workspace .mobile-card-table td {
+    border-bottom: 1px solid #edf2f7;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding: 11px 12px;
+  }
+
+  .agent-workspace .mobile-card-table td:last-child {
+    border-bottom: 0;
+  }
+
+  .agent-workspace .mobile-card-table td[data-label]::before {
+    color: #64748b;
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .agent-workspace .mobile-card-table td[colspan]::before {
+    display: none;
+  }
 }
 
 @media (max-width: 460px) {
   .agent-coverage-cards,
-  .agent-governance-summary {
+  .agent-governance-summary,
+  .agent-runtime-steps {
     grid-template-columns: 1fr;
   }
 

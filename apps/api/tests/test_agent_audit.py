@@ -69,6 +69,35 @@ def test_offline_agent_audit_does_not_treat_private_source_as_connected() -> Non
     assert "connectivity proof" in " ".join(report["limitations"])
 
 
+def test_offline_agent_audit_does_not_repeat_a_dataflow_path_already_represented_by_a_finding() -> None:
+    report = build_agent_offline_audit(
+        assets=[],
+        findings=[{
+            "rule_id": "AGENT.FLOW.PROMPT_TO_SENSITIVE_RESOURCE",
+            "title": "Prompt context can reach server-process: command python",
+            "severity": "high",
+            "file_path": ".mcp.json",
+            "line_start": 1,
+            "status": "open",
+            "evidence": "path_id=df-1; capability=server-process; resource=command:python",
+        }],
+        coverage={"generic_parser_asset_count": 1},
+        intelligence={},
+        dataflow={"summary": {"high_path_count": 1}, "paths": [{
+            "id": "df-1", "severity": "high", "title": "Prompt can reach server-process",
+            "asset_path": ".mcp.json", "confidence": "medium",
+        }]},
+        trust_score={"score": 70, "grade": "guarded"},
+    )
+
+    assert report["summary"]["active_finding_count"] == 1
+    assert report["summary"]["finding_review_count"] == 1
+    assert report["summary"]["advisory_review_count"] == 1
+    assert report["summary"]["review_item_count"] == 2
+    assert [item["kind"] for item in report["items"]] == ["finding", "coverage-gap"]
+    assert "path:df-1" in report["items"][0]["evidence_refs"]
+
+
 def test_offline_agent_audit_is_included_in_html_report_without_a_model_claim() -> None:
     audit = build_agent_offline_audit(
         assets=[],

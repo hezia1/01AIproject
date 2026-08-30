@@ -41,15 +41,23 @@ def build_agent_offline_audit(
         ),
     )
     items = [finding_review_item(item) for item in ordered_findings[:MAX_AUDIT_ITEMS]]
+    represented_path_ids = {
+        reference.removeprefix("path:")
+        for item in items
+        for reference in item.get("evidence_refs", [])
+        if isinstance(reference, str) and reference.startswith("path:")
+    }
     items.extend(coverage_review_items(coverage))
     items.extend(private_source_review_items(assets))
-    items.extend(dataflow_review_items(dataflow))
+    items.extend(dataflow_review_items(dataflow, excluded_path_ids=represented_path_ids))
     items = items[:MAX_AUDIT_ITEMS]
     intelligence_summary = intelligence.get("summary") if isinstance(intelligence.get("summary"), dict) else {}
     dataflow_summary = dataflow.get("summary") if isinstance(dataflow.get("summary"), dict) else {}
     summary = {
         "active_finding_count": len(active_findings),
         "review_item_count": len(items),
+        "finding_review_count": sum(item["kind"] == "finding" for item in items),
+        "advisory_review_count": sum(item["kind"] != "finding" for item in items),
         "critical_or_high_finding_count": sum(
             str(item.get("severity") or "") in {"critical", "high"} for item in active_findings
         ),
@@ -181,12 +189,17 @@ def finding_review_item(item: dict[str, object]) -> dict[str, object]:
     rule_id = str(item.get("rule_id") or "AGENT.UNKNOWN")
     file_path = str(item.get("file_path") or "agent-project")
     line = int(item.get("line_start") or 0)
+    evidence_refs = [f"rule:{rule_id}", f"asset:{file_path}", f"line:{line}"]
+    evidence = str(item.get("evidence") or "")
+    path_id = next((part.split("=", 1)[1].strip() for part in evidence.split(";") if part.strip().startswith("path_id=")), "")
+    if path_id:
+        evidence_refs.append(f"path:{path_id}")
     return review_item(
         kind="finding",
         priority=str(item.get("severity") or "info"),
         title=str(item.get("title") or rule_id),
         rationale="Review the static finding, its declared control boundary, and whether the proposed remediation fits the intended Agent capability.",
-        evidence_refs=[f"rule:{rule_id}", f"asset:{file_path}", f"line:{line}"],
+        evidence_refs=evidence_refs,
         questions=[
             "Is the capability required for the documented task?",
             "Is the configured scope the minimum necessary?",
@@ -247,11 +260,16 @@ def private_source_review_items(assets: list[dict[str, object]]) -> list[dict[st
     return result
 
 
-def dataflow_review_items(dataflow: dict[str, object]) -> list[dict[str, object]]:
+def dataflow_review_items(
+    dataflow: dict[str, object], *, excluded_path_ids: set[str] | None = None
+) -> list[dict[str, object]]:
     paths = dataflow.get("paths") if isinstance(dataflow.get("paths"), list) else []
     result: list[dict[str, object]] = []
+    excluded = excluded_path_ids or set()
     for path in paths:
         if not isinstance(path, dict) or str(path.get("severity") or "") not in {"critical", "high"}:
+            continue
+        if str(path.get("id") or "") in excluded:
             continue
         result.append(review_item(
             kind="static-dataflow",

@@ -107,6 +107,8 @@ def test_same_asset_prompt_tool_resource_path_is_explainable() -> None:
     assert "resource-scope-restriction" in data_path["missing_controls"]
     assert len(data_path["node_ids"]) == 4
     assert output.findings[0].rule_id == "AGENT.FLOW.PROMPT_TO_SENSITIVE_RESOURCE"
+    assert "shell-execution" in output.findings[0].title
+    assert "command *" in output.findings[0].title
 
 
 def test_suspicious_instruction_to_shell_is_critical() -> None:

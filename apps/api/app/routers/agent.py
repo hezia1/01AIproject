@@ -902,6 +902,22 @@ def run_project_agent_ai_review(
         raise HTTPException(status_code=400, detail="A completed AGENT scan is required before AI review")
     metadata = scan.scan_metadata if isinstance(scan.scan_metadata, dict) else {}
     audit = metadata.get("audit") if isinstance(metadata.get("audit"), dict) else {}
+    audit_summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
+    if "finding_review_count" not in audit_summary:
+        finding_records = db.scalars(
+            select(FindingRecord).where(
+                FindingRecord.scan_task_id == scan.id,
+                FindingRecord.source == "AGENT",
+            )
+        ).all()
+        audit = build_agent_offline_audit(
+            assets=metadata_dict_list(metadata, "assets"),
+            findings=[finding_record_report_payload(item) for item in finding_records],
+            coverage=metadata.get("coverage") if isinstance(metadata.get("coverage"), dict) else {},
+            intelligence=metadata.get("intelligence") if isinstance(metadata.get("intelligence"), dict) else {},
+            dataflow=metadata.get("dataflow") if isinstance(metadata.get("dataflow"), dict) else {},
+            trust_score=metadata.get("trust_score") if isinstance(metadata.get("trust_score"), dict) else {},
+        )
     base = previous_completed_agent_scan(db, project_id, scan)
     comparison = build_agent_audit_diff(project_id, scan, base).model_dump(mode="json")
     try:

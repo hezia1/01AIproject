@@ -44,6 +44,21 @@ function assert(condition, message) {
         assert(!assetText.includes("The score summarizes current scanner evidence"), `${viewport.width}px 评分边界仍显示英文`);
         assert(assetText.includes("评分快照生成") && assetText.includes("北京时间"), `${viewport.width}px 评分缺少北京时间`);
       }
+      if (tab === "风险") {
+        const riskText = await page.locator(".agent-workspace").innerText();
+        assert(riskText.includes("正式问题") && riskText.includes("额外提示"), `${viewport.width}px 风险口径未拆分`);
+        assert(!riskText.includes("个待人工复核"), `${viewport.width}px 仍使用混淆的问题/候选口径`);
+        if (viewport.width < 760) {
+          const firstRiskRow = page.locator(".agent-formal-findings .mobile-card-table tbody tr").first();
+          if (await firstRiskRow.count()) assert(await firstRiskRow.evaluate((row) => getComputedStyle(row).display === "block"), `${viewport.width}px 风险表未转换为移动卡片`);
+        }
+      }
+      if (tab === "动态验证") {
+        const stepLabels = await page.locator(".agent-runtime-steps button strong").allTextContents();
+        assert(JSON.stringify(stepLabels) === JSON.stringify(["运行条件", "安全副本", "验证方式", "确认执行", "查看证据"]), `${viewport.width}px 动态验证不是五步向导`);
+        const visibleInputs = await page.locator(".agent-validation-workspace input:visible, .agent-validation-workspace select:visible, .agent-validation-workspace textarea:visible").count();
+        assert(visibleInputs <= 5, `${viewport.width}px 动态验证首步仍同时显示过多控件：${visibleInputs}`);
+      }
       const dimensions = await page.evaluate(() => ({
         body: document.body.scrollWidth,
         document: document.documentElement.scrollWidth,
@@ -55,6 +70,13 @@ function assert(condition, message) {
     }
 
     await page.getByRole("button", { name: /^策略与交付/ }).click();
+    await page.locator(".agent-saved-state, .agent-unsaved-banner").first().waitFor();
+    assert(await page.locator(".agent-saved-state").count(), `${viewport.width}px 治理策略缺少已保存状态`);
+    const runtimeToggle = page.getByLabel(/^允许本项目显示真实目标执行入口/);
+    await runtimeToggle.click();
+    assert(await page.locator(".agent-unsaved-banner").count(), `${viewport.width}px 治理策略修改后未显示未保存状态`);
+    await runtimeToggle.click();
+    assert(await page.locator(".agent-saved-state").count(), `${viewport.width}px 治理策略还原后未恢复已保存状态`);
     for (const [workspace, headings] of Object.entries(governanceWorkspaces)) {
       await page.getByRole("button", { name: workspace, exact: true }).click();
       const visibleHeadings = await page.locator(".agent-governance-panels h2").allTextContents();
