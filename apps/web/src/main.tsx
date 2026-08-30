@@ -15,6 +15,11 @@ type SecurityModule = { key: ModuleKey; code: string; name: string; subtitle: st
 type Project = { id: string; name: string; business_owner: string | null; security_owner: string | null; repository_url: string | null; source_path: string | null; runtime_url: string | null; api_base_url: string | null; sandbox_command: string | null; sandbox_image: string | null; default_branch: string; risk_score: number; created_at: string };
 type ProjectDraft = { name: string; business_owner: string; security_owner: string; repository_url: string; source_path: string; runtime_url: string; api_base_url: string; sandbox_command: string; sandbox_image: string; default_branch: string };
 type ProjectAssetDraft = Pick<ProjectDraft, "runtime_url" | "api_base_url" | "sandbox_command" | "sandbox_image">;
+type ProjectImportMode = "local" | "git" | "zip";
+type ProjectReadinessCheck = { key: string; title: string; status: "ready" | "warning" | "blocked" | "optional"; detail: string; remediation: string };
+type ProjectReadiness = { project_id: string; overall_status: "ready" | "warning" | "blocked"; recommended_tasks: ("sca" | "sast" | "agent")[]; inventory: { source_path?: string | null; path_exists?: boolean; dependency_file_count?: number; source_file_count?: number; agent_file_count?: number; inspected_file_count?: number; inspected_bytes?: number; truncated?: boolean }; quick_scan: { available?: boolean; mode?: string; limits?: Record<string, number>; statement?: string }; checks: ProjectReadinessCheck[] };
+type ProjectImportResult = { project: Project; readiness: ProjectReadiness; import_mode: ProjectImportMode; managed_source: boolean };
+type ScanMode = "quick" | "deep";
 type ProjectModule = { project_id: string; module_key: ModuleKey; enabled: boolean; config: Record<string, unknown> };
 type ProjectAssetProbe = { project_id: string; source_path: string | null; path_exists: boolean; sca_files: string[]; source_files: string[]; agent_files: string[]; recommended_tasks: ("sca" | "sast" | "agent")[]; message: string };
 type Component = { id: string; ecosystem: string; name: string; version: string | null; dependency_type: string; source_file: string; package_manager: string | null; license?: string | null; risk_status?: string; vulnerability_ids?: string[]; severity?: Severity | null; risk_summary?: string | null; remediation?: string | null; license_risk?: string | null; risk_source?: string | null; osv_checked?: boolean; osv_error?: string | null; risk_metadata?: { risk_score?: number; kev?: boolean; known_exploited?: boolean; max_epss?: number | null; fixed_versions?: string[]; advisories?: Record<string, unknown>[]; vex?: ScaVex[] } };
@@ -230,7 +235,10 @@ function App() {
   const [project, setProject] = useState<Project | null>(null);
   const emptyProjectDraft: ProjectDraft = { name: "", business_owner: "", security_owner: "", repository_url: "", source_path: "", runtime_url: "", api_base_url: "", sandbox_command: "", sandbox_image: "", default_branch: "main" };
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(emptyProjectDraft);
+  const [projectImportMode, setProjectImportMode] = useState<ProjectImportMode>("local");
+  const [projectZipFile, setProjectZipFile] = useState<File | null>(null);
   const [assetProbe, setAssetProbe] = useState<ProjectAssetProbe | null>(null);
+  const [projectReadiness, setProjectReadiness] = useState<ProjectReadiness | null>(null);
   const [enabledModules, setEnabledModules] = useState<Set<ModuleKey>>(() => new Set(DEFAULT_ENABLED_MODULES));
   const [components, setComponents] = useState<Component[]>([]);
   const [scaScanHistory, setScaScanHistory] = useState<ScaScanHistoryItem[]>([]);
@@ -252,6 +260,7 @@ function App() {
   const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraph | null>(null);
   const [sourcePath, setSourcePath] = useState(DEFAULT_SOURCE_PATH);
   const [scaToolScanEnabled, setScaToolScanEnabled] = useState(true);
+  const [scanMode, setScanMode] = useState<ScanMode>("quick");
   const [sastPath, setSastPath] = useState(DEFAULT_SAST_PATH);
   const [agentPath, setAgentPath] = useState(DEFAULT_AGENT_PATH);
   const [targetUrl, setTargetUrl] = useState("https://example.com/login");
@@ -410,6 +419,7 @@ function App() {
     setExecutionSteps([]);
     setRetestComparisons({ sca: null, sast: null, agent: null });
     setAssetProbe(null);
+    setProjectReadiness(null);
   }
 
   async function selectProject(nextProject: Project, knownProjects = projects) {
@@ -443,12 +453,13 @@ function App() {
 
   async function refreshProjectContext(projectId = project?.id, scaScanId: string | null = selectedScaScanId): Promise<string[]> {
     if (!projectId) return [];
-    const [moduleResource, probeResource] = await Promise.all([
+    const [moduleResource, probeResource, readinessResource] = await Promise.all([
       captureProjectResource("模块配置", request<ProjectModule[]>(`/modules/projects/${projectId}`), []),
       captureProjectResource<ProjectAssetProbe | null>("资产画像", request<ProjectAssetProbe>(`/projects/${projectId}/asset-probe`), null),
+      captureProjectResource<ProjectReadiness | null>("接入准备度", request<ProjectReadiness>(`/projects/${projectId}/readiness`), null),
     ]);
     if (activeProjectIdRef.current !== projectId) return [];
-    const warnings = [moduleResource.warning, probeResource.warning].filter((item): item is string => Boolean(item));
+    const warnings = [moduleResource.warning, probeResource.warning, readinessResource.warning].filter((item): item is string => Boolean(item));
     const projectModules = moduleResource.value;
     if (!moduleResource.warning && !projectModules.some((item) => item.module_key === "aspm" && item.enabled)) {
       try { await enableProjectModule(projectId, "aspm", true); }
@@ -457,6 +468,7 @@ function App() {
     if (activeProjectIdRef.current !== projectId) return [];
     setEnabledModules(new Set([...projectModules.filter((item) => item.enabled).map((item) => item.module_key), "aspm"]));
     setAssetProbe(probeResource.value);
+    setProjectReadiness(readinessResource.value);
     warnings.push(...await refreshProjectData(projectId, scaScanId));
     return uniqueValues(warnings);
   }
@@ -588,31 +600,38 @@ function App() {
   async function createProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectDraft.name.trim()) return setStatus("项目名称不能为空");
+    if (projectImportMode === "local" && !projectDraft.source_path.trim()) return setStatus("请选择或填写本地源码路径");
+    if (projectImportMode === "git" && !projectDraft.repository_url.trim()) return setStatus("请填写 HTTP(S) Git 仓库地址");
+    if (projectImportMode === "zip" && !projectZipFile) return setStatus("请选择 ZIP 项目文件");
     setLoading(true);
     try {
-      const created = await request<Project>("/projects", {
-        method: "POST",
-        body: JSON.stringify({
-          name: projectDraft.name.trim(),
-          business_owner: emptyToNull(projectDraft.business_owner),
-          security_owner: emptyToNull(projectDraft.security_owner),
-          repository_url: emptyToNull(projectDraft.repository_url),
-          source_path: emptyToNull(projectDraft.source_path),
-          runtime_url: emptyToNull(projectDraft.runtime_url),
-          api_base_url: emptyToNull(projectDraft.api_base_url),
-          sandbox_command: emptyToNull(projectDraft.sandbox_command),
-          sandbox_image: emptyToNull(projectDraft.sandbox_image),
-          default_branch: projectDraft.default_branch.trim() || "main",
-        }),
-      });
-      await Promise.all(DEFAULT_ENABLED_MODULES.map((moduleKey) => enableProjectModule(created.id, moduleKey, true)));
+      const result = projectImportMode === "zip"
+        ? await uploadZipProject(projectZipFile!, projectDraft)
+        : await request<ProjectImportResult>("/projects/import", {
+          method: "POST",
+          body: JSON.stringify({
+            name: projectDraft.name.trim(),
+            import_mode: projectImportMode,
+            source: projectImportMode === "git" ? projectDraft.repository_url.trim() : projectDraft.source_path.trim(),
+            business_owner: emptyToNull(projectDraft.business_owner),
+            security_owner: emptyToNull(projectDraft.security_owner),
+            runtime_url: emptyToNull(projectDraft.runtime_url),
+            api_base_url: emptyToNull(projectDraft.api_base_url),
+            sandbox_command: emptyToNull(projectDraft.sandbox_command),
+            sandbox_image: emptyToNull(projectDraft.sandbox_image),
+            default_branch: projectDraft.default_branch.trim() || "main",
+          }),
+        });
       const projectData = await request<Project[]>("/projects");
       setProjectDraft(emptyProjectDraft);
-      await selectProject(created, projectData);
-      setStatus(`项目已创建，并默认启用 ${DEFAULT_ENABLED_MODULES.map((item) => item.toUpperCase()).join(" + ")}`);
+      setProjectZipFile(null);
+      setProjectReadiness(result.readiness);
+      await selectProject(result.project, projectData);
+      setActiveView("assets");
+      setStatus(`项目已接入：${result.project.name}；准备度 ${readinessStatusLabel(result.readiness.overall_status)}`);
     } catch (error) {
       console.error(error);
-      setStatus("项目创建失败");
+      setStatus(`项目接入失败：${errorMessage(error)}`);
     } finally {
       setLoading(false);
     }
@@ -706,17 +725,17 @@ function App() {
     if (moduleKey === "sca" || moduleKey === "sast" || moduleKey === "agent") {
       const configuredSource = moduleKey === "sca" ? sourcePath : moduleKey === "sast" ? sastPath : agentPath;
       if (!configuredSource.trim()) return { status: "skipped", detail: "未配置源码路径" };
-      const result = await request<ScaScanResult | unknown>(`/${moduleKey}/scan`, {
+      const result = await requestWithTimeout<ScaScanResult | unknown>(`/${moduleKey}/scan`, {
         method: "POST",
         body: JSON.stringify({
           project_id: project.id,
           source_path: configuredSource,
-          ...(moduleKey === "sast" ? {} : moduleKey === "sca" ? { clear_previous: false, enable_tool_scan: scaToolScanEnabled } : { clear_previous: true }),
+          ...(moduleKey === "sast" ? { quick_mode: scanMode === "quick" } : moduleKey === "sca" ? { clear_previous: false, quick_mode: scanMode === "quick", enable_tool_scan: scanMode === "deep" && scaToolScanEnabled } : { clear_previous: true }),
         }),
-      });
+      }, scanMode === "quick" ? 75_000 : 360_000);
       return {
         status: "completed",
-        detail: moduleKey === "agent" ? "扫描完成，批次结果与覆盖信息已保存" : "扫描完成，已更新批次对比",
+        detail: moduleKey === "agent" ? "扫描完成，批次结果与覆盖信息已保存" : `${scanMode === "quick" ? "快速" : "深度"}扫描完成，已更新批次对比`,
         scanId: moduleKey === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId,
       };
     }
@@ -814,7 +833,7 @@ function App() {
     if (loading || unifiedLoadingRef.current || moduleLoadingRef.current[kind]) return setStatus(`${kind.toUpperCase()} 已有任务正在执行`);
     setModuleBusy(kind, true);
     try {
-      const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, ...(kind === "sast" ? {} : kind === "sca" ? { clear_previous: false, enable_tool_scan: scaToolScanEnabled } : { clear_previous: true }) }) });
+      const result = await requestWithTimeout<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: source, ...(kind === "sast" ? { quick_mode: scanMode === "quick" } : kind === "sca" ? { clear_previous: false, quick_mode: scanMode === "quick", enable_tool_scan: scanMode === "deep" && scaToolScanEnabled } : { clear_previous: true }) }) }, scanMode === "quick" ? 75_000 : 360_000);
       const nextScaScanId = kind === "sca" ? (result as ScaScanResult).scan_task_id : selectedScaScanId;
       if (kind === "sca") setSelectedScaScanId(nextScaScanId);
       await refreshSingleModuleData(kind, project.id, nextScaScanId);
@@ -831,7 +850,7 @@ function App() {
     try {
       let nextScaScanId = selectedScaScanId;
       for (const kind of runnable) {
-        const result = await request<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, ...(kind === "sast" ? {} : kind === "sca" ? { clear_previous: false, enable_tool_scan: scaToolScanEnabled } : { clear_previous: true }) }) });
+        const result = await requestWithTimeout<ScaScanResult | unknown>(`/${kind}/scan`, { method: "POST", body: JSON.stringify({ project_id: project.id, source_path: project.source_path ?? sourcePath, ...(kind === "sast" ? { quick_mode: scanMode === "quick" } : kind === "sca" ? { clear_previous: false, quick_mode: scanMode === "quick", enable_tool_scan: scanMode === "deep" && scaToolScanEnabled } : { clear_previous: true }) }) }, scanMode === "quick" ? 75_000 : 360_000);
         if (kind === "sca") nextScaScanId = (result as ScaScanResult).scan_task_id;
       }
       setSelectedScaScanId(nextScaScanId);
@@ -1114,9 +1133,9 @@ function App() {
       </nav></aside>
       <section className="workspace"><header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><div className="current-project-pill"><span>当前项目</span><strong>{project?.name ?? "未选择"}</strong></div><button className="primary-action" onClick={() => void bootstrap()} disabled={projectControlsLoading}>刷新数据</button></div></header>
         <div className={`api-status ${status.includes("失败") || status.includes("未连接") ? "warning" : "ok"}`}>{status}</div>
-        {activeView === "projects" && <ProjectWorkspace projects={projects} project={project} draft={projectDraft} loading={projectControlsLoading} onDraftChange={setProjectDraft} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
-        {activeView === "assets" && <><ProjectAssetConfig project={project} loading={projectControlsLoading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
-        {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading || unifiedLoading} runBlocked={anyModuleLoading} moduleLoading={moduleLoading} executionSteps={executionSteps} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
+        {activeView === "projects" && <ProjectOnboardingWorkspace projects={projects} project={project} draft={projectDraft} importMode={projectImportMode} zipFile={projectZipFile} loading={projectControlsLoading} onDraftChange={setProjectDraft} onImportModeChange={setProjectImportMode} onZipFileChange={setProjectZipFile} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
+        {activeView === "assets" && <><ProjectReadinessPanel project={project} readiness={projectReadiness} onOpenDetection={() => setActiveView("detection")} /><ProjectAssetConfig project={project} loading={projectControlsLoading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
+        {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading || unifiedLoading} runBlocked={anyModuleLoading} moduleLoading={moduleLoading} executionSteps={executionSteps} scanMode={scanMode} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onScanModeChange={setScanMode} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
     {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} agentScanHistory={agentScanHistory} agentSnapshot={agentSnapshot} agentScanDiff={agentScanDiff} agentAuditDiff={agentAuditDiff} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} dastTargetConfirmation={dastTargetConfirmation} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onDastTargetConfirmationChange={setDastTargetConfirmation} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onRunAgentAiReview={runAgentDeepseekReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onCreateManualDast={createManualDastValidation} onUpdateManualDast={updateManualDastValidation} onExportDastReport={exportDastReport} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
         {activeView === "knowledge" && <KnowledgeHubView project={project} findings={findings} validations={validations} evidence={evidence} summary={summary} />}
       </section>
@@ -1128,8 +1147,47 @@ function NavButton({ active, onClick, icon, label }: { active: boolean; onClick:
 function viewEyebrow(view: ViewKey) { return view === "projects" ? "项目空间" : view === "assets" ? "项目资产画像" : view === "detection" ? "模块接入与统一执行" : view === "knowledge" ? "可学习、可传递、可治理" : "项目安全治理"; }
 function viewTitle(view: ViewKey) { return view === "projects" ? "创建项目并切换当前项目" : view === "assets" ? "确认待检测的项目资产" : view === "detection" ? "选择安全模块并一键执行检测" : view === "knowledge" ? "安全知识中枢" : "从风险发现到修复复测的完整闭环"; }
 
+function ProjectOnboardingWorkspace({ projects, project, draft, importMode, zipFile, loading, onDraftChange, onImportModeChange, onZipFileChange, onCreate, onSelect, onDelete }: { projects: Project[]; project: Project | null; draft: ProjectDraft; importMode: ProjectImportMode; zipFile: File | null; loading: boolean; onDraftChange: (draft: ProjectDraft) => void; onImportModeChange: (mode: ProjectImportMode) => void; onZipFileChange: (file: File | null) => void; onCreate: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; onSelect: (project: Project) => void; onDelete: (projectId: string) => Promise<void> }) {
+  return <section className="project-workspace onboarding-workspace">
+    <div className="panel project-create onboarding-create">
+      <div className="panel-header"><div><h2>陌生项目接入</h2><p>选择一种来源，系统完成受控导入、资产识别和准备度检查。</p></div><span>SCA + SAST + ASPM 默认启用</span></div>
+      <div className="import-mode-switch" role="tablist" aria-label="项目接入方式">
+        {(["local", "git", "zip"] as ProjectImportMode[]).map((mode) => <button type="button" role="tab" aria-selected={importMode === mode} className={importMode === mode ? "active" : ""} onClick={() => onImportModeChange(mode)} key={mode}>{mode === "local" ? "本地文件夹" : mode === "git" ? "Git 仓库" : "ZIP 上传"}</button>)}
+      </div>
+      <form className="project-form" onSubmit={(event) => void onCreate(event)}>
+        <label>项目名称<input value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} placeholder="例如：导师现场项目" /></label>
+        <label>默认分支<input value={draft.default_branch} onChange={(event) => onDraftChange({ ...draft, default_branch: event.target.value })} placeholder="main" /></label>
+        {importMode === "local" ? <label className="wide-field">本地源码目录<input value={draft.source_path} onChange={(event) => onDraftChange({ ...draft, source_path: event.target.value })} placeholder="D:\\project\\advisor-demo" /></label> : null}
+        {importMode === "git" ? <label className="wide-field">HTTP(S) Git 地址<input value={draft.repository_url} onChange={(event) => onDraftChange({ ...draft, repository_url: event.target.value })} placeholder="https://github.com/team/project.git" /></label> : null}
+        {importMode === "zip" ? <label className="wide-field">ZIP 项目文件<input type="file" accept=".zip,application/zip" onChange={(event) => onZipFileChange(event.target.files?.[0] ?? null)} /><small>{zipFile ? `${zipFile.name} · ${formatBytes(zipFile.size)}` : "最大 500 MiB；上传后执行路径穿越、符号链接和解压体积校验。"}</small></label> : null}
+        <details className="onboarding-advanced wide-field"><summary>运行目标与负责人（可选）</summary><div className="project-form advanced-grid">
+          <label>业务负责人<input value={draft.business_owner} onChange={(event) => onDraftChange({ ...draft, business_owner: event.target.value })} placeholder="业务系统部" /></label>
+          <label>安全负责人<input value={draft.security_owner} onChange={(event) => onDraftChange({ ...draft, security_owner: event.target.value })} placeholder="应用安全组" /></label>
+          <label>运行地址<input value={draft.runtime_url} onChange={(event) => onDraftChange({ ...draft, runtime_url: event.target.value })} placeholder="http://localhost:3000" /></label>
+          <label>API 地址<input value={draft.api_base_url} onChange={(event) => onDraftChange({ ...draft, api_base_url: event.target.value })} placeholder="http://localhost:3000/api" /></label>
+          <label>沙箱命令<input value={draft.sandbox_command} onChange={(event) => onDraftChange({ ...draft, sandbox_command: event.target.value })} placeholder="npm run start" /></label>
+          <label>沙箱镜像<input value={draft.sandbox_image} onChange={(event) => onDraftChange({ ...draft, sandbox_image: event.target.value })} placeholder="node:20-alpine" /></label>
+        </div></details>
+        <button className="primary-action wide-field" disabled={loading || !draft.name.trim()}><Plus size={16} />{loading ? "正在安全接入" : "接入并检查准备度"}</button>
+      </form>
+    </div>
+    <div className="panel project-directory"><div className="panel-header"><h2>项目列表</h2><span>{projects.length} 个项目</span></div><div className="project-list">{projects.length === 0 ? <div className="empty-project">暂无项目。接入后，检测与治理数据会按项目隔离。</div> : projects.map((item) => <div className={`project-row ${project?.id === item.id ? "active" : ""}`} key={item.id}><button className="project-main" onClick={() => onSelect(item)} disabled={loading}><div><strong>{item.name}</strong><span>{item.repository_url ?? "本地 / ZIP 来源"} · {item.default_branch}</span><span>{item.source_path ?? "未配置本地源码路径"}</span></div><span>{item.business_owner ?? "未配置业务负责人"}</span><span>{item.security_owner ?? "未配置安全负责人"}</span></button><button className="danger-action" disabled={loading} onClick={() => void onDelete(item.id)}>删除</button></div>)}</div></div>
+    <div className="panel current-project"><div className="panel-header"><h2>当前项目</h2><span>{project ? "已选择" : "未选择"}</span></div>{project ? <div className="project-detail"><strong>{project.name}</strong><span>源码路径：{project.source_path ?? "未配置"}</span><span>仓库：{project.repository_url ?? "本地或 ZIP 导入"}</span><span>运行地址：{project.runtime_url ?? "未配置；仅影响 DAST"}</span><span>分支：{project.default_branch}</span></div> : <div className="empty-project">请先接入或选择一个项目。</div>}</div>
+  </section>;
+}
+
 function ProjectWorkspace({ projects, project, draft, loading, onDraftChange, onCreate, onSelect, onDelete }: { projects: Project[]; project: Project | null; draft: ProjectDraft; loading: boolean; onDraftChange: (draft: ProjectDraft) => void; onCreate: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; onSelect: (project: Project) => void; onDelete: (projectId: string) => Promise<void> }) {
   return <section className="project-workspace"><div className="panel project-create"><div className="panel-header"><h2>项目创建向导</h2><span>ASPM 默认内置，SCA + SAST 默认启用</span></div><form className="project-form" onSubmit={(event) => void onCreate(event)}><label>项目名称<input value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} placeholder="例如：政企门户应用" /></label><label>业务负责人<input value={draft.business_owner} onChange={(event) => onDraftChange({ ...draft, business_owner: event.target.value })} placeholder="业务系统部" /></label><label>安全负责人<input value={draft.security_owner} onChange={(event) => onDraftChange({ ...draft, security_owner: event.target.value })} placeholder="应用安全组" /></label><label>代码仓库<input value={draft.repository_url} onChange={(event) => onDraftChange({ ...draft, repository_url: event.target.value })} placeholder="git.example.com/team/repo" /></label><label>本地源码路径<input value={draft.source_path} onChange={(event) => onDraftChange({ ...draft, source_path: event.target.value })} placeholder="D:\\project\\demo-repo" /></label><label>运行地址<input value={draft.runtime_url} onChange={(event) => onDraftChange({ ...draft, runtime_url: event.target.value })} placeholder="http://localhost:3000" /></label><label>API 地址<input value={draft.api_base_url} onChange={(event) => onDraftChange({ ...draft, api_base_url: event.target.value })} placeholder="http://localhost:3000/api" /></label><label>沙箱命令<input value={draft.sandbox_command} onChange={(event) => onDraftChange({ ...draft, sandbox_command: event.target.value })} placeholder="npm test" /></label><label>沙箱镜像<input value={draft.sandbox_image} onChange={(event) => onDraftChange({ ...draft, sandbox_image: event.target.value })} placeholder="node:20-alpine" /></label><label>默认分支<input value={draft.default_branch} onChange={(event) => onDraftChange({ ...draft, default_branch: event.target.value })} placeholder="main" /></label><button className="primary-action" disabled={loading || !draft.name.trim()}><Plus size={16} />创建项目</button></form></div><div className="panel project-directory"><div className="panel-header"><h2>项目列表</h2><span>{projects.length} 个项目</span></div><div className="project-list">{projects.length === 0 ? <div className="empty-project">暂无项目。创建项目后，安全检测配置和治理结果会按项目隔离。</div> : projects.map((item) => <div className={`project-row ${project?.id === item.id ? "active" : ""}`} key={item.id}><button className="project-main" onClick={() => onSelect(item)} disabled={loading}><div><strong>{item.name}</strong><span>{item.repository_url ?? "未配置仓库"} · {item.default_branch}</span><span>{item.source_path ?? "未配置本地源码路径"}</span></div><span>{item.business_owner ?? "未配置业务负责人"}</span><span>{item.security_owner ?? "未配置安全负责人"}</span></button><button className="danger-action" disabled={loading} onClick={() => void onDelete(item.id)}>删除</button></div>)}</div></div><div className="panel current-project"><div className="panel-header"><h2>当前项目</h2><span>{project ? "已选择" : "未选择"}</span></div>{project ? <div className="project-detail"><strong>{project.name}</strong><span>业务：{project.business_owner ?? "未配置"}</span><span>安全：{project.security_owner ?? "未配置"}</span><span>仓库：{project.repository_url ?? "未配置"}</span><span>源码路径：{project.source_path ?? "未配置"}</span><span>运行地址：{project.runtime_url ?? "未配置"}</span><span>API 地址：{project.api_base_url ?? "未配置"}</span><span>沙箱命令：{project.sandbox_command ?? "未配置"}</span><span>沙箱镜像：{project.sandbox_image ?? "未配置"}</span><span>分支：{project.default_branch}</span></div> : <div className="empty-project">请先创建或选择一个项目。</div>}</div></section>;
+}
+
+function ProjectReadinessPanel({ project, readiness, onOpenDetection }: { project: Project | null; readiness: ProjectReadiness | null; onOpenDetection: () => void }) {
+  if (!project) return <section className="panel readiness-panel empty-project">请先接入项目，系统会在这里给出可执行任务、阻塞原因和降级边界。</section>;
+  if (!readiness) return <section className="panel readiness-panel"><div className="panel-header"><h2>新项目接入准备度</h2><span>正在读取检查结果</span></div></section>;
+  return <section className={`panel readiness-panel ${readiness.overall_status}`}>
+    <div className="readiness-heading"><div><span className={`readiness-badge ${readiness.overall_status}`}>{readinessStatusLabel(readiness.overall_status)}</span><h2>{project.name} 接入准备度</h2><p>{readiness.overall_status === "blocked" ? "当前存在静态扫描阻塞项，请先按建议补齐源码输入。" : `可执行推荐：${readiness.recommended_tasks.map((item) => item.toUpperCase()).join(" + ") || "暂无"}`}</p></div><button className="primary-action" disabled={!readiness.quick_scan.available} onClick={onOpenDetection}>进入快速检测</button></div>
+    <div className="readiness-check-grid">{readiness.checks.map((check) => <article className={`readiness-check ${check.status}`} key={check.key}><div><i>{check.status === "ready" ? <Check size={15} /> : check.status === "blocked" ? "!" : "·"}</i><strong>{check.title}</strong><span>{readinessCheckLabel(check.status)}</span></div><p>{check.detail}</p>{check.remediation ? <small>{check.remediation}</small> : null}</article>)}</div>
+    <div className="quick-scan-boundary"><strong>快速模式边界</strong><span>{readiness.quick_scan.statement}</span></div>
+  </section>;
 }
 
 function ProjectAssetConfig({ project, loading, onSave }: { project: Project | null; loading: boolean; onSave: (draft: ProjectAssetDraft) => Promise<void> }) {
@@ -1293,12 +1351,14 @@ function SecurityDetectionCenter({
   runBlocked,
   moduleLoading,
   executionSteps,
+  scanMode,
   sourcePath,
   targetUrl,
   runCommand,
   sandboxImage,
   onToggle,
   onEnableRelated,
+  onScanModeChange,
   onSourcePathChange,
   onTargetUrlChange,
   onRunCommandChange,
@@ -1313,12 +1373,14 @@ function SecurityDetectionCenter({
   runBlocked: boolean;
   moduleLoading: ModuleLoadingState;
   executionSteps: ExecutionStep[];
+  scanMode: ScanMode;
   sourcePath: string;
   targetUrl: string;
   runCommand: string;
   sandboxImage: string;
   onToggle: (module: SecurityModule) => Promise<void>;
   onEnableRelated: (moduleKeys: ModuleKey[]) => Promise<void>;
+  onScanModeChange: (mode: ScanMode) => void;
   onSourcePathChange: (value: string) => void;
   onTargetUrlChange: (value: string) => void;
   onRunCommandChange: (value: string) => void;
@@ -1375,7 +1437,8 @@ function SecurityDetectionCenter({
     </section>
 
     <section className="panel detection-run-panel">
-      <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>系统先执行 SCA、SAST、AGENT；DAST 与 SANDBOX 涉及目标授权，会生成提示并等待在治理页审批后继续。</p></div>
+      <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>{scanMode === "quick" ? "快速模式使用本地规则和离线情报，并对文件数、体积和模块耗时进行有界降级。" : "深度模式启用增强 SCA 与 Semgrep，适合预先准备，不建议在未知项目现场首次运行。"}</p></div>
+      <div className="scan-mode-switch" role="radiogroup" aria-label="扫描模式"><button type="button" className={scanMode === "quick" ? "active" : ""} onClick={() => onScanModeChange("quick")}><strong>快速演示</strong><span>默认 · 本地有界</span></button><button type="button" className={scanMode === "deep" ? "active" : ""} onClick={() => onScanModeChange("deep")}><strong>深度扫描</strong><span>增强工具 · 耗时不定</span></button></div>
       <button className="primary-action run-all-button" disabled={!project || loading || runBlocked || selected.length === 0} onClick={() => void onRun()}>{loading ? "检测执行中" : runBlocked ? "单模块执行中" : "一键执行"}</button>
       {executionSteps.length > 0 ? <div className="execution-progress">{executionSteps.map((step) => <div className={`execution-step ${step.status}`} key={step.module}><span>{MODULE_DISPLAY[step.module].name}</span><strong>{executionStatusLabel(step.status)}</strong><small>{step.detail}</small></div>)}</div> : null}
     </section>
@@ -4589,6 +4652,31 @@ async function updateProjectModule(projectId: string, moduleKey: ModuleKey, enab
 function readLastProjectId() { try { return window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY); } catch { return null; } }
 function persistLastProjectId(projectId: string | null) { try { if (projectId) window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, projectId); else window.localStorage.removeItem(LAST_PROJECT_STORAGE_KEY); } catch { /* Browsers with storage disabled still keep the in-memory selection. */ } }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : "未知错误"; }
+function readinessStatusLabel(status: ProjectReadiness["overall_status"]) { return status === "ready" ? "可快速检测" : status === "warning" ? "可检测 · 有边界" : "暂不可检测"; }
+function readinessCheckLabel(status: ProjectReadinessCheck["status"]) { return status === "ready" ? "就绪" : status === "warning" ? "需注意" : status === "blocked" ? "阻塞" : "按需配置"; }
+function formatBytes(value: number) { if (value < 1024) return `${value} B`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`; return `${(value / (1024 * 1024)).toFixed(1)} MiB`; }
+
+async function uploadZipProject(file: File, draft: ProjectDraft): Promise<ProjectImportResult> {
+  const query = new URLSearchParams({ name: draft.name.trim(), default_branch: draft.default_branch.trim() || "main" });
+  if (draft.business_owner.trim()) query.set("business_owner", draft.business_owner.trim());
+  if (draft.security_owner.trim()) query.set("security_owner", draft.security_owner.trim());
+  if (draft.runtime_url.trim()) query.set("runtime_url", draft.runtime_url.trim());
+  if (draft.api_base_url.trim()) query.set("api_base_url", draft.api_base_url.trim());
+  if (draft.sandbox_command.trim()) query.set("sandbox_command", draft.sandbox_command.trim());
+  if (draft.sandbox_image.trim()) query.set("sandbox_image", draft.sandbox_image.trim());
+  const response = await fetch(`${API_BASE}/projects/import/zip?${query.toString()}`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
+  if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail ?? payload); } catch { /* keep status */ } throw new Error(detail); }
+  return response.json() as Promise<ProjectImportResult>;
+}
+
+async function requestWithTimeout<T>(path: string, init: RequestInit, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try { return await request<T>(path, { ...init, signal: controller.signal }); }
+  catch (error) { if (controller.signal.aborted) throw new Error(`扫描超过 ${Math.round(timeoutMs / 1000)} 秒客户端等待上限；服务端会保存已经完成的有界结果`); throw error; }
+  finally { window.clearTimeout(timeout); }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const method = String(init.method ?? "GET").toUpperCase(); const response = await fetch(`${API_BASE}${path}`, { ...init, cache: method === "GET" ? "no-store" : init.cache, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message ? String(payload.detail.message) : JSON.stringify(payload.detail ?? payload); } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><Root /></React.StrictMode>);

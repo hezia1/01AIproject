@@ -25,14 +25,18 @@ def analyze_components(
     components: list[ParsedComponent],
     vulnerability_rules: tuple[VulnerabilityRule, ...] | None = None,
     license_policies: tuple[LicensePolicy, ...] | None = None,
+    *,
+    offline_only: bool = False,
 ) -> list[ParsedComponent]:
-    return [analyze_component(component, vulnerability_rules, license_policies) for component in components]
+    return [analyze_component(component, vulnerability_rules, license_policies, offline_only=offline_only) for component in components]
 
 
 def analyze_component(
     component: ParsedComponent,
     vulnerability_rules: tuple[VulnerabilityRule, ...] | None = None,
     license_policies: tuple[LicensePolicy, ...] | None = None,
+    *,
+    offline_only: bool = False,
 ) -> ParsedComponent:
     matched_rules = [
         rule
@@ -40,7 +44,7 @@ def analyze_component(
         if matches_vulnerability_rule(component.ecosystem, component.name, component.version, rule)
     ]
     resolution = component_resolution(component)
-    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(component, resolution)
+    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(component, resolution, offline_only=offline_only)
     vulnerability_ids = [item.vulnerability_id for item in osv_vulnerabilities] + [
         rule.vulnerability_id for rule in matched_rules
     ]
@@ -121,7 +125,7 @@ def analyze_component(
     )
 
 
-def lookup_osv_vulnerabilities(component: ParsedComponent, resolution: dict[str, object] | None = None):
+def lookup_osv_vulnerabilities(component: ParsedComponent, resolution: dict[str, object] | None = None, *, offline_only: bool = False):
     resolved = resolution or component_resolution(component)
     lookup_version = resolved.get("lookup_version")
     if not supports_osv(component.ecosystem):
@@ -131,7 +135,7 @@ def lookup_osv_vulnerabilities(component: ParsedComponent, resolution: dict[str,
     mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, lookup_version)
     if mirror_matched:
         return mirrored, True, None, True
-    if os.getenv("SCA_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"}:
+    if offline_only or os.getenv("SCA_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"}:
         return [], False, "SCA offline-only mode: no matching local OSV record", False
     try:
         return query_osv(component.ecosystem, component.name, lookup_version), True, None, False

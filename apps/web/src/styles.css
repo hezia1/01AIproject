@@ -801,6 +801,140 @@ th {
   gap: 10px;
 }
 
+.onboarding-create .panel-header {
+  align-items: flex-start;
+}
+
+.onboarding-create .panel-header p {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 6px 0 0;
+}
+
+.import-mode-switch,
+.scan-mode-switch {
+  background: #eef2f7;
+  border-radius: 10px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 16px 0;
+  padding: 4px;
+}
+
+.import-mode-switch button,
+.scan-mode-switch button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #64748b;
+  cursor: pointer;
+  padding: 9px 10px;
+}
+
+.import-mode-switch button.active,
+.scan-mode-switch button.active {
+  background: #ffffff;
+  border-color: #c9d7ea;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+  color: #1559b7;
+}
+
+.onboarding-advanced {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 12px;
+}
+
+.onboarding-advanced summary {
+  color: #334155;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.advanced-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.project-form label small {
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.readiness-panel {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.readiness-panel.ready { border-color: #b8e4d0; }
+.readiness-panel.warning { border-color: #f2d28b; }
+.readiness-panel.blocked { border-color: #fecaca; }
+
+.readiness-heading {
+  align-items: center;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.readiness-heading h2 { margin-top: 8px; }
+.readiness-heading p { color: #64748b; font-size: 13px; margin: 6px 0 0; }
+
+.readiness-badge {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
+.readiness-badge.ready { background: #dcfce7; color: #047857; }
+.readiness-badge.warning { background: #fef3c7; color: #92400e; }
+.readiness-badge.blocked { background: #fee2e2; color: #b91c1c; }
+
+.readiness-check-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.readiness-check {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  min-width: 0;
+  padding: 13px;
+}
+
+.readiness-check.ready { background: #f3fbf7; border-color: #c8ead8; }
+.readiness-check.warning { background: #fffbeb; border-color: #fde68a; }
+.readiness-check.blocked { background: #fff7f7; border-color: #fecaca; }
+
+.readiness-check > div { align-items: center; display: flex; gap: 7px; }
+.readiness-check i { align-items: center; background: #e2e8f0; border-radius: 50%; display: inline-flex; font-style: normal; height: 24px; justify-content: center; width: 24px; }
+.readiness-check > div span { color: #64748b; font-size: 11px; margin-left: auto; }
+.readiness-check p { color: #334155; font-size: 13px; line-height: 1.55; margin: 10px 0 0; }
+.readiness-check small { color: #64748b; display: block; line-height: 1.5; margin-top: 7px; }
+
+.quick-scan-boundary {
+  background: #eff6ff;
+  border-radius: 9px;
+  color: #334155;
+  display: flex;
+  font-size: 13px;
+  gap: 12px;
+  line-height: 1.6;
+  padding: 12px 14px;
+}
+
+.quick-scan-boundary strong { color: #1559b7; white-space: nowrap; }
+
 .project-form label {
   color: #475569;
   display: grid;
@@ -1140,8 +1274,22 @@ th {
   align-items: center;
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.65fr) auto;
 }
+
+.scan-mode-switch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.scan-mode-switch button {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+
+.scan-mode-switch strong { font-size: 13px; }
+.scan-mode-switch span { font-size: 11px; }
 
 .run-all-button {
   font-size: 15px;
@@ -1737,6 +1885,17 @@ th {
   .asset-config-grid,
   .project-row {
     grid-template-columns: 1fr;
+  }
+
+  .readiness-check-grid,
+  .advanced-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .readiness-heading,
+  .quick-scan-boundary {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .topbar-actions {

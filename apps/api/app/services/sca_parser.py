@@ -5,6 +5,7 @@ import re
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
+from time import monotonic
 from xml.etree import ElementTree
 
 
@@ -33,6 +34,9 @@ class ParsedComponent:
 class ScaParseOutput:
     components: list[ParsedComponent]
     scanned_files: list[str]
+    truncated: bool = False
+    limit_reason: str | None = None
+    skipped_files: list[str] | None = None
 
 
 DEPENDENCY_FILE_NAMES = {
@@ -62,22 +66,60 @@ DEPENDENCY_TYPE_PRIORITY = {
 }
 
 
-def parse_dependency_tree(source_path: str) -> ScaParseOutput:
+def parse_dependency_tree(
+    source_path: str,
+    *,
+    max_files: int | None = None,
+    max_components: int | None = None,
+    max_file_bytes: int | None = None,
+    deadline_seconds: float | None = None,
+) -> ScaParseOutput:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError("source_path must be an existing directory")
 
     components: list[ParsedComponent] = []
     scanned_files: list[str] = []
+    skipped_files: list[str] = []
+    limit_reasons: list[str] = []
+    started_at = monotonic()
+    processed_files = 0
 
     for file_path in iter_dependency_files(root):
+        if deadline_seconds is not None and monotonic() - started_at >= deadline_seconds:
+            limit_reasons.append(f"依赖解析达到 {deadline_seconds:g} 秒快速模式时限")
+            break
+        if max_files is not None and processed_files >= max_files:
+            limit_reasons.append(f"依赖清单超过快速模式 {max_files} 个文件上限")
+            break
         relative_path = file_path.relative_to(root).as_posix()
+        processed_files += 1
+        if max_file_bytes is not None:
+            try:
+                if file_path.stat().st_size > max_file_bytes:
+                    skipped_files.append(relative_path)
+                    limit_reasons.append(f"跳过超过 {max_file_bytes // (1024 * 1024)} MiB 的依赖文件")
+                    continue
+            except OSError:
+                skipped_files.append(relative_path)
+                continue
         parsed = parse_dependency_file(file_path, relative_path)
         if parsed:
             scanned_files.append(relative_path)
             components.extend(parsed)
 
-    return ScaParseOutput(components=dedupe_components(components), scanned_files=scanned_files)
+    deduped = dedupe_components(components)
+    if max_components is not None and len(deduped) > max_components:
+        deduped = deduped[:max_components]
+        limit_reasons.append(f"组件数量超过快速模式 {max_components} 项上限")
+    reasons = list(dict.fromkeys(limit_reasons))
+    return ScaParseOutput(
+        components=deduped,
+        scanned_files=scanned_files,
+        truncated=bool(reasons),
+        limit_reason="；".join(reasons) or None,
+        skipped_files=skipped_files,
+    )
 
 
 def iter_dependency_files(root: Path):

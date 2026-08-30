@@ -47,7 +47,7 @@ from app.services.sca_parser import ParsedComponent, dedupe_components, parse_de
 from app.services.sca_risk_analyzer import analyze_components
 from app.services.sca_dependency_graph import build_dependency_graph, dependency_snapshot_edges
 from app.services.sca_native_tree import native_dependency_source_summary
-from app.services.sca_python_environment import environment_metadata, inspect_python_environment
+from app.services.sca_python_environment import PythonEnvironmentInspection, environment_metadata, inspect_python_environment
 from app.services.sca_artifacts import collect_artifact_hashes, source_fingerprint
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
@@ -347,18 +347,29 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
     db.flush()
 
     try:
-        parsed = parse_dependency_tree(source_path)
-        python_environment = inspect_python_environment(source_path)
+        parsed = parse_dependency_tree(
+            source_path,
+            max_files=200 if payload.quick_mode else None,
+            max_components=3000 if payload.quick_mode else None,
+            max_file_bytes=20 * 1024 * 1024 if payload.quick_mode else None,
+            deadline_seconds=45 if payload.quick_mode else None,
+        )
+        python_environment = (
+            PythonEnvironmentInspection([], {}, set(), error="快速模式不执行项目虚拟环境命令")
+            if payload.quick_mode
+            else inspect_python_environment(source_path)
+        )
         baseline_components = [*parsed.components, *python_environment.components]
-        tool_scan = scan_with_syft_grype(source_path, baseline_components) if payload.enable_tool_scan else None
-        tool_status = build_tool_status(payload.enable_tool_scan, tool_scan)
+        tool_scan_enabled = payload.enable_tool_scan and not payload.quick_mode
+        tool_scan = scan_with_syft_grype(source_path, baseline_components) if tool_scan_enabled else None
+        tool_status = build_tool_status(tool_scan_enabled, tool_scan)
         parsed_components = merge_tool_components(baseline_components, tool_scan)
         policy_overrides = scoped_policy_overrides(db, payload.project_id)
         vulnerability_rules = effective_vulnerability_rules(load_vulnerability_rules(), policy_overrides)
         license_policies = effective_license_policies(load_license_policies(), policy_overrides)
         gate_policy = effective_gate_policy(policy_overrides)
         analyzed_components = apply_tool_vulnerabilities(
-            analyze_components(parsed_components, vulnerability_rules, license_policies),
+            analyze_components(parsed_components, vulnerability_rules, license_policies, offline_only=payload.quick_mode),
             tool_scan,
         )
         assurance = build_sca_assurance(
@@ -366,6 +377,12 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             parsed.scanned_files,
             tool_status=tool_status.model_dump(),
         )
+        if parsed.truncated:
+            assurance["status"] = "partial"
+            assurance["confidence"] = "low"
+            assurance["execution_status"] = "bounded"
+            assurance["reasons"] = [*list(assurance.get("reasons") or []), str(parsed.limit_reason)]
+            assurance["statement"] = "快速扫描已达到有界范围；当前结果可用于现场初筛，但不代表项目完整依赖覆盖。"
         records: list[ComponentRecord] = []
         for component in analyzed_components:
             record = ComponentRecord(
@@ -398,6 +415,12 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         dependency_graph = build_dependency_graph(project, records)
         scan.scan_metadata = {
             "sca_tool_scan": tool_status.model_dump(),
+            "scan_mode": "quick" if payload.quick_mode else "deep",
+            "scope_limit": {
+                "truncated": parsed.truncated,
+                "reason": parsed.limit_reason,
+                "skipped_files": parsed.skipped_files or [],
+            },
             "python_environment": environment_metadata(python_environment),
             "osv_lookup": osv_lookup_metadata(analyzed_components),
             "osv_mirror": osv_mirror_status(),

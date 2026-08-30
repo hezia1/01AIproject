@@ -147,6 +147,7 @@ docker compose -f infra\docker-compose.yml down
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL 连接 | 本地 `ai_security` 数据库 |
 | `REDIS_URL` | Redis 连接 | `redis://localhost:6379/0` |
+| `PROJECT_IMPORT_ROOT` | ZIP/Git 受管源码目录 | 默认 `artifacts/project-imports`；删除对应项目时自动清理受管副本 |
 | `DEEPSEEK_API_KEY` | SAST 七角色 AI 复核 | 默认留空，项目级能力默认关闭 |
 | `DEEPSEEK_BASE_URL` | SAST AI 服务地址 | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | SAST 发现/分析模型 | 见环境变量模板 |
@@ -174,10 +175,10 @@ DeepSeek 只是一项可选增强能力。未配置或调用失败时，本地�
 
 ## 使用流程
 
-1. 在控制台创建项目，填写本地源码路径及可选运行地址。
-2. 通过资产探测确认依赖清单、源码和 Agent 配置是否可识别。
-3. 按项目启用需要的安全模块。
-4. 执行 SCA、SAST 和/或 AGENT 扫描，复核 Finding 与扫描覆盖情况。
+1. 在控制台通过本地目录、HTTP(S) Git 仓库或 ZIP 上传接入项目；Git/ZIP 会进入 `PROJECT_IMPORT_ROOT` 管理目录。
+2. 查看“项目资产”的接入准备度，确认源码、全部受支持依赖清单、Agent 配置以及 DAST/SANDBOX 可选运行条件。
+3. 现场陌生项目优先使用“快速演示”：只运行本地规则与离线情报，并在达到文件数、体积或软时限时保存有界结果；预先准备的项目再使用深度扫描。
+4. 按项目启用需要的安全模块并执行 SCA、SAST 和/或 AGENT，复核 Finding、扫描覆盖和降级原因。
 5. DAST 从当前批次中选择支持动态验证且上下文足够的 SAST/AGENT Finding，生成待审批策略。
 6. 在 Dry Run 中检查目标、路径、身份引用、请求上限和证据标准。
 7. 由 DAST 有界执行器验证已上线目标，或交给 SANDBOX 启动隔离实例并采集证据。
@@ -202,6 +203,12 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 ## 新项目适配范围
 
 平台以通用项目配置和声明式适配为主，不应依赖某一个测试项目：
+
+- 本地目录直接引用，不复制也不在删除项目时移除；ZIP 上传和 HTTP(S) Git 浅克隆写入受管目录，删除项目时只清理该受管副本。
+- ZIP 接入限制为 500 MiB、20000 个条目和 1 GiB 解压体积，并拒绝绝对路径、`..` 路径穿越、符号链接及超大单文件。
+- Git 接入禁用交互式凭据提示和 LFS 自动下载，URL 不得内嵌密码或令牌；私有仓库需依赖主机已配置的安全 Git 凭据。
+- 准备度页把静态检测条件和 DAST/SANDBOX 可选运行条件分开：缺少运行地址不会阻塞 SCA/SAST，缺少源码或可识别资产才会阻塞快速检测。
+- 快速模式限制为最多 200 个依赖文件、3000 个组件、1200 个源码文件、60 MiB 源码内容和每个本地模块 45 秒软时限；限制命中会以部分覆盖返回，不会伪装成深度扫描。
 
 - SCA 支持 npm、PyPI、Maven、Go、Bundler、Composer、Cargo 和 NuGet 的常见清单/锁文件。
 - SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-08-28-p0",
+  "baseline_id": "2026-08-29-p0-onboarding",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -14,8 +14,8 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "12 platform documents aligned on 2026-08-28",
-      "evidence": ["commit:b19dcaf", "docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md"],
+      "current": "Platform documents aligned on 2026-08-29, including cold-start onboarding and bounded quick-scan behavior",
+      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md"],
       "limitations": "Fixture README files describe test targets and are not product capability statements.",
       "required_for": ["p0", "production"]
     },
@@ -36,7 +36,7 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"passed": 295, "skipped": 1, "failed": 0},
+      "current": {"passed": 307, "skipped": 1, "failed": 0},
       "evidence": ["python -m pytest apps/api/tests -q with TEMP/TMP/TMPDIR on D:"],
       "limitations": "Warnings and environment-dependent skipped tests remain visible in the command output.",
       "required_for": ["p0", "production"]
@@ -47,9 +47,9 @@
       "metric": "Frontend TypeScript production build",
       "status": "verified",
       "target": "npm run build exits successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kib": 539.72},
-      "evidence": ["cd apps/web && npm run build"],
-      "limitations": "Vite reports a chunk-size warning; no automated UI test suite exists.",
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 561.61},
+      "evidence": ["cd apps/web && npm run build", "Playwright smoke checks with local Chrome at 1600px and 390px viewports"],
+      "limitations": "Vite reports a chunk-size warning; UI smoke checks are local acceptance evidence, not a committed automated browser suite.",
       "required_for": ["p0", "production"]
     },
     {
@@ -58,9 +58,20 @@
       "metric": "Alembic schema is at repository head",
       "status": "verified",
       "target": "Current database revision equals the repository migration head",
-      "current": "20260817_0013",
+      "current": "20260828_0014",
       "evidence": ["python -m alembic -c alembic.ini current"],
       "limitations": "This verifies the local development database, not backup, rollback, or production upgrade readiness.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "cold_start_onboarding",
+      "category": "demonstration",
+      "metric": "A previously unseen project can be safely imported, inventoried, readiness-checked, and scanned in bounded quick mode",
+      "status": "verified",
+      "target": "Local directory, guarded ZIP, and HTTP(S) Git inputs produce project-scoped readiness and bounded static scan results",
+      "current": "Local and ZIP API smoke checks pass; full manifest recognition and quick-scan limits have regression tests",
+      "evidence": ["apps/api/app/services/project_onboarding.py", "apps/api/tests/test_project_onboarding.py", "apps/web/src/main.tsx"],
+      "limitations": "Private Git access depends on host credentials; dynamic validation remains blocked until an authorized runtime target is configured.",
       "required_for": ["p0", "production"]
     },
     {

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 from app.models import Severity
 from app.services.sast_noise import IGNORED_DIRS, is_noise_path
@@ -46,6 +47,8 @@ class SastScanOutput:
     findings: list[ParsedFinding]
     scanned_files: list[str]
     engine_status: dict[str, dict[str, object]] | None = None
+    truncated: bool = False
+    limit_reason: str | None = None
 
 
 SAST_RULES = [
@@ -222,6 +225,10 @@ def scan_source_tree(
     source_path: str,
     custom_rules: list[dict[str, object]] | None = None,
     include_paths: list[str] | None = None,
+    *,
+    max_files: int | None = None,
+    max_total_bytes: int | None = None,
+    deadline_seconds: float | None = None,
 ) -> SastScanOutput:
     root = Path(source_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
@@ -233,10 +240,27 @@ def scan_source_tree(
     scanned_files: list[str] = []
     semantic_files: list[Path] = []
     allowed_paths = {path.replace("\\", "/").lstrip("./") for path in include_paths or []}
+    started_at = monotonic()
+    scanned_bytes = 0
+    limit_reason: str | None = None
     for file_path in iter_source_files(root, extra_extensions):
+        if deadline_seconds is not None and monotonic() - started_at >= deadline_seconds:
+            limit_reason = f"本地规则达到 {deadline_seconds:g} 秒快速模式时限"
+            break
+        if max_files is not None and len(scanned_files) >= max_files:
+            limit_reason = f"源码文件超过快速模式 {max_files} 个文件上限"
+            break
         relative_path = file_path.relative_to(root).as_posix()
         if allowed_paths and relative_path not in allowed_paths:
             continue
+        try:
+            next_bytes = scanned_bytes + file_path.stat().st_size
+        except OSError:
+            continue
+        if max_total_bytes is not None and next_bytes > max_total_bytes:
+            limit_reason = f"源码体积超过快速模式 {max_total_bytes // (1024 * 1024)} MiB 上限"
+            break
+        scanned_bytes = next_bytes
         scanned_files.append(relative_path)
         semantic_files.append(file_path)
         findings.extend(scan_file(file_path, relative_path, rules))
@@ -250,7 +274,12 @@ def scan_source_tree(
     from app.services.sast_semantic import scan_javascript_project
     findings.extend(scan_javascript_project(root, semantic_files))
 
-    return SastScanOutput(findings=dedupe_findings(findings), scanned_files=scanned_files)
+    return SastScanOutput(
+        findings=dedupe_findings(findings),
+        scanned_files=scanned_files,
+        truncated=limit_reason is not None,
+        limit_reason=limit_reason,
+    )
 
 
 def iter_source_files(root: Path, extra_extensions: set[str] | None = None):

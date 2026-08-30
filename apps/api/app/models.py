@@ -147,6 +147,48 @@ class ProjectAssetProbe(BaseModel):
     message: str
 
 
+class ProjectImportMode(str, Enum):
+    local = "local"
+    git = "git"
+
+
+class ProjectImportRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    import_mode: ProjectImportMode
+    source: str = Field(min_length=1, max_length=2000)
+    business_owner: str | None = None
+    security_owner: str | None = None
+    runtime_url: str | None = None
+    api_base_url: str | None = None
+    sandbox_command: str | None = None
+    sandbox_image: str | None = None
+    default_branch: str = Field(default="main", min_length=1, max_length=200)
+
+
+class ProjectReadinessCheck(BaseModel):
+    key: str
+    title: str
+    status: str
+    detail: str
+    remediation: str = ""
+
+
+class ProjectReadiness(BaseModel):
+    project_id: UUID
+    overall_status: str
+    recommended_tasks: list[str] = Field(default_factory=list)
+    inventory: dict[str, object] = Field(default_factory=dict)
+    quick_scan: dict[str, object] = Field(default_factory=dict)
+    checks: list[ProjectReadinessCheck] = Field(default_factory=list)
+
+
+class ProjectImportResult(BaseModel):
+    project: Project
+    readiness: ProjectReadiness
+    import_mode: str
+    managed_source: bool
+
+
 class ScanCreate(BaseModel):
     project_id: UUID
     scan_type: str = "full"
@@ -364,6 +406,7 @@ class ScaScanRequest(BaseModel):
     source_path: str = Field(min_length=1)
     clear_previous: bool = True
     enable_tool_scan: bool = True
+    quick_mode: bool = False
 
 
 class ScaToolStatus(BaseModel):
@@ -494,6 +537,7 @@ class SastScanRequest(BaseModel):
     semgrep_config: str = "builtin/offline-default.yml"
     include_local_rules: bool = True
     branch: str | None = Field(default=None, max_length=200)
+    quick_mode: bool = False
 
 
 class SastScanResult(BaseModel):

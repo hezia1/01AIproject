@@ -1,6 +1,6 @@
 # P0 量化验收基线
 
-基线 ID：`2026-08-28-p0`。机器可读事实位于 [`acceptance/criteria.json`](../acceptance/criteria.json)，校验器位于 [`scripts/acceptance_check.py`](../scripts/acceptance_check.py)。
+基线 ID：`2026-08-29-p0-onboarding`。机器可读事实位于 [`acceptance/criteria.json`](../acceptance/criteria.json)，校验器位于 [`scripts/acceptance_check.py`](../scripts/acceptance_check.py)。
 
 ## 结论
 
@@ -20,11 +20,12 @@ P0 的文档对齐、能力声明、后端回归、前端构建和数据库迁�
 
 | 检查 | 状态 | 当前证据 | 主要限制 |
 | --- | --- | --- | --- |
-| 历史文档对齐 | 已验证 | 提交 `b19dcaf` | 只证明文档口径一致 |
+| 历史文档对齐 | 已验证 | 2026-08-29 冷启动接入基线及本次 Git 历史 | 只证明文档口径一致 |
 | 能力声明校准 | 已验证 | 注册表、前端回退、报告边界与回归测试 | 不替代扫描效果评估 |
-| 后端自动化测试 | 已验证 | 295 passed、1 skipped、0 failed | 必须使用 D 盘临时目录 |
-| 前端生产构建 | 已验证 | `npm run build` 成功 | 主包约 539.72 KiB；无 UI 自动化测试 |
-| 数据库迁移 | 已验证 | `20260817_0013 (head)` | 不是生产升级/回滚验证 |
+| 后端自动化测试 | 已验证 | 307 passed、1 skipped、0 failed | 必须使用 D 盘临时目录 |
+| 前端生产构建 | 已验证 | `npm run build` 成功；本地 Chrome 完成 1600px/390px 冒烟 | 主包约 561.61 kB；无提交到仓库的 UI 自动化套件 |
+| 数据库迁移 | 已验证 | `20260828_0014 (head)` | 不是生产升级/回滚验证 |
+| 陌生项目冷启动 | 已验证 | 本地目录、受控 ZIP、HTTP(S) Git 接入；准备度 API；有界快速扫描；API 冒烟 | 私有仓库仍依赖主机 Git 凭据；DAST/SANDBOX 仍需授权运行目标 |
 | 检测准确率/召回率 | 未建立基线 | 无 | 缺少标注正负样本集 |
 | DAST 复现率 | 未建立基线 | 无 | 缺少版本化重放语料 |
 | 生态兼容率 | 部分验证 | 解析器与代表性测试 | 缺少完整版本矩阵 |

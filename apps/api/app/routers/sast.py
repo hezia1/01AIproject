@@ -58,15 +58,21 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
     db.flush()
 
     try:
-        git_context = collect_git_context(source_path, str(profile.get("git_baseline_ref") or ""), bool(profile.get("scan_git_history_secrets", True)))
+        git_context = (
+            {"available": False, "reason": "quick mode skips Git history analysis", "changed_files": [], "history_secret_files": []}
+            if payload.quick_mode
+            else collect_git_context(source_path, str(profile.get("git_baseline_ref") or ""), bool(profile.get("scan_git_history_secrets", True)))
+        )
         changed_files = git_context.get("changed_files") if profile.get("changed_files_only") else None
         if profile.get("changed_files_only") and not changed_files:
             raise ValueError("changed_files_only needs a resolvable git_baseline_ref with at least one changed file")
-        parsed = run_sast_engines(source_path, profile, changed_files if isinstance(changed_files, list) else None)
+        parsed = run_sast_engines(source_path, profile, changed_files if isinstance(changed_files, list) else None, quick_mode=payload.quick_mode)
         parsed = SastScanOutput(
             findings=dedupe_findings([*parsed.findings, *git_history_secret_findings(git_context)]),
             scanned_files=parsed.scanned_files,
             engine_status=parsed.engine_status,
+            truncated=parsed.truncated,
+            limit_reason=parsed.limit_reason,
         )
         findings, suppressed = apply_suppressions(parsed.findings, profile.get("suppressions"))
         if clear_previous:
@@ -135,6 +141,8 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
             "finding_snapshot": finding_record_snapshot(records),
             "git_context": git_context,
             "branch": payload.branch,
+            "scan_mode": "quick" if payload.quick_mode else "deep",
+            "scope_limit": {"truncated": parsed.truncated, "reason": parsed.limit_reason},
             "deepseek_agents": ai_summary,
         }
         identity = getattr(request.state, "identity", None)
@@ -623,7 +631,7 @@ def get_sast_ci_config(project_id: UUID, db: Session = Depends(get_db)) -> dict[
     }
 
 
-def run_sast_engines(source_path: str, profile: dict[str, object], include_paths: list[str] | None = None) -> SastScanOutput:
+def run_sast_engines(source_path: str, profile: dict[str, object], include_paths: list[str] | None = None, *, quick_mode: bool = False) -> SastScanOutput:
     outputs: list[SastScanOutput] = []
     engine_status: dict[str, dict[str, object]] = {}
     if profile["semgrep_enabled"]:
@@ -638,7 +646,14 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
         engine_status["semgrep"] = {"status": "disabled", "config": profile["semgrep_config"]}
     if profile["include_local_rules"]:
         custom_rules = profile.get("custom_rules") if isinstance(profile.get("custom_rules"), list) else []
-        local_output = scan_source_tree(source_path, custom_rules=custom_rules, include_paths=include_paths)
+        local_output = scan_source_tree(
+            source_path,
+            custom_rules=custom_rules,
+            include_paths=include_paths,
+            max_files=1200 if quick_mode else None,
+            max_total_bytes=60 * 1024 * 1024 if quick_mode else None,
+            deadline_seconds=45 if quick_mode else None,
+        )
         outputs.append(local_output)
         engine_status["local_rules"] = {
             "status": "completed",
@@ -647,6 +662,8 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
             "custom_rule_count": len([item for item in custom_rules if isinstance(item, dict) and item.get("enabled", True)]),
             "semantic_analysis": "Python AST with bounded intraprocedural and direct local interprocedural tracking; JS/TS conservative local taint plus bounded Express route/handler security analysis",
             "scan_scope": "git-diff" if include_paths else "source-tree",
+            "bounded": local_output.truncated,
+            "limit_reason": local_output.limit_reason,
         }
     else:
         engine_status["local_rules"] = {"status": "disabled"}
@@ -654,10 +671,11 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
         raise ValueError("No SAST engines completed; enable local rules or make Semgrep available")
     completed_engines = [name for name in ("semgrep", "local_rules") if engine_status.get(name, {}).get("status") == "completed"]
     enabled_engines = [name for name in ("semgrep", "local_rules") if engine_status.get(name, {}).get("status") != "disabled"]
-    execution_complete = bool(enabled_engines) and len(completed_engines) == len(enabled_engines)
+    truncated_outputs = [output for output in outputs if output.truncated]
+    execution_complete = bool(enabled_engines) and len(completed_engines) == len(enabled_engines) and not truncated_outputs
     engine_status["assurance"] = {
         "status": "bounded" if execution_complete else "partial",
-        "execution_status": "complete" if execution_complete else "partial",
+        "execution_status": "complete" if execution_complete else "bounded" if truncated_outputs else "partial",
         "confidence": "medium",
         "completed_engines": completed_engines,
         "enabled_engines": enabled_engines,
@@ -678,6 +696,8 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
         findings=dedupe_findings([finding for output in outputs for finding in output.findings]),
         scanned_files=sorted({file_path for output in outputs for file_path in output.scanned_files}),
         engine_status=engine_status,
+        truncated=bool(truncated_outputs),
+        limit_reason="；".join(dict.fromkeys(str(output.limit_reason) for output in truncated_outputs if output.limit_reason)) or None,
     )
 
 
@@ -686,6 +706,15 @@ def resolved_scan_profile(config: dict[str, object] | None, payload: SastScanReq
     overrides = payload.model_dump(include={"semgrep_config", "include_local_rules"}, exclude_unset=True)
     if overrides:
         profile = update_sast_profile({"sast_profile": profile}, overrides)
+    if payload.quick_mode:
+        profile.update({
+            "semgrep_enabled": False,
+            "include_local_rules": True,
+            "scan_git_history_secrets": False,
+            "changed_files_only": False,
+            "ai_enabled": False,
+            "ai_auto_scan": False,
+        })
     return profile
 
 
