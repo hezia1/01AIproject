@@ -5161,6 +5161,29 @@ th {
   max-width: 560px;
 }
 
+.agent-time-note {
+  color: #64748b;
+  font-size: 12px;
+  margin: -4px 0 12px;
+  text-align: right;
+}
+
+.agent-localization-notice {
+  background: #f8fbff;
+  border: 1px solid #cfe0f4;
+  border-radius: 10px;
+  color: #334155;
+  padding: 16px;
+}
+
+.agent-localization-notice strong {
+  color: #173a6c;
+}
+
+.agent-localization-notice p {
+  margin: 8px 0 14px;
+}
+
 @media (max-width: 1180px) {
   .agent-workspace-tabs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5222,6 +5245,10 @@ th {
   .agent-more-filter[open] {
     left: 0;
     right: auto;
+  }
+
+  .agent-time-note {
+    text-align: left;
   }
 }
 

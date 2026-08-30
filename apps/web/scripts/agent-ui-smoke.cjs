@@ -32,6 +32,18 @@ function assert(condition, message) {
 
     for (const tab of tabs) {
       await page.getByRole("button", { name: new RegExp(`^${tab}`) }).click();
+      if (tab === "概览") {
+        const overviewText = await page.locator(".agent-workspace").innerText();
+        assert(!overviewText.includes("active findings meet or exceed"), `${viewport.width}px 概览仍显示英文门禁原因`);
+      }
+      if (tab === "资产与边界") {
+        await page.getByRole("tab", { name: "扫描覆盖", exact: true }).click();
+        const trustDetails = page.getByText("查看评分上限、限制与证据哈希", { exact: true });
+        if (await trustDetails.count()) await trustDetails.click();
+        const assetText = await page.locator(".agent-workspace").innerText();
+        assert(!assetText.includes("The score summarizes current scanner evidence"), `${viewport.width}px 评分边界仍显示英文`);
+        assert(assetText.includes("评分快照生成") && assetText.includes("北京时间"), `${viewport.width}px 评分缺少北京时间`);
+      }
       const dimensions = await page.evaluate(() => ({
         body: document.body.scrollWidth,
         document: document.documentElement.scrollWidth,

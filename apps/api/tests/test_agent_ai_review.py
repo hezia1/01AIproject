@@ -63,6 +63,7 @@ def test_agent_deepseek_review_uses_only_bounded_redacted_candidates_and_keeps_a
     assert call["max_retries"] == 0
     assert call["max_tokens"] == 1200
     assert call["thinking_enabled"] is False
+    assert "必须使用简体中文" in str(call["system_prompt"])
     assert "super-secret-value" not in str(call["user_prompt"])
     assert result["external_model_invoked"] is True
     assert result["input_summary"]["source_code_included"] is False
@@ -77,7 +78,7 @@ def test_agent_deepseek_review_uses_only_bounded_redacted_candidates_and_keeps_a
         "recommended_actions": ["Restrict the command scope."],
         "limitations": ["Static evidence only."],
     }]
-    assert "does not change findings" in " ".join(result["limitations"])
+    assert "不会改变问题" in " ".join(result["limitations"])
 
 
 def test_agent_deepseek_review_rejects_non_flash_model_before_a_request() -> None:
