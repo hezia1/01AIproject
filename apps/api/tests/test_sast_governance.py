@@ -11,7 +11,7 @@ from app.services.sast_governance import add_custom_rule, add_suppression, apply
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import scan_source_tree
 from app.services.sast_semgrep_rules import BUILTIN_CONFIG, builtin_rule_pack_path
-from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, build_semgrep_command
+from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, build_semgrep_command, scan_with_semgrep
 from app.routers.sast import sast_quality_gate, serialize_sast_job_payload
 
 
@@ -153,3 +153,14 @@ def test_semgrep_missing_image_degrades_without_docker_run(monkeypatch, tmp_path
 
     with pytest.raises(SemgrepUnavailable, match="不会自动联网拉取"):
         build_semgrep_command(Path(tmp_path), [builtin_rule_pack_path()])
+
+
+def test_semgrep_nonzero_json_error_is_not_reported_as_completed(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.services.semgrep_scanner.build_semgrep_command", lambda *_args, **_kwargs: ["semgrep"])
+    monkeypatch.setattr(
+        "app.services.semgrep_scanner.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=7, stdout='{"results":[],"errors":[{"message":"invalid rule"}]}', stderr=""),
+    )
+
+    with pytest.raises(SemgrepUnavailable, match="exit 7"):
+        scan_with_semgrep(str(tmp_path))

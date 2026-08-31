@@ -208,10 +208,10 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 - ZIP 接入限制为 500 MiB、20000 个条目和 1 GiB 解压体积，并拒绝绝对路径、`..` 路径穿越、符号链接及超大单文件。
 - Git 接入禁用交互式凭据提示和 LFS 自动下载，URL 不得内嵌密码或令牌；私有仓库需依赖主机已配置的安全 Git 凭据。
 - 准备度页把静态检测条件和 DAST/SANDBOX 可选运行条件分开：缺少运行地址不会阻塞 SCA/SAST，缺少源码或可识别资产才会阻塞快速检测。
-- 快速模式限制为最多 200 个依赖文件、3000 个组件、1200 个源码文件、60 MiB 源码内容和每个本地模块 45 秒软时限；限制命中会以部分覆盖返回，不会伪装成深度扫描。
+- 快速模式限制为最多 200 个依赖文件、3000 个组件、1200 个源码文件、60 MiB 源码内容和每个本地模块 45 秒软时限；限制命中会以部分覆盖返回，不会伪装成深度扫描。快速模式只限制基础扫描范围，不再覆盖用户明确勾选的增强引擎：勾选 SCA Docker 或在项目配置中启用 Semgrep 后，本次扫描会真实尝试执行，并在批次历史中记录成功、降级或失败原因。
 
-- SCA 支持 npm、PyPI、Maven、Go、Bundler、Composer、Cargo 和 NuGet 的常见清单/锁文件。
-- SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。
+- SCA 支持 npm、PyPI、Maven、Go、Bundler、Composer、Cargo 和 NuGet 的常见清单/锁文件。启用 Docker 增强后，只有 `package.json` 而没有锁文件/安装目录的 npm 项目会在固定 Node 镜像中临时执行 `npm install --package-lock-only --ignore-scripts`，再交给 Syft/Grype；临时目录会清理，原项目不写入 `package-lock.json` 或 `node_modules`。
+- SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。JavaScript/TypeScript 本地规则覆盖命令执行、SQL 模板、对象越权、批量赋值、JWT 算法、Cookie、CORS、用户正则、敏感请求日志和错误披露等高价值模式；同一规则的多处命中归并为一个 Finding，并保留全部代码位置。
 - AGENT 扫描 Markdown Frontmatter、JSON、YAML、TOML 及常见 Agent/MCP/插件配置。
 - SANDBOX 会读取 `package.json`、Python 依赖文件、`pom.xml`、Gradle、`go.mod`、Dockerfile、Compose、Procfile 和 README 等上下文，生成受限启动计划。
 - Node.js 启动端口会结合 `.env`、`package.json` 的 `main`/`module`/启动脚本以及根目录、`src/`、`server/`、`config/` 下的常见 JS/TS 入口识别；启动前页面会显示并允许校正容器端口和健康检查路径。

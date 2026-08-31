@@ -121,12 +121,12 @@ def test_quick_scanners_return_bounded_results(tmp_path: Path) -> None:
     assert len(source.scanned_files) == 1
 
 
-def test_quick_sast_profile_disables_external_and_history_engines() -> None:
+def test_quick_sast_profile_preserves_enabled_engines_but_disables_history_and_ai() -> None:
     payload = SastScanRequest(project_id=uuid4(), source_path="C:/demo", quick_mode=True)
 
     profile = resolved_scan_profile(None, payload)
 
-    assert profile["semgrep_enabled"] is False
+    assert profile["semgrep_enabled"] is True
     assert profile["include_local_rules"] is True
     assert profile["scan_git_history_secrets"] is False
     assert profile["ai_enabled"] is False

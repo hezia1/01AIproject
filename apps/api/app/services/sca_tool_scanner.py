@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.services.sca_parser import ParsedComponent
 SYFT_IMAGE = "anchore/syft:latest"
 GRYPE_IMAGE = "anchore/grype:latest"
 TRIVY_IMAGE = "aquasec/trivy:latest"
+NODE_RESOLVER_IMAGE = "node:20-alpine"
 TOOL_TIMEOUT_SECONDS = 120
 HEALTH_TIMEOUT_SECONDS = 20
 DATABASE_IMPORT_TIMEOUT_SECONDS = 600
@@ -47,6 +49,8 @@ class ToolScanResult:
     grype_detail: str | None = None
     trivy_status: str = "not_run"
     trivy_detail: str | None = None
+    dependency_resolution_status: str = "not_needed"
+    dependency_resolution_detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -296,45 +300,50 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
     grype_detail: str | None = None
     trivy_status = "not_run"
     trivy_detail: str | None = None
+    dependency_resolution_status = "not_needed"
+    dependency_resolution_detail: str | None = None
 
-    syft_payload, syft_error = run_tool_json(root, SYFT_IMAGE, ["dir:/workspace", "-o", "cyclonedx-json"])
-    if syft_error:
-        errors.append(f"Syft failed: {syft_error}")
-        syft_status = "failed"
-        syft_detail = syft_error
-    elif syft_payload:
-        syft_components = parse_syft_cyclonedx(syft_payload)
-        if syft_components:
-            syft_status = "success"
-            syft_detail = f"Syft 识别到 {len(syft_components)} 个组件"
+    with isolated_dependency_scan_root(root) as (scan_root, dependency_resolution_status, dependency_resolution_detail):
+        if dependency_resolution_status == "failed" and dependency_resolution_detail:
+            errors.append(f"Dependency resolution failed: {dependency_resolution_detail}")
+        syft_payload, syft_error = run_tool_json(scan_root, SYFT_IMAGE, ["dir:/workspace", "-o", "cyclonedx-json"])
+        if syft_error:
+            errors.append(f"Syft failed: {syft_error}")
+            syft_status = "failed"
+            syft_detail = syft_error
+        elif syft_payload:
+            syft_components = parse_syft_cyclonedx(syft_payload)
+            if syft_components:
+                syft_status = "success"
+                syft_detail = f"Syft 识别到 {len(syft_components)} 个组件"
+            else:
+                syft_status = "fallback"
+                syft_detail = "Syft 未从锁文件或已安装目录识别到组件，已使用平台基础组件生成 SBOM"
+
+        grype_sbom = syft_payload if syft_components else build_platform_cyclonedx(fallback_components or [])
+        database_error = ensure_grype_database()
+        if database_error:
+            grype_payload, grype_error, grype_input = None, database_error, "platform-sbom" if not syft_components else "syft-sbom"
         else:
-            syft_status = "fallback"
-            syft_detail = "Syft 未从锁文件或已安装目录识别到组件，已使用平台基础组件生成 SBOM"
+            grype_payload, grype_error, grype_input = run_grype(scan_root, grype_sbom, "platform-sbom" if not syft_components else "syft-sbom")
+        if grype_error:
+            errors.append(f"Grype failed: {grype_error}")
+            grype_status = "failed"
+            grype_detail = grype_error
+        elif grype_payload:
+            grype_vulnerabilities = parse_grype_json(grype_payload)
+            grype_status = "success"
+            grype_detail = f"Grype 扫描完成，发现 {len(grype_vulnerabilities)} 条漏洞匹配"
 
-    grype_sbom = syft_payload if syft_components else build_platform_cyclonedx(fallback_components or [])
-    database_error = ensure_grype_database()
-    if database_error:
-        grype_payload, grype_error, grype_input = None, database_error, "platform-sbom" if not syft_components else "syft-sbom"
-    else:
-        grype_payload, grype_error, grype_input = run_grype(root, grype_sbom, "platform-sbom" if not syft_components else "syft-sbom")
-    if grype_error:
-        errors.append(f"Grype failed: {grype_error}")
-        grype_status = "failed"
-        grype_detail = grype_error
-    elif grype_payload:
-        grype_vulnerabilities = parse_grype_json(grype_payload)
-        grype_status = "success"
-        grype_detail = f"Grype 扫描完成，发现 {len(grype_vulnerabilities)} 条漏洞匹配"
-
-    trivy_payload, trivy_error = run_trivy(root)
-    if trivy_error:
-        errors.append(f"Trivy failed: {trivy_error}")
-        trivy_status = "failed"
-        trivy_detail = trivy_error
-    elif trivy_payload:
-        trivy_vulnerabilities = parse_trivy_json(trivy_payload)
-        trivy_status = "success"
-        trivy_detail = f"Trivy 扫描完成，发现 {len(trivy_vulnerabilities)} 条漏洞匹配"
+        trivy_payload, trivy_error = run_trivy(scan_root)
+        if trivy_error:
+            errors.append(f"Trivy failed: {trivy_error}")
+            trivy_status = "failed"
+            trivy_detail = trivy_error
+        elif trivy_payload:
+            trivy_vulnerabilities = parse_trivy_json(trivy_payload)
+            trivy_status = "success"
+            trivy_detail = f"Trivy 扫描完成，发现 {len(trivy_vulnerabilities)} 条漏洞匹配"
 
     return ToolScanResult(
         components=syft_components,
@@ -348,7 +357,66 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
         grype_detail=grype_detail,
         trivy_status=trivy_status,
         trivy_detail=trivy_detail,
+        dependency_resolution_status=dependency_resolution_status,
+        dependency_resolution_detail=dependency_resolution_detail,
     )
+
+
+@contextmanager
+def isolated_dependency_scan_root(root: Path):
+    """Create an npm lock snapshot without mutating or executing the target.
+
+    A manifest-only project otherwise exposes only direct dependencies to Syft.
+    The resolver works on a temporary copy, disables lifecycle scripts, and
+    yields the original tree with an explicit failure when the pinned resolver
+    image or registry is unavailable.
+    """
+    package_json = root / "package.json"
+    lock_files = [root / "package-lock.json", root / "npm-shrinkwrap.json"]
+    if not package_json.is_file():
+        yield root, "not_needed", "未发现 npm package.json"
+        return
+    if any(path.is_file() for path in lock_files) or (root / "node_modules").is_dir():
+        yield root, "not_needed", "已存在 npm 锁文件或已安装依赖目录"
+        return
+
+    with tempfile.TemporaryDirectory(prefix="sca-npm-resolve-") as directory:
+        prepared = Path(directory)
+        try:
+            shutil.copy2(package_json, prepared / "package.json")
+        except OSError as exc:
+            yield root, "failed", f"无法复制 package.json：{exc}"
+            return
+        command = [
+            "docker", "run", "--rm", "--pull=never",
+            "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit", "256", "--memory", "1g",
+            "-v", f"{prepared}:/workspace", "-w", "/workspace",
+            NODE_RESOLVER_IMAGE,
+            "npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund",
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(prepared),
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=TOOL_TIMEOUT_SECONDS,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except subprocess.TimeoutExpired:
+            yield root, "failed", f"npm 临时解析超过 {TOOL_TIMEOUT_SECONDS} 秒"
+            return
+        except OSError as exc:
+            yield root, "failed", str(exc)
+            return
+        lock_file = prepared / "package-lock.json"
+        if completed.returncode != 0 or not lock_file.is_file():
+            detail = command_error_summary(completed.returncode, completed.stderr, completed.stdout)
+            yield root, "failed", detail or "npm 未生成 package-lock.json"
+            return
+        yield prepared, "success", "已在隔离 Docker 容器中生成临时 package-lock.json；未执行依赖脚本，原项目未被修改"
 
 
 def run_grype(root: Path, sbom_payload: dict | None, input_name: str = "syft-sbom") -> tuple[dict | None, str | None, str]:

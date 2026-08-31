@@ -2,9 +2,11 @@ from app.models import ScaScanRequest
 from app.services.sca_parser import ParsedComponent
 from app.services.sca_tool_scanner import (
     build_platform_cyclonedx,
+    isolated_dependency_scan_root,
     offline_assets_dir,
     temporary_sbom_file,
 )
+from types import SimpleNamespace
 
 
 def test_default_offline_assets_directory_is_under_repository_root() -> None:
@@ -55,3 +57,24 @@ def test_temporary_sbom_file_stays_under_sca_offline_assets_and_is_removed() -> 
         assert path.name.startswith("sca-sbom-")
         assert path.is_file()
     assert not path.exists()
+
+
+def test_npm_dependency_resolution_uses_temporary_copy_without_mutating_source(monkeypatch, tmp_path) -> None:
+    (tmp_path / "package.json").write_text('{"dependencies":{"express":"4.18.2"}}', encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        prepared = kwargs["cwd"]
+        from pathlib import Path
+        Path(prepared, "package-lock.json").write_text('{"lockfileVersion":3,"packages":{}}', encoding="utf-8")
+        assert "--ignore-scripts" in command
+        assert "--pull=never" in command
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.sca_tool_scanner.subprocess.run", fake_run)
+    with isolated_dependency_scan_root(tmp_path) as (scan_root, status, detail):
+        assert status == "success"
+        assert scan_root != tmp_path
+        assert (scan_root / "package-lock.json").is_file()
+        assert "原项目未被修改" in detail
+
+    assert not (tmp_path / "package-lock.json").exists()

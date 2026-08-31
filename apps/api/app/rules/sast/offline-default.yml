@@ -22,6 +22,46 @@ rules:
     pattern-either:
       - pattern: child_process.exec(...)
       - pattern: child_process.execSync(...)
+      - pattern: exec(...)
+      - pattern: execSync(...)
+  - id: ai-security.javascript.dynamic-code-execution
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Dynamic code execution can run attacker-controlled JavaScript.
+    pattern: eval(...)
+  - id: ai-security.javascript.sql-template-query
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL template interpolation requires parameter binding review.
+    patterns:
+      - pattern: $DB.query($QUERY, ...)
+      - metavariable-regex:
+          metavariable: $QUERY
+          regex: (?s).*\$\{.*
+  - id: ai-security.javascript.request-body-mass-assignment
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Request body is assigned without an explicit field allow-list.
+    pattern: Object.assign($TARGET, $REQ.body)
+  - id: ai-security.javascript.user-controlled-regexp
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: User-controlled regular expression can cause denial of service.
+    pattern-either:
+      - pattern: new RegExp($REQ.query.$FIELD, ...)
+      - pattern: new RegExp($REQ.body.$FIELD, ...)
+      - pattern: new RegExp($REQ.params.$FIELD, ...)
+  - id: ai-security.javascript.default-cors
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Default CORS configuration does not restrict trusted origins.
+    pattern: $APP.use(cors())
+  - id: ai-security.javascript.jwt-algorithm-not-pinned
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: JWT verification does not pin an explicit algorithm allow-list.
+    patterns:
+      - pattern: jwt.verify($TOKEN, $KEY)
   - id: ai-security.python.unsafe-deserialization
     languages: [python]
     severity: WARNING
@@ -51,5 +91,5 @@ rules:
     severity: ERROR
     message: XML external entity expansion is enabled.
     pattern-either:
-      - pattern: $PARSER(..., { ..., noent: true, ... })
-      - pattern: $PARSER(..., { ..., resolveExternals: true, ... })
+      - pattern: '$PARSER(..., { ..., noent: true, ... })'
+      - pattern: '$PARSER(..., { ..., resolveExternals: true, ... })'

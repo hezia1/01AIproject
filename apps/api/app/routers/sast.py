@@ -32,7 +32,7 @@ from app.services.sast_governance import (
 )
 from app.services.sast_git import collect_git_context, git_history_secret_findings
 from app.services.sast_sarif import build_sast_sarif
-from app.services.sast_scanner import ParsedFinding, SastScanOutput, dedupe_findings, sast_tool_health, scan_source_tree
+from app.services.sast_scanner import ParsedFinding, SastScanOutput, dedupe_findings, group_findings_by_issue, sast_tool_health, scan_source_tree
 from app.services.sast_semgrep_rules import materialize_semgrep_rule_packs, semgrep_rule_preflight
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 from app.services.audit import record_audit
@@ -75,6 +75,7 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
             limit_reason=parsed.limit_reason,
         )
         findings, suppressed = apply_suppressions(parsed.findings, profile.get("suppressions"))
+        findings = group_findings_by_issue(findings)
         if clear_previous:
             supersede_active_sast_findings(db, str(payload.project_id), str(scan.id))
 
@@ -100,6 +101,8 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
                     "owasp": finding.owasp,
                     "language": finding.language,
                     "description": finding.description,
+                    "occurrence_count": len(finding.occurrences) or 1,
+                    "occurrences": list(finding.occurrences),
                 },
             )
             record.ai_review = run_sast_agent_pipeline(record)
@@ -703,13 +706,11 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
 
 def resolved_scan_profile(config: dict[str, object] | None, payload: SastScanRequest) -> dict[str, object]:
     profile = effective_sast_profile(config)
-    overrides = payload.model_dump(include={"semgrep_config", "include_local_rules"}, exclude_unset=True)
+    overrides = payload.model_dump(include={"semgrep_config", "semgrep_enabled", "include_local_rules"}, exclude_unset=True, exclude_none=True)
     if overrides:
         profile = update_sast_profile({"sast_profile": profile}, overrides)
     if payload.quick_mode:
         profile.update({
-            "semgrep_enabled": False,
-            "include_local_rules": True,
             "scan_git_history_secrets": False,
             "changed_files_only": False,
             "ai_enabled": False,

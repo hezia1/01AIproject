@@ -422,6 +422,8 @@ class ScaToolStatus(BaseModel):
     grype_detail: str | None = None
     trivy_status: str = "not_run"
     trivy_detail: str | None = None
+    dependency_resolution_status: str = "not_needed"
+    dependency_resolution_detail: str | None = None
     errors: list[str] = Field(default_factory=list)
 
 
@@ -535,6 +537,7 @@ class SastScanRequest(BaseModel):
     source_path: str = Field(min_length=1)
     clear_previous: bool = True
     semgrep_config: str = "builtin/offline-default.yml"
+    semgrep_enabled: bool | None = None
     include_local_rules: bool = True
     branch: str | None = Field(default=None, max_length=200)
     quick_mode: bool = False

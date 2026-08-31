@@ -360,7 +360,10 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
             else inspect_python_environment(source_path)
         )
         baseline_components = [*parsed.components, *python_environment.components]
-        tool_scan_enabled = payload.enable_tool_scan and not payload.quick_mode
+        # Quick mode bounds the built-in parser, but an explicitly enabled
+        # Docker enhancement must still run.  The previous condition silently
+        # contradicted the checked UI control.
+        tool_scan_enabled = payload.enable_tool_scan
         tool_scan = scan_with_syft_grype(source_path, baseline_components) if tool_scan_enabled else None
         tool_status = build_tool_status(tool_scan_enabled, tool_scan)
         parsed_components = merge_tool_components(baseline_components, tool_scan)
@@ -902,6 +905,7 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         return ScaToolStatus(enabled=True, status="failed", errors=["tool scan did not run"])
     successful_tools = sum(status in {"success", "fallback"} for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
     failed_tools = sum(status == "failed" for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
+    failed_tools += int(tool_scan.dependency_resolution_status == "failed")
     if failed_tools == 0:
         status = "success"
     elif successful_tools:
@@ -921,6 +925,8 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         grype_detail=tool_scan.grype_detail,
         trivy_status=tool_scan.trivy_status,
         trivy_detail=tool_scan.trivy_detail,
+        dependency_resolution_status=tool_scan.dependency_resolution_status,
+        dependency_resolution_detail=tool_scan.dependency_resolution_detail,
         errors=tool_scan.errors,
     )
 

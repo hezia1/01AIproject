@@ -3,7 +3,7 @@
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 
@@ -40,6 +40,7 @@ class ParsedFinding:
     description: str
     remediation: str
     language: str
+    occurrences: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,7 @@ SAST_RULES = [
         owasp="A02:2021 Cryptographic Failures",
         description="源码中出现硬编码密码，泄露后会导致账号、数据库或第三方服务被直接访问。",
         remediation="删除硬编码密码，改用环境变量、密钥管理服务或运行时安全配置注入。",
-        pattern=re.compile(r"(?i)\b(password|passwd|pwd)\b\s*[:=]\s*['\"][^'\"]{6,}['\"]"),
+        pattern=re.compile(r"(?i)\b(password|passwd|pwd)\b\s*[:=]\s*['\"](?![^'\"]*\$\{)[^'\"]{6,}['\"]"),
     ),
     SastRule(
         rule_id="SAST.SECRET.API_KEY",
@@ -72,7 +73,7 @@ SAST_RULES = [
         owasp="A02:2021 Cryptographic Failures",
         description="源码中出现疑似 API Key、Token 或 Secret，可能造成接口滥用或供应链凭据泄露。",
         remediation="立即轮换已暴露密钥，并使用 Secret Manager、环境变量或 CI/CD 密钥变量管理。",
-        pattern=re.compile(r"(?i)\b(api[_-]?key|secret|token|access[_-]?key)\b\s*[:=]\s*['\"][^'\"]{12,}['\"]"),
+        pattern=re.compile(r"(?i)(?:^|[^\w])(?:api[_-]?(?:key|secret)|secret|token|access[_-]?key)\s*[:=]\s*['\"][^'\"]{12,}['\"]"),
     ),
     SastRule(
         rule_id="SAST.CMD.OS_SYSTEM",
@@ -105,7 +106,56 @@ SAST_RULES = [
         owasp="A03:2021 Injection",
         description="SQL 语句通过字符串拼接或格式化生成，用户输入进入后可能造成 SQL 注入。",
         remediation="使用参数化查询、ORM 查询参数绑定或预编译语句，禁止拼接用户输入。",
-        pattern=re.compile(r"(?i)(select|insert|update|delete)\s+.+(\+|%|\.format\(|f['\"])")
+        pattern=re.compile(r"(?i)(select|insert|update|delete)\s+.+(\+|%|\.format\(|f['\"]|\$\{)")
+    ),
+    SastRule(
+        rule_id="SAST.JWT.ALGORITHM_NOT_PINNED", title="JWT 验证未固定允许算法", severity=Severity.high,
+        category="authentication", cwe="CWE-347", owasp="A07:2021 Identification and Authentication Failures",
+        description="JWT 验证调用未显式限制 algorithms，错误配置时可能接受非预期签名算法。",
+        remediation="在 jwt.verify 中显式传入固定 algorithms 白名单，并校验 issuer、audience 和有效期。",
+        pattern=re.compile(r"\bjwt\s*\.\s*verify\s*\((?![^\n]*\balgorithms\b)"), file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.CORS.UNRESTRICTED", title="CORS 使用不受限默认配置", severity=Severity.medium,
+        category="config", cwe="CWE-942", owasp="A05:2021 Security Misconfiguration",
+        description="cors() 未声明可信来源范围，可能向非预期站点开放跨域访问。",
+        remediation="显式配置 origin 白名单、允许方法和凭据策略，并按环境区分来源。",
+        pattern=re.compile(r"\b(?:app|router)\s*\.\s*use\s*\(\s*cors\s*\(\s*\)"), file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.REDOS.USER_REGEX", title="用户输入直接构造正则表达式", severity=Severity.high,
+        category="denial_of_service", cwe="CWE-1333", owasp="A04:2021 Insecure Design",
+        description="请求参数直接传入 RegExp，恶意模式可能造成正则拒绝服务。",
+        remediation="使用固定正则或经过长度、字符集与复杂度限制的安全搜索实现。",
+        pattern=re.compile(r"\bnew\s+RegExp\s*\(\s*(?:req|request)\."), file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.LOGGING.REQUEST_BODY", title="日志记录完整请求体", severity=Severity.medium,
+        category="logging", cwe="CWE-532", owasp="A09:2021 Security Logging and Monitoring Failures",
+        description="完整请求体可能包含密码、令牌和个人信息，写入日志会扩大泄露面。",
+        remediation="仅记录必要字段和关联 ID，对敏感字段做结构化脱敏并限制日志留存。",
+        pattern=re.compile(r"\b(?:console\.(?:log|info|warn|error)|logger\.\w+)\s*\([^\n]*(?:req|request)\.body"), file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.ERROR.STACK_DISCLOSURE", title="错误响应返回内部堆栈", severity=Severity.medium,
+        category="error_handling", cwe="CWE-209", owasp="A05:2021 Security Misconfiguration",
+        description="响应中返回异常堆栈会暴露内部路径、依赖和实现细节。",
+        remediation="客户端只返回稳定错误码和通用消息，详细堆栈仅写入受控服务端日志。",
+        pattern=re.compile(r"\b(?:res|response)\s*\.\s*(?:json|send)\s*\([^\n]*(?:\.stack|stack\s*:)"), file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.MASS_ASSIGNMENT.REQUEST_BODY", title="请求体直接批量赋值到数据对象", severity=Severity.high,
+        category="access_control", cwe="CWE-915", owasp="A01:2021 Broken Access Control",
+        description="Object.assign 或更新接口直接接受 req.body，攻击者可能修改角色、所有者等敏感字段。",
+        remediation="使用明确字段白名单构造 DTO，并在服务端强制覆盖所有者、角色和审计字段。",
+        pattern=re.compile(r"\bObject\s*\.\s*assign\s*\([^\n]*(?:req|request)\.body"), file_extensions={".js", ".jsx", ".ts", ".tsx"},
+    ),
+    SastRule(
+        rule_id="SAST.SESSION.INSECURE_COOKIE_FLAGS", title="Cookie 安全属性被关闭", severity=Severity.high,
+        category="authentication", cwe="CWE-614", owasp="A07:2021 Identification and Authentication Failures",
+        description="Cookie 显式关闭 Secure 或 HttpOnly，可能导致传输窃取或脚本读取会话。",
+        remediation="生产环境启用 Secure、HttpOnly 和适当的 SameSite，并强制 HTTPS。",
+        pattern=re.compile(r"(?i)\b(?:secure|httpOnly)\s*:\s*false"), file_extensions={".js", ".jsx", ".ts", ".tsx"},
     ),
     SastRule(
         rule_id="SAST.SSRF.USER_CONTROLLED_REQUEST",
@@ -405,6 +455,62 @@ def dedupe_findings(findings: list[ParsedFinding]) -> list[ParsedFinding]:
         seen.add(key)
         deduped.append(finding)
     return deduped
+
+
+def group_findings_by_issue(findings: list[ParsedFinding]) -> list[ParsedFinding]:
+    """Represent repeated matches of one rule as one issue with locations."""
+    groups: dict[str, list[ParsedFinding]] = {}
+    for finding in findings:
+        groups.setdefault(canonical_issue_key(finding.rule_id), []).append(finding)
+    grouped: list[ParsedFinding] = []
+    for matches in groups.values():
+        ordered = sorted(matches, key=lambda item: (item.file_path, item.line_start, item.line_end, item.rule_id))
+        first = sorted(matches, key=lambda item: (-severity_rank(item.severity), item.rule_id.startswith("SEMGREP."), item.file_path, item.line_start))[0]
+        locations: dict[tuple[str, int, int], dict[str, object]] = {}
+        for item in ordered:
+            key = (item.file_path, item.line_start, item.line_end)
+            occurrence = locations.setdefault(key, {
+                "file_path": item.file_path,
+                "line_start": item.line_start,
+                "line_end": item.line_end,
+                "evidence": item.evidence,
+                "rule_ids": [],
+            })
+            if not occurrence["evidence"] and item.evidence:
+                occurrence["evidence"] = item.evidence
+            rule_ids = occurrence["rule_ids"]
+            if isinstance(rule_ids, list) and item.rule_id not in rule_ids:
+                rule_ids.append(item.rule_id)
+        occurrences = tuple(locations.values())
+        grouped.append(replace(
+            first,
+            evidence=(f"共 {len(occurrences)} 处证据；首处：{first.evidence}" if len(occurrences) > 1 else first.evidence),
+            occurrences=occurrences,
+        ))
+    return sorted(grouped, key=lambda item: (-severity_rank(item.severity), item.rule_id, item.file_path, item.line_start))
+
+
+def severity_rank(severity: Severity) -> int:
+    return {Severity.critical: 5, Severity.high: 4, Severity.medium: 3, Severity.low: 2, Severity.info: 1}.get(severity, 0)
+
+
+def canonical_issue_key(rule_id: str) -> str:
+    normalized = rule_id.lower()
+    equivalents = {
+        "javascript.default-cors": "javascript.cors.unrestricted",
+        "sast.cors.unrestricted": "javascript.cors.unrestricted",
+        "javascript.request-body-mass-assignment": "javascript.mass-assignment",
+        "sast.mass_assignment.request_body": "javascript.mass-assignment",
+        "javascript.user-controlled-regexp": "javascript.user-regexp",
+        "sast.redos.user_regex": "javascript.user-regexp",
+        "javascript.command-execution": "javascript.command-execution",
+        "sast.taint.javascript.command": "javascript.command-execution",
+        "javascript.dynamic-code-execution": "javascript.dynamic-code-execution",
+        "sast.code.eval_exec": "javascript.dynamic-code-execution",
+        "javascript.jwt-algorithm-not-pinned": "javascript.jwt-algorithm",
+        "sast.jwt.algorithm_not_pinned": "javascript.jwt-algorithm",
+    }
+    return next((canonical for marker, canonical in equivalents.items() if marker in normalized), normalized)
 
 
 def sast_tool_health() -> dict[str, object]:

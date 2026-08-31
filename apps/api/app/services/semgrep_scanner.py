@@ -45,13 +45,18 @@ def scan_with_semgrep(source_path: str, config: str = BUILTIN_CONFIG, timeout_se
         )
     except subprocess.TimeoutExpired as exc:
         raise SemgrepUnavailable(f"Semgrep scan timed out after {timeout_seconds}s") from exc
-    if completed.returncode not in {0, 1} and not completed.stdout.strip():
-        raise SemgrepUnavailable((completed.stderr or completed.stdout or "Semgrep scan failed").strip()[:500])
+    if completed.returncode not in {0, 1}:
+        detail = (completed.stderr or completed.stdout or "Semgrep scan failed").strip()[:1000]
+        raise SemgrepUnavailable(f"Semgrep 执行失败（exit {completed.returncode}）：{detail}")
 
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise SemgrepUnavailable(f"Semgrep returned invalid JSON: {exc}") from exc
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        messages = [str(item.get("message") or item) for item in errors[:3] if isinstance(item, dict)]
+        raise SemgrepUnavailable("Semgrep 配置或扫描错误：" + "；".join(messages))
 
     findings = [
         parse_semgrep_result(item, root)
