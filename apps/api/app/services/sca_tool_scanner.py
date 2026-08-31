@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,12 +38,28 @@ class ToolVulnerability:
 
 
 @dataclass(frozen=True)
+class TrivySecurityFinding:
+    kind: str
+    rule_id: str
+    severity: str
+    title: str
+    target: str
+    line: int | None = None
+    description: str | None = None
+    remediation: str | None = None
+
+
+@dataclass(frozen=True)
 class ToolScanResult:
     components: list[ParsedComponent]
     vulnerabilities: list[ToolVulnerability]
     errors: list[str]
     grype_input: str | None = None
     trivy_vulnerabilities: int = 0
+    trivy_vulnerability_fallback: bool = False
+    trivy_misconfiguration_count: int = 0
+    trivy_secret_count: int = 0
+    trivy_security_findings: tuple[TrivySecurityFinding, ...] = ()
     syft_status: str = "not_run"
     syft_detail: str | None = None
     grype_status: str = "not_run"
@@ -216,6 +233,11 @@ def ensure_grype_database() -> str | None:
     status = run_health_command(status_command)
     if status[0] == 0:
         return None
+    # Re-importing the same stale database on every scan is expensive and can
+    # never make it fresh. Only import an archive when no database exists yet.
+    existing_database = next(grype_cache_dir().glob("grype/db/*/vulnerability.db"), None)
+    if existing_database is not None:
+        return f"Grype 离线数据库不可用：{status[1]}"
     archive = grype_database_archive()
     if archive is None:
         return f"Grype 离线数据库不可用：{status[1]}；未找到可导入的数据库归档"
@@ -293,6 +315,8 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
     syft_components: list[ParsedComponent] = []
     grype_vulnerabilities: list[ToolVulnerability] = []
     trivy_vulnerabilities: list[ToolVulnerability] = []
+    trivy_security_findings: list[TrivySecurityFinding] = []
+    trivy_vulnerability_fallback = False
     grype_input: str | None = None
     syft_status = "not_run"
     syft_detail: str | None = None
@@ -322,10 +346,34 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
 
         grype_sbom = syft_payload if syft_components else build_platform_cyclonedx(fallback_components or [])
         database_error = ensure_grype_database()
+        input_name = "platform-sbom" if not syft_components else "syft-sbom"
+        grype_input = input_name
         if database_error:
-            grype_payload, grype_error, grype_input = None, database_error, "platform-sbom" if not syft_components else "syft-sbom"
+            grype_payload, grype_error = None, database_error
+            trivy_payload, trivy_error, trivy_vulnerability_fallback, trivy_warning = run_trivy(scan_root, include_vulnerabilities=True)
         else:
-            grype_payload, grype_error, grype_input = run_grype(scan_root, grype_sbom, "platform-sbom" if not syft_components else "syft-sbom")
+            # Grype only matches the already-generated SBOM. Trivy walks the
+            # source once for configuration and secret checks in parallel.
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                grype_future = executor.submit(run_grype, scan_root, grype_sbom, input_name)
+                trivy_future = executor.submit(run_trivy, scan_root, False)
+                grype_payload, grype_error, grype_input = grype_future.result()
+                trivy_payload, trivy_error, _, trivy_warning = trivy_future.result()
+            if grype_error:
+                # Rare execution failures after a successful health check still
+                # receive a vulnerability fallback. This second Trivy pass is
+                # avoided during the normal healthy and known-unhealthy paths.
+                fallback_payload, fallback_error, fallback_enabled, fallback_warning = run_trivy(scan_root, include_vulnerabilities=True)
+                if fallback_payload is not None:
+                    trivy_payload = fallback_payload
+                    trivy_error = fallback_error
+                    trivy_vulnerability_fallback = fallback_enabled
+                    trivy_warning = fallback_warning or trivy_warning
+                else:
+                    # Keep a successful configuration/secret result even when
+                    # the additional vulnerability fallback cannot start.
+                    fallback_detail = f"漏洞回退失败：{fallback_error}" if fallback_error else fallback_warning
+                    trivy_warning = "；".join(item for item in (trivy_warning, fallback_detail) if item)
         if grype_error:
             errors.append(f"Grype failed: {grype_error}")
             grype_status = "failed"
@@ -335,15 +383,20 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
             grype_status = "success"
             grype_detail = f"Grype 扫描完成，发现 {len(grype_vulnerabilities)} 条漏洞匹配"
 
-        trivy_payload, trivy_error = run_trivy(scan_root)
+        if trivy_warning:
+            errors.append(f"Trivy warning: {trivy_warning}")
         if trivy_error:
             errors.append(f"Trivy failed: {trivy_error}")
             trivy_status = "failed"
             trivy_detail = trivy_error
-        elif trivy_payload:
+        elif trivy_payload is not None:
             trivy_vulnerabilities = parse_trivy_json(trivy_payload)
+            trivy_security_findings = parse_trivy_security_findings(trivy_payload)
             trivy_status = "success"
-            trivy_detail = f"Trivy 扫描完成，发现 {len(trivy_vulnerabilities)} 条漏洞匹配"
+            misconfigurations = sum(item.kind == "misconfiguration" for item in trivy_security_findings)
+            secrets = sum(item.kind == "secret" for item in trivy_security_findings)
+            vulnerability_detail = f"，漏洞回退匹配 {len(trivy_vulnerabilities)} 条" if trivy_vulnerability_fallback else "，未重复执行漏洞扫描"
+            trivy_detail = f"Trivy 配置检查 {misconfigurations} 条、密钥检查 {secrets} 条{vulnerability_detail}"
 
     return ToolScanResult(
         components=syft_components,
@@ -351,6 +404,10 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
         errors=errors,
         grype_input=grype_input,
         trivy_vulnerabilities=len(trivy_vulnerabilities),
+        trivy_vulnerability_fallback=trivy_vulnerability_fallback,
+        trivy_misconfiguration_count=sum(item.kind == "misconfiguration" for item in trivy_security_findings),
+        trivy_secret_count=sum(item.kind == "secret" for item in trivy_security_findings),
+        trivy_security_findings=tuple(trivy_security_findings),
         syft_status=syft_status,
         syft_detail=syft_detail,
         grype_status=grype_status,
@@ -383,9 +440,24 @@ def isolated_dependency_scan_root(root: Path):
     with tempfile.TemporaryDirectory(prefix="sca-npm-resolve-") as directory:
         prepared = Path(directory)
         try:
-            shutil.copy2(package_json, prepared / "package.json")
+            shutil.copytree(
+                root,
+                prepared,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    "node_modules",
+                    "dist",
+                    "build",
+                    "coverage",
+                    "vendor",
+                    ".venv",
+                    "venv",
+                    "__pycache__",
+                ),
+            )
         except OSError as exc:
-            yield root, "failed", f"无法复制 package.json：{exc}"
+            yield root, "failed", f"无法复制待扫描源码到隔离目录：{exc}"
             return
         command = [
             "docker", "run", "--rm", "--pull=never",
@@ -437,16 +509,29 @@ def run_grype(root: Path, sbom_payload: dict | None, input_name: str = "syft-sbo
     return payload, error, "directory"
 
 
-def run_trivy(root: Path) -> tuple[dict | None, str | None]:
+def run_trivy(root: Path, include_vulnerabilities: bool = False) -> tuple[dict | None, str | None, bool, str | None]:
     cache_dir = trivy_cache_dir()
-    if not (cache_dir / "db" / "trivy.db").is_file():
-        return None, "offline DB not found; Trivy scan was skipped"
-    return run_tool_json(
+    vulnerability_enabled = include_vulnerabilities and (cache_dir / "db" / "trivy.db").is_file()
+    warning = None
+    if include_vulnerabilities and not vulnerability_enabled:
+        warning = "离线漏洞数据库不存在，Trivy 仅执行配置与密钥检查，无法完成漏洞回退"
+    scanners = "vuln,misconfig,secret" if vulnerability_enabled else "misconfig,secret"
+    args = [
+        "fs", "--scanners", scanners, "--format", "json", "--skip-check-update", "--offline-scan",
+        "--cache-dir", "/cache",
+    ]
+    if vulnerability_enabled:
+        args.extend(["--skip-db-update", "--skip-java-db-update"])
+    for pattern in ("**/.git", "**/node_modules", "**/dist", "**/build", "**/coverage", "**/vendor"):
+        args.extend(["--skip-dirs", pattern])
+    args.append("/workspace")
+    payload, error = run_tool_json(
         root,
         TRIVY_IMAGE,
-        ["fs", "--scanners", "vuln", "--format", "json", "--skip-db-update", "--skip-java-db-update", "--cache-dir", "/cache", "/workspace"],
+        args,
         extra_mounts=[(cache_dir, "/cache")],
     )
+    return payload, error, vulnerability_enabled, warning
 
 
 @contextmanager
@@ -582,6 +667,67 @@ def parse_trivy_json(payload: dict) -> list[ToolVulnerability]:
                 tool="trivy",
             ))
     return vulnerabilities
+
+
+def parse_trivy_security_findings(payload: dict) -> list[TrivySecurityFinding]:
+    findings: list[TrivySecurityFinding] = []
+    seen: set[tuple[str, str, str, int | None]] = set()
+    for result in payload.get("Results", []):
+        if not isinstance(result, dict):
+            continue
+        target = str(result.get("Target") or "unknown")[:500]
+        for item in result.get("Misconfigurations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            cause = item.get("CauseMetadata") if isinstance(item.get("CauseMetadata"), dict) else {}
+            finding = TrivySecurityFinding(
+                kind="misconfiguration",
+                rule_id=str(item.get("AVDID") or item.get("ID") or "TRIVY-MISCONFIG-UNKNOWN")[:160],
+                severity=normalize_severity(item.get("Severity")) or "info",
+                title=str(item.get("Title") or item.get("Message") or "配置安全检查")[:300],
+                target=target,
+                line=positive_int(cause.get("StartLine")),
+                description=optional_text(item.get("Message") or item.get("Description"), 800),
+                remediation=optional_text(item.get("Resolution"), 800),
+            )
+            key = (finding.kind, finding.rule_id, finding.target, finding.line)
+            if key not in seen:
+                seen.add(key)
+                findings.append(finding)
+        for item in result.get("Secrets", []) or []:
+            if not isinstance(item, dict):
+                continue
+            # Never persist Trivy's Match or Code fields because they may
+            # contain the credential value that the scanner is reporting.
+            finding = TrivySecurityFinding(
+                kind="secret",
+                rule_id=str(item.get("RuleID") or "TRIVY-SECRET-UNKNOWN")[:160],
+                severity=normalize_severity(item.get("Severity")) or "high",
+                title=str(item.get("Title") or item.get("Category") or "疑似明文密钥")[:300],
+                target=target,
+                line=positive_int(item.get("StartLine")),
+                description="Trivy 在明文文件中识别到疑似凭据；匹配值未被平台保存。",
+                remediation="立即确认并轮换真实凭据，改用密钥管理服务或受控环境变量。",
+            )
+            key = (finding.kind, finding.rule_id, finding.target, finding.line)
+            if key not in seen:
+                seen.add(key)
+                findings.append(finding)
+    return findings
+
+
+def positive_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def optional_text(value: object, limit: int) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:limit]
 
 
 def trivy_ecosystem(target: str) -> str:

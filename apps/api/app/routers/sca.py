@@ -1,5 +1,5 @@
 ﻿from datetime import datetime
-from dataclasses import replace
+from dataclasses import asdict, replace
 from html import escape
 from uuid import UUID
 
@@ -906,7 +906,15 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
     successful_tools = sum(status in {"success", "fallback"} for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
     failed_tools = sum(status == "failed" for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
     failed_tools += int(tool_scan.dependency_resolution_status == "failed")
-    if failed_tools == 0:
+    fallback_completed = (
+        tool_scan.trivy_vulnerability_fallback
+        and tool_scan.trivy_status == "success"
+        and tool_scan.syft_status in {"success", "fallback"}
+        and tool_scan.dependency_resolution_status != "failed"
+    )
+    if fallback_completed and tool_scan.grype_status == "failed" and failed_tools == 1:
+        status = "fallback"
+    elif failed_tools == 0:
         status = "success"
     elif successful_tools:
         status = "partial_failed"
@@ -919,6 +927,10 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         grype_vulnerability_count=sum(item.tool == "grype" for item in tool_scan.vulnerabilities),
         grype_input=tool_scan.grype_input,
         trivy_vulnerability_count=tool_scan.trivy_vulnerabilities,
+        trivy_vulnerability_fallback=tool_scan.trivy_vulnerability_fallback,
+        trivy_misconfiguration_count=tool_scan.trivy_misconfiguration_count,
+        trivy_secret_count=tool_scan.trivy_secret_count,
+        security_findings=[asdict(item) for item in tool_scan.trivy_security_findings],
         syft_status=tool_scan.syft_status,
         syft_detail=tool_scan.syft_detail,
         grype_status=tool_scan.grype_status,
@@ -1203,19 +1215,32 @@ def apply_tool_vulnerabilities(
         matches = exact_matches
         metadata = dict(component.risk_metadata or {})
         resolution = component_resolution(component)
-        grype_verified = tool_scan.grype_status == "success" and bool(resolution.get("lookup_version"))
+        vulnerability_engine = (
+            "grype"
+            if tool_scan.grype_status == "success"
+            else "trivy"
+            if tool_scan.trivy_status == "success" and tool_scan.trivy_vulnerability_fallback
+            else None
+        )
+        # Grype evaluates the complete Syft SBOM, so an exact component with no
+        # match is meaningful negative evidence. Trivy's filesystem fallback
+        # can confirm matches, but absence may only mean that a package manifest
+        # was outside its supported discovery paths.
+        vulnerability_verified = tool_scan.grype_status == "success" and bool(resolution.get("lookup_version"))
         metadata["tool_coverage"] = {
             "grype_status": tool_scan.grype_status,
             "trivy_status": tool_scan.trivy_status,
             "grype_input": tool_scan.grype_input,
-            "verified": grype_verified,
+            "vulnerability_engine": vulnerability_engine,
+            "trivy_vulnerability_fallback": tool_scan.trivy_vulnerability_fallback,
+            "verified": vulnerability_verified,
         }
         if not matches:
             risk_status = component.risk_status
             risk_source = component.risk_source
-            if grype_verified and risk_status == "review-required" and component.license_risk == "allowed":
+            if vulnerability_verified and risk_status == "review-required" and component.license_risk == "allowed":
                 risk_status = "clean"
-                risk_source = merge_risk_source(risk_source, "grype")
+                risk_source = merge_risk_source(risk_source, vulnerability_engine)
                 metadata["vulnerability_verification"] = "verified_no_match"
             updated.append(replace(component, risk_status=risk_status, risk_source=risk_source, risk_metadata=metadata))
             continue

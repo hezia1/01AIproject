@@ -409,6 +409,17 @@ class ScaScanRequest(BaseModel):
     quick_mode: bool = False
 
 
+class ScaToolSecurityFinding(BaseModel):
+    kind: str
+    rule_id: str
+    severity: Severity
+    title: str
+    target: str
+    line: int | None = None
+    description: str | None = None
+    remediation: str | None = None
+
+
 class ScaToolStatus(BaseModel):
     enabled: bool = False
     status: str = "disabled"
@@ -416,6 +427,10 @@ class ScaToolStatus(BaseModel):
     grype_vulnerability_count: int = 0
     grype_input: str | None = None
     trivy_vulnerability_count: int = 0
+    trivy_vulnerability_fallback: bool = False
+    trivy_misconfiguration_count: int = 0
+    trivy_secret_count: int = 0
+    security_findings: list[ScaToolSecurityFinding] = Field(default_factory=list)
     syft_status: str = "not_run"
     syft_detail: str | None = None
     grype_status: str = "not_run"

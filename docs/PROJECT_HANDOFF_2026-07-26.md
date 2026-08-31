@@ -17,6 +17,7 @@
 - Alembic 数据库迁移已到 `20260828_0014 (head)`。
 - 后端测试在 `D:` 盘临时目录下为 **317 passed, 1 skipped**；使用默认 `C:` 盘临时目录会因 Agent 暂存安全规则出现预期失败。
 - 前端生产构建通过；Vite 仍有主包体积分包告警；仓库内 AGENT、SCA/SAST 与 SANDBOX 界面冒烟覆盖 1600px/390px 无横向溢出，SANDBOX 额外验证端口可编辑及非法值提示。SAST 扫描策略默认展示 Semgrep 增强入口并即时保存开关；SCA Docker 开关在快速/深度模式都会生效，工具实际状态随批次保存。
+- SCA Docker 增强已按职责拆分：Syft 生成一次 SBOM，Grype 只读取 SBOM 做漏洞匹配，Trivy 默认只做配置与密钥检查；Grype 健康失败时 Trivy 才启用漏洞回退。过期 Grype 数据库不再在每次扫描中重复导入，同批次的配置/密钥结果独立于组件 CVE 数量保存，密钥原值不落库。
 - 本地数据库已有 SCA/SAST/AGENT/DAST/SANDBOX/ASPM 联调数据；这些数据是本机状态，不是仓库交付物或通用性能基准。
 
 ## 启动顺序
