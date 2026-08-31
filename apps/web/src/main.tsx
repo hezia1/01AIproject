@@ -3913,6 +3913,8 @@ function SandboxGovernanceView({ project }: { project: Project }) {
   const [events, setEvents] = useState<SandboxTaskEvent[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [authorized, setAuthorized] = useState(false);
+  const [containerPort, setContainerPort] = useState("8000");
+  const [healthPath, setHealthPath] = useState("/");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const selectedTask = tasks.find((item) => item.id === selectedTaskId) ?? tasks[0];
@@ -3923,7 +3925,11 @@ function SandboxGovernanceView({ project }: { project: Project }) {
   const plannedStart = launchPlan?.recommended;
   const effectiveSandboxImage = project.sandbox_image || plannedStart?.image || suggestedStart?.image || "";
   const effectiveSandboxCommand = project.sandbox_command || plannedStart?.command || suggestedStart?.command || "";
-  const dockerTargetReady = Boolean(project.source_path && ((project.sandbox_image && project.sandbox_command) || plannedStart || suggestedStart));
+  const portSourceLabel = suggestedStart?.container_port ? "源码规则" : plannedStart?.source === "deepseek_validated" ? "DeepSeek 候选（本地校验）" : "未识别（当前为默认值）";
+  const parsedContainerPort = Number(containerPort);
+  const validContainerPort = Number.isInteger(parsedContainerPort) && parsedContainerPort >= 1 && parsedContainerPort <= 65535;
+  const validHealthPath = healthPath.startsWith("/") && !healthPath.includes("..");
+  const dockerTargetReady = Boolean(project.source_path && ((project.sandbox_image && project.sandbox_command) || plannedStart || suggestedStart) && validContainerPort && validHealthPath);
 
   async function reload() {
     const [nextHealth, nextTargets, nextTasks, nextTemplates] = await Promise.all([
@@ -3965,7 +3971,7 @@ function SandboxGovernanceView({ project }: { project: Project }) {
 
   useEffect(() => {
     let active = true;
-    setTargets([]); setTasks([]); setTemplates([]); setLaunchPlan(null); setEvents([]); setSelectedTaskId(""); setAuthorized(false); setMessage("");
+    setTargets([]); setTasks([]); setTemplates([]); setLaunchPlan(null); setEvents([]); setSelectedTaskId(""); setAuthorized(false); setContainerPort("8000"); setHealthPath("/"); setMessage("");
     Promise.all([
       request<SandboxCapabilityHealth>("/sandbox/capabilities"),
       request<SandboxTarget[]>(`/sandbox/projects/${project.id}/targets`),
@@ -3974,7 +3980,10 @@ function SandboxGovernanceView({ project }: { project: Project }) {
       request<SandboxLaunchPlan>(`/sandbox/projects/${project.id}/launch-plan?use_ai=true`),
     ]).then(([nextHealth, nextTargets, nextTasks, nextTemplates, nextLaunchPlan]) => {
       if (!active) return;
+      const nextStart = nextLaunchPlan.recommended ?? nextTemplates.find((item) => item.command_type === "start");
       setHealth(nextHealth); setTargets(nextTargets); setTasks(nextTasks); setTemplates(nextTemplates); setLaunchPlan(nextLaunchPlan); setSelectedTaskId(nextTasks[0]?.id ?? "");
+      setContainerPort(String(nextStart?.container_port ?? 8000));
+      setHealthPath(nextLaunchPlan.recommended?.health_path || "/");
     }).catch((error) => { if (active) setMessage(`工作台加载失败：${errorMessage(error)}`); });
     return () => { active = false; };
   }, [project.id]);
@@ -3987,10 +3996,14 @@ function SandboxGovernanceView({ project }: { project: Project }) {
   }, [selectedTask?.id, selectedTask?.updated_at]);
 
   async function createTarget(mode: "external" | "docker") {
+    if (mode === "docker" && (!validContainerPort || !validHealthPath)) {
+      setMessage("请填写 1–65535 之间的容器端口，并使用以 / 开头且不包含 .. 的健康检查路径。");
+      return;
+    }
     setBusy(`target-${mode}`);
     setMessage(mode === "docker" ? `正在启动项目隔离实例：检查或拉取白名单镜像、在临时构建网络准备依赖、切换到隔离网络并等待 HTTP 健康检查。首次启动可能需要数分钟，请不要重复点击。` : "正在注册目标并执行可达性检查…");
     try {
-      const created = await request<SandboxTarget>(`/sandbox/projects/${project.id}/targets`, { method: "POST", body: JSON.stringify({ mode, operator: "web-operator", operator_confirmed: authorized, browser_session_id: mode === "docker" ? SANDBOX_BROWSER_SESSION_ID : null, image: mode === "docker" ? effectiveSandboxImage : null, command: mode === "docker" ? effectiveSandboxCommand : null, container_port: mode === "docker" ? plannedStart?.container_port ?? suggestedStart?.container_port ?? null : null, health_path: mode === "docker" ? plannedStart?.health_path ?? "/" : "/" }) });
+      const created = await request<SandboxTarget>(`/sandbox/projects/${project.id}/targets`, { method: "POST", body: JSON.stringify({ mode, operator: "web-operator", operator_confirmed: authorized, browser_session_id: mode === "docker" ? SANDBOX_BROWSER_SESSION_ID : null, image: mode === "docker" ? effectiveSandboxImage : null, command: mode === "docker" ? effectiveSandboxCommand : null, container_port: mode === "docker" ? parsedContainerPort : null, health_path: mode === "docker" ? healthPath : "/" }) });
       if (mode === "docker") registerSandboxUnloadProject(project.id);
       await reload();
       setMessage(mode === "docker" ? created.status === "running" ? "项目专属隔离实例已启动；返回 DAST 刷新后会自动使用这个临时地址。" : `隔离实例已创建，但健康检查状态为“${sandboxStatusLabel(created.status)}”。请查看目标卡片的健康信息；依赖、数据库或启动环境未就绪时，DAST 不会使用该地址。` : created.status === "running" ? "已上线目标已注册并完成可达性检查。" : "目标已登记，但当前不可达；DAST 不会把它当作可运行目标。"
@@ -4056,11 +4069,12 @@ function SandboxGovernanceView({ project }: { project: Project }) {
     </section>
 
     <section className="panel full"><div className="panel-header"><div><h2>2. 项目测试目标</h2><span>已上线地址可直接注册；只有源码时由 SANDBOX 生成临时 URL，不需要手工编写地址</span></div></div>
+      {project.source_path && effectiveSandboxImage && effectiveSandboxCommand ? <div className="sandbox-launch-confirmation"><div><strong>隔离实例启动前确认</strong><span>系统已尝试从源码识别端口；如与项目实际监听端口不同，请在启动前修正。</span></div><label>容器端口<input aria-label="SANDBOX 容器端口" type="number" min={1} max={65535} value={containerPort} onChange={(event) => setContainerPort(event.target.value)} /></label><label>健康检查路径<input aria-label="SANDBOX 健康检查路径" value={healthPath} onChange={(event) => setHealthPath(event.target.value)} placeholder="/" /></label><small>运行方案：{effectiveSandboxImage} · <code>{effectiveSandboxCommand}</code> · 端口来源：{portSourceLabel}</small>{!validContainerPort || !validHealthPath ? <small className="field-error">端口必须为 1–65535 的整数；健康检查路径必须以 / 开头且不能包含 ..。</small> : null}</div> : null}
       <label className="sandbox-authorization"><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} /><span>我确认这些目标属于当前项目，且本次动态测试已获授权。</span></label>
       <div className="sandbox-target-actions"><button className="primary-action" disabled={!authorized || !Boolean(project.runtime_url || project.api_base_url) || Boolean(busy)} onClick={() => void createTarget("external")}>{busy === "target-external" ? <><LoaderCircle className="sandbox-spin" size={17} />正在检查目标…</> : "注册已上线目标"}</button><button className="secondary-action" disabled={!authorized || !dockerTargetReady || Boolean(busy)} onClick={() => void createTarget("docker")}>{busy === "target-docker" ? <><LoaderCircle className="sandbox-spin" size={17} />正在启动隔离实例…</> : "启动项目隔离实例"}</button></div>
       {busy === "target-docker" ? <div className="sandbox-start-progress"><LoaderCircle className="sandbox-spin" size={20} /><div><strong>隔离实例正在启动</strong><span>正在完成镜像校验/拉取 → 依赖准备 → 候选试运行 → 端口绑定 → HTTP 健康检查；首次启动可能需要几分钟</span></div></div> : null}
-      {!project.runtime_url && !project.api_base_url ? effectiveSandboxImage && effectiveSandboxCommand ? <div className="dast-info-strip">{project.sandbox_image && project.sandbox_command ? "项目已保存运行方案" : plannedStart?.source === "deepseek_validated" ? "DeepSeek 候选已通过本地安全校验" : "已从源码确定启动方案"}：<strong>{effectiveSandboxImage}</strong> · <code>{effectiveSandboxCommand}</code> · 端口 {plannedStart?.container_port ?? suggestedStart?.container_port ?? 8000}。{launchPlan?.orchestration?.support_services.length ? ` 将同时编排：${launchPlan.orchestration.support_services.map((item) => `${item.kind}(${item.image})`).join("、")}；依赖不暴露宿主端口。` : " 当前为单服务运行方案。"}{launchPlan?.ai.status === "completed" ? ` DeepSeek（${launchPlan.ai.model ?? "configured"}）已参与依赖与入口分析。` : ` DeepSeek 状态：${launchPlan?.ai.rationale ?? launchPlan?.ai.status ?? "分析中"}。`} 启动时会按锁文件准备依赖；缺失的官方白名单镜像可自动拉取，成功方案会保存到当前项目。</div> : <div className="empty-project">{launchPlan?.message ?? "只有源码但尚未识别出可运行入口。"} DeepSeek 会尝试从 README、Dockerfile、CI 和框架配置补充候选；仍无法通过安全校验时才需要专用运行适配器。</div> : null}
-      <div className="sandbox-target-list">{activeTargets.length === 0 ? <div className="empty-project">还没有可用目标实例。创建后系统会自动进行健康检查。</div> : activeTargets.map((target) => { const identity = target.health_detail?.identity as { status?: string; role_count?: number; detail?: string } | undefined; const services = Array.isArray(target.policy?.support_services) ? target.policy.support_services as Record<string, unknown>[] : []; return <article key={target.id} className="sandbox-target-card"><div><span className={`sandbox-state ${target.status}`}>{sandboxStatusLabel(target.status)}</span><strong>{target.mode === "docker" ? "项目专属 Docker 实例" : "已上线项目地址"}</strong><code>{target.runtime_url}</code><small>{String(target.health_detail?.status_code ?? "-")} · {String(target.health_detail?.latency_ms ?? "-")} ms · {formatDateTime(target.updated_at)}</small>{services.length ? <small>依赖服务：{services.map((item) => `${String(item.kind)} ${String(item.status)}`).join("、")}</small> : null}{target.health_detail?.error ? <small>诊断：{String(target.health_detail.error)} · {String(target.health_detail.remediation ?? "请核对监听地址、端口和健康路径")}</small> : null}<small>测试身份：{identity?.status === "ready" ? `已自动准备 ${identity.role_count ?? 0} 个角色` : identity?.detail ?? "等待初始化"}</small></div><div className="sandbox-row-actions"><button className="secondary-action" disabled={Boolean(busy)} onClick={() => void refreshTarget(target)}>检查</button>{target.mode === "docker" && identity?.status !== "ready" ? <button className="secondary-action" disabled={Boolean(busy)} onClick={() => void bootstrapIdentity(target)}>{busy === `identity-${target.id}` ? "初始化中…" : "重试测试身份"}</button> : null}<button className="secondary-action danger" disabled={Boolean(busy)} onClick={() => void stopRuntime(target)}>停止</button></div></article>; })}</div>
+      {!project.runtime_url && !project.api_base_url ? effectiveSandboxImage && effectiveSandboxCommand ? <div className="dast-info-strip">{project.sandbox_image && project.sandbox_command ? "项目已保存运行方案" : plannedStart?.source === "deepseek_validated" ? "DeepSeek 候选已通过本地安全校验" : "已从源码确定启动方案"}。{launchPlan?.orchestration?.support_services.length ? ` 将同时编排：${launchPlan.orchestration.support_services.map((item) => `${item.kind}(${item.image})`).join("、")}；依赖不暴露宿主端口。` : " 当前为单服务运行方案。"}{launchPlan?.ai.status === "completed" ? ` DeepSeek（${launchPlan.ai.model ?? "configured"}）已参与依赖与入口分析。` : ` DeepSeek 状态：${launchPlan?.ai.rationale ?? launchPlan?.ai.status ?? "分析中"}。`} 启动时会按锁文件准备依赖；缺失的官方白名单镜像可自动拉取，成功方案会保存到当前项目。</div> : <div className="empty-project">{launchPlan?.message ?? "只有源码但尚未识别出可运行入口。"} DeepSeek 会尝试从 README、Dockerfile、CI 和框架配置补充候选；仍无法通过安全校验时才需要专用运行适配器。</div> : null}
+      <div className="sandbox-target-list">{activeTargets.length === 0 ? <div className="empty-project">还没有可用目标实例。创建后系统会自动进行健康检查。</div> : activeTargets.map((target) => { const identity = target.health_detail?.identity as { status?: string; role_count?: number; detail?: string } | undefined; const services = Array.isArray(target.policy?.support_services) ? target.policy.support_services as Record<string, unknown>[] : []; return <article key={target.id} className="sandbox-target-card"><div><span className={`sandbox-state ${target.status}`}>{sandboxStatusLabel(target.status)}</span><strong>{target.mode === "docker" ? "项目专属 Docker 实例" : "已上线项目地址"}</strong><code>{target.runtime_url}</code>{target.mode === "docker" ? <small>网关目标：target:{target.container_port ?? "-"} · 健康检查：{target.health_path}</small> : null}<small>{String(target.health_detail?.status_code ?? "-")} · {String(target.health_detail?.latency_ms ?? "-")} ms · {formatDateTime(target.updated_at)}</small>{services.length ? <small>依赖服务：{services.map((item) => `${String(item.kind)} ${String(item.status)}`).join("、")}</small> : null}{target.health_detail?.diagnostic_title || target.health_detail?.error ? <small>诊断：{String(target.health_detail.diagnostic_title ?? target.health_detail.error)} · {String(target.health_detail.remediation ?? "请核对监听地址、端口和健康路径")}</small> : null}<small>测试身份：{identity?.status === "ready" ? `已自动准备 ${identity.role_count ?? 0} 个角色` : identity?.detail ?? "等待初始化"}</small></div><div className="sandbox-row-actions"><button className="secondary-action" disabled={Boolean(busy)} onClick={() => void refreshTarget(target)}>检查</button>{target.mode === "docker" && identity?.status !== "ready" ? <button className="secondary-action" disabled={Boolean(busy)} onClick={() => void bootstrapIdentity(target)}>{busy === `identity-${target.id}` ? "初始化中…" : "重试测试身份"}</button> : null}<button className="secondary-action danger" disabled={Boolean(busy)} onClick={() => void stopRuntime(target)}>停止</button></div></article>; })}</div>
       {stoppedTargetCount ? <p className="retest-note">已保留 {stoppedTargetCount} 条停止记录用于审计，默认不在演示工作区展示。</p> : null}
     </section>
 

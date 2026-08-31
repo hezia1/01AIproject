@@ -214,9 +214,10 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 - SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。
 - AGENT 扫描 Markdown Frontmatter、JSON、YAML、TOML 及常见 Agent/MCP/插件配置。
 - SANDBOX 会读取 `package.json`、Python 依赖文件、`pom.xml`、Gradle、`go.mod`、Dockerfile、Compose、Procfile 和 README 等上下文，生成受限启动计划。
+- Node.js 启动端口会结合 `.env`、`package.json` 的 `main`/`module`/启动脚本以及根目录、`src/`、`server/`、`config/` 下的常见 JS/TS 入口识别；启动前页面会显示并允许校正容器端口和健康检查路径。
 - Compose 只作为依赖提示；项目自带的宿主端口、挂载、密钥和任意命令不会直接照搬。目前自动编排的辅助服务限定为 PostgreSQL 和 Redis。
 
-新项目能否零配置启动取决于入口是否明确、运行镜像是否在白名单内、依赖是否可获取以及应用是否兼容只读/非 root/受限网络策略。自动识别不充分时，需要人工填写 `sandbox_image`、`sandbox_command`、端口和健康检查路径；无法满足策略时系统应返回阻塞原因，而不是伪造验证结果。
+新项目能否零配置启动取决于入口是否明确、运行镜像是否在白名单内、依赖是否可获取以及应用是否兼容只读/非 root/受限网络策略。自动识别不充分时，需要人工填写 `sandbox_image`、`sandbox_command`，并在 SANDBOX 启动前确认端口和健康检查路径；健康检查失败时页面会显示网关实际使用的容器端口及修正建议。无法满足策略时系统应返回阻塞原因，而不是伪造验证结果。
 
 ## 本地扫描与 CI
 
@@ -299,6 +300,7 @@ Agent 运行时暂存目录必须位于 `D:` 盘；直接沿用系统默认的 `
 cd apps\web
 npm ci
 npm run build
+npm run test:sandbox-ui
 ```
 
 部分 SANDBOX 和增强扫描能力依赖本机 Docker、固定镜像或离线漏洞库；缺少外部条件时，相应测试或能力会按设计显示跳过、阻塞或降级。

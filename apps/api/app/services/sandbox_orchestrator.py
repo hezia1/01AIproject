@@ -562,7 +562,15 @@ def check_target_health(record: SandboxTargetInstanceRecord) -> SandboxTargetIns
     record.health_detail = {"url": url, "reachable": reachable, "status_code": status, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "error": error, "checked_at": datetime.utcnow().isoformat()}
     if not reachable:
         diagnostic = diagnose_startup_failure(error or "HTTP healthcheck failed", stage="healthcheck")
+        if record.mode == "docker" and record.container_port:
+            diagnostic.update({
+                "code": "target_port_or_health_mismatch",
+                "title": "项目监听端口、地址或健康路径不匹配",
+                "remediation": f"当前隔离网关正在连接容器端口 {record.container_port}。请确认应用监听 0.0.0.0:{record.container_port}；如果应用实际使用其他端口，请停止实例，在启动前确认区修正容器端口后重试，并核对 health_path。",
+            })
         record.health_detail.update({"diagnostic_code": diagnostic["code"], "diagnostic_title": diagnostic["title"], "remediation": diagnostic["remediation"]})
+        if record.mode == "docker" and record.container_port:
+            record.health_detail["configured_container_port"] = record.container_port
     if identity:
         record.health_detail["identity"] = identity
     record.updated_at = datetime.utcnow()

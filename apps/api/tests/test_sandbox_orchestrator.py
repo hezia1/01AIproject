@@ -58,6 +58,51 @@ def test_source_start_template_includes_detected_runtime_port(tmp_path: Path) ->
     assert start.container_port == 9090
 
 
+def test_source_start_template_detects_package_app_js_entrypoint(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text('{"main":"app.js","scripts":{"start":"node app.js"}}', encoding="utf-8")
+    (tmp_path / "app.js").write_text("const PORT = process.env.PORT || 3000;\napp.listen(PORT);", encoding="utf-8")
+
+    start = next(item for item in discover_sandbox_templates(str(tmp_path)) if item.command_type == "start")
+
+    assert start.command == "npm start"
+    assert start.container_port == 3000
+
+
+def test_source_start_template_follows_typescript_script_entrypoint(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "package.json").write_text('{"scripts":{"start":"tsx src/http.ts"}}', encoding="utf-8")
+    (tmp_path / "src" / "http.ts").write_text("const port = process.env.PORT || '4173';", encoding="utf-8")
+
+    start = next(item for item in discover_sandbox_templates(str(tmp_path)) if item.command_type == "start")
+
+    assert start.container_port == 4173
+
+
+def test_runtime_port_does_not_confuse_dependency_port_with_app_port(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("DATABASE_PORT=5432\n", encoding="utf-8")
+    (tmp_path / "package.json").write_text('{"scripts":{"start":"node app.js"}}', encoding="utf-8")
+    (tmp_path / "app.js").write_text("const PORT = process.env.PORT || 3000;", encoding="utf-8")
+
+    start = next(item for item in discover_sandbox_templates(str(tmp_path)) if item.command_type == "start")
+
+    assert start.container_port == 3000
+
+
+def test_unhealthy_docker_target_explains_configured_port(monkeypatch) -> None:
+    target = SandboxTargetInstanceRecord(
+        mode="docker", status="starting", runtime_url="http://127.0.0.1:49152",
+        container_port=8000, health_path="/", health_detail={},
+    )
+    monkeypatch.setattr(orchestrator, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(orchestrator.URLError("connection refused")))
+
+    orchestrator.check_target_health(target)
+
+    assert target.status == "unhealthy"
+    assert target.health_detail["diagnostic_code"] == "target_port_or_health_mismatch"
+    assert target.health_detail["configured_container_port"] == 8000
+    assert "启动前确认区" in target.health_detail["remediation"]
+
+
 def test_start_docker_target_uses_project_scoped_isolation(monkeypatch, tmp_path: Path) -> None:
     calls: list[list[str]] = []
     (tmp_path / "package.json").write_text('{"scripts":{"start":"node server.js"}}', encoding="utf-8")

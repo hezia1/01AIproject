@@ -32,17 +32,18 @@ def discover_runtime_port(root: Path) -> int | None:
     """Infer a declared application port from common source configuration files."""
     candidates = [
         root / "Dockerfile", root / "docker-compose.yml", root / "docker-compose.yaml",
-        root / ".env.example", root / "package.json", root / "server.js",
-        root / "config" / "server.js", root / "app.py", root / "main.py",
+        root / ".env", root / ".env.example", root / "package.json",
+        *_discover_node_entrypoints(root),
+        root / "app.py", root / "main.py",
     ]
     patterns = [
         r"(?im)^\s*EXPOSE\s+(\d{2,5})\b",
         r"(?i)(?:process\.env\.)?PORT\s*\|\|\s*['\"]?(\d{2,5})",
-        r"(?i)(?:APP_PORT|SERVER_PORT|PORT)\s*[:=]\s*['\"]?(\d{2,5})",
+        r"(?im)^\s*(?:APP_PORT|SERVER_PORT|PORT)\s*[:=]\s*['\"]?(\d{2,5})",
         r"(?i)listen\s*\(\s*(\d{2,5})",
         r"(?i)--port(?:=|\s+)(\d{2,5})",
     ]
-    for path in candidates:
+    for path in dict.fromkeys(candidates):
         if not path.is_file():
             continue
         try:
@@ -54,6 +55,48 @@ def discover_runtime_port(root: Path) -> int | None:
             if match and 1 <= int(match.group(1)) <= 65535:
                 return int(match.group(1))
     return None
+
+
+def _discover_node_entrypoints(root: Path) -> list[Path]:
+    """Return safe Node.js entrypoints declared by the package or common layouts."""
+    relative_paths: list[str] = []
+    package_json = root / "package.json"
+    if package_json.is_file():
+        try:
+            package = json.loads(package_json.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            package = {}
+        for key in ("main", "module"):
+            value = package.get(key)
+            if isinstance(value, str):
+                relative_paths.append(value)
+        scripts = package.get("scripts") if isinstance(package.get("scripts"), dict) else {}
+        entry_pattern = re.compile(
+            r"(?i)(?:node|nodemon|tsx|ts-node(?:-dev)?)"
+            r"(?:\s+--[^\s]+)*\s+['\"]?([^'\"\s;&|]+\.(?:[cm]?js|tsx?))"
+        )
+        for script in scripts.values():
+            if not isinstance(script, str):
+                continue
+            match = entry_pattern.search(script)
+            if match:
+                relative_paths.append(match.group(1))
+
+    relative_paths.extend([
+        "server.js", "app.js", "index.js", "main.js",
+        "server.mjs", "app.mjs", "index.mjs", "main.mjs",
+        "server.cjs", "app.cjs", "index.cjs", "main.cjs",
+        "src/server.js", "src/app.js", "src/index.js", "src/main.js",
+        "src/server.ts", "src/app.ts", "src/index.ts", "src/main.ts",
+        "server/index.js", "config/server.js",
+    ])
+    resolved_root = root.resolve()
+    result: list[Path] = []
+    for value in relative_paths:
+        candidate = (resolved_root / value).resolve()
+        if candidate != resolved_root and resolved_root in candidate.parents:
+            result.append(candidate)
+    return result
 
 
 def discover_node_templates(root: Path) -> list[SandboxCommandTemplate]:

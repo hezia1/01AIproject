@@ -15,8 +15,8 @@
 - 分支：`main`，远端：`origin`。
 - API、Web、PostgreSQL、Redis 可在本地启动；API 健康检查正常。
 - Alembic 数据库迁移已到 `20260828_0014 (head)`。
-- 后端测试在 `D:` 盘临时目录下为 **307 passed, 1 skipped**；使用默认 `C:` 盘临时目录会因 Agent 暂存安全规则出现预期失败。
-- 前端生产构建通过；当前主包约 604.69 kB，Vite 有分包体积告警；仓库内 `apps/web/scripts/agent-ui-smoke.cjs` 与 `apps/web/scripts/governance-ui-smoke.cjs` 已覆盖 AGENT、SCA、SAST 的五工作区及 1600px/390px 无横向溢出。SAST 扫描策略默认展示 Semgrep 增强入口，用于补充本地规则覆盖；Semgrep 不归入 SCA。
+- 后端测试在 `D:` 盘临时目录下为 **312 passed, 1 skipped**；使用默认 `C:` 盘临时目录会因 Agent 暂存安全规则出现预期失败。
+- 前端生产构建通过；当前主包约 606.31 kB，Vite 有分包体积告警；仓库内 AGENT、SCA/SAST 与 SANDBOX 界面冒烟已覆盖 1600px/390px 无横向溢出，SANDBOX 额外验证端口可编辑及非法值提示。SAST 扫描策略默认展示 Semgrep 增强入口，用于补充本地规则覆盖；Semgrep 不归入 SCA。
 - 本地数据库已有 SCA/SAST/AGENT/DAST/SANDBOX/ASPM 联调数据；这些数据是本机状态，不是仓库交付物或通用性能基准。
 
 ## 启动顺序
@@ -59,6 +59,7 @@ npm run dev
 ### SANDBOX
 
 - 已有受控启动规划、Docker 隔离、固定探针、事件和证据摘要。
+- Node.js 端口发现会跟随 `package.json` 声明/启动脚本及常见 JS/TS 入口；启动前可人工校正端口和健康路径，失败诊断会显示网关实际连接参数。
 - 自动辅助服务只覆盖 PostgreSQL/Redis。
 - 没有完整文件、网络、进程、环境变量、系统调用监控，也没有 AI 自主攻击。
 
