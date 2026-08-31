@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-08-29-p0-onboarding",
+  "baseline_id": "2026-08-31-governance-ui",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -14,7 +14,7 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Platform documents aligned on 2026-08-29, including cold-start onboarding and bounded quick-scan behavior",
+      "current": "Platform documents aligned on 2026-08-31, including cold-start onboarding and AGENT/SCA/SAST task-oriented governance workspaces",
       "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md"],
       "limitations": "Fixture README files describe test targets and are not product capability statements.",
       "required_for": ["p0", "production"]
@@ -47,9 +47,9 @@
       "metric": "Frontend TypeScript production build",
       "status": "verified",
       "target": "npm run build exits successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 561.61},
-      "evidence": ["cd apps/web && npm run build", "Playwright smoke checks with local Chrome at 1600px and 390px viewports"],
-      "limitations": "Vite reports a chunk-size warning; UI smoke checks are local acceptance evidence, not a committed automated browser suite.",
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 604.69},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "apps/web/scripts/agent-ui-smoke.cjs", "apps/web/scripts/governance-ui-smoke.cjs"],
+      "limitations": "Vite reports a chunk-size warning; browser smoke suites cover the governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
       "required_for": ["p0", "production"]
     },
     {
