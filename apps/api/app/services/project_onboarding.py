@@ -177,7 +177,7 @@ def build_project_readiness(project: Any, inventory: ProjectAssetInventory) -> d
                 "source_bytes": 60 * 1024 * 1024,
                 "module_deadline_seconds": 45,
             },
-            "statement": "快速模式关闭在线漏洞查询、增强容器扫描、Semgrep、Git 历史密钥和外部 AI；超过上限时保留部分结果并明确标记。",
+            "statement": "快速模式关闭在线 OSV、Git 历史密钥和外部 AI，并限制基础扫描范围；用户明确勾选的 SCA 容器增强和项目已启用的 Semgrep 仍会真实执行并记录状态；超过上限时保留部分结果并明确标记。",
         },
         "checks": checks,
     }

@@ -1437,8 +1437,8 @@ function SecurityDetectionCenter({
     </section>
 
     <section className="panel detection-run-panel">
-      <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>{scanMode === "quick" ? "快速模式使用本地规则和离线情报，并对文件数、体积和模块耗时进行有界降级。" : "深度模式启用增强 SCA 与 Semgrep，适合预先准备，不建议在未知项目现场首次运行。"}</p></div>
-      <div className="scan-mode-switch" role="radiogroup" aria-label="扫描模式"><button type="button" className={scanMode === "quick" ? "active" : ""} onClick={() => onScanModeChange("quick")}><strong>快速演示</strong><span>默认 · 本地有界</span></button><button type="button" className={scanMode === "deep" ? "active" : ""} onClick={() => onScanModeChange("deep")}><strong>深度扫描</strong><span>增强工具 · 耗时不定</span></button></div>
+      <div className="detection-run-copy"><h2>一键执行安全检测</h2><p>{scanMode === "quick" ? "快速模式限制基础扫描的文件数、体积和模块耗时；已勾选的 SCA Docker 与 Semgrep 仍会执行并记录状态。" : "深度模式取消快速范围上限；SCA Docker 与 Semgrep 仍按当前项目配置执行，适合预先准备。"}</p></div>
+      <div className="scan-mode-switch" role="radiogroup" aria-label="扫描模式"><button type="button" className={scanMode === "quick" ? "active" : ""} onClick={() => onScanModeChange("quick")}><strong>快速演示</strong><span>默认 · 基础范围有界</span></button><button type="button" className={scanMode === "deep" ? "active" : ""} onClick={() => onScanModeChange("deep")}><strong>深度扫描</strong><span>完整范围 · 耗时不定</span></button></div>
       <button className="primary-action run-all-button" disabled={!project || loading || runBlocked || selected.length === 0} onClick={() => void onRun()}>{loading ? "检测执行中" : runBlocked ? "单模块执行中" : "一键执行"}</button>
       {executionSteps.length > 0 ? <div className="execution-progress">{executionSteps.map((step) => <div className={`execution-step ${step.status}`} key={step.module}><span>{MODULE_DISPLAY[step.module].name}</span><strong>{executionStatusLabel(step.status)}</strong><small>{step.detail}</small></div>)}</div> : null}
     </section>
