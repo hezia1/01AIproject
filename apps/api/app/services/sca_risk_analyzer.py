@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import os
 
@@ -7,7 +8,7 @@ from app.models import Severity
 from app.services.sca_license_policy import LicensePolicy, assess_license, format_license_summary
 from app.services.sca_intelligence import assess_vulnerability_intelligence
 from app.services.sca_osv_mirror import lookup_osv_mirror
-from app.services.osv_client import OsvLookupError, supports_osv, query_osv
+from app.services.osv_client import OsvLookupError, OsvVulnerability, supports_osv, query_osv
 from app.services.sca_parser import ParsedComponent
 from app.services.sca_vulnerability_rules import VulnerabilityRule, load_vulnerability_rules, matches_vulnerability_rule
 from app.services.sca_assurance import component_resolution
@@ -19,6 +20,7 @@ SEVERITY_WEIGHT = {
     Severity.low: 2,
     Severity.info: 1,
 }
+OSV_LOOKUP_WORKERS = 8
 
 
 def analyze_components(
@@ -28,7 +30,75 @@ def analyze_components(
     *,
     offline_only: bool = False,
 ) -> list[ParsedComponent]:
-    return [analyze_component(component, vulnerability_rules, license_policies, offline_only=offline_only) for component in components]
+    forced_offline = offline_only or offline_mode_enabled()
+    if forced_offline:
+        return [analyze_component(component, vulnerability_rules, license_policies, offline_only=True) for component in components]
+
+    queries = unique_online_queries(components)
+    if not queries:
+        return [analyze_component(component, vulnerability_rules, license_policies) for component in components]
+    first_key, first_component, first_version = queries[0]
+    try:
+        first_result = query_osv(first_component.ecosystem, first_component.name, first_version)
+    except OsvLookupError as exc:
+        online_error = str(exc)[:300]
+        return [
+            analyze_component(
+                component,
+                vulnerability_rules,
+                license_policies,
+                online_osv_available=False,
+                online_osv_error=online_error,
+            )
+            for component in components
+        ]
+
+    online_results: dict[tuple[str, str, str], list[OsvVulnerability]] = {first_key: first_result}
+    online_errors: dict[tuple[str, str, str], str] = {}
+
+    def query_online(
+        item: tuple[tuple[str, str, str], ParsedComponent, str],
+    ) -> tuple[tuple[str, str, str], list[OsvVulnerability] | None, str | None]:
+        key, component, version = item
+        try:
+            return key, query_osv(component.ecosystem, component.name, version), None
+        except OsvLookupError as exc:
+            return key, None, str(exc)[:300]
+
+    remaining = queries[1:]
+    if remaining:
+        with ThreadPoolExecutor(max_workers=min(OSV_LOOKUP_WORKERS, len(remaining))) as executor:
+            for key, vulnerabilities, error in executor.map(query_online, remaining):
+                if vulnerabilities is not None:
+                    online_results[key] = vulnerabilities
+                elif error:
+                    online_errors[key] = error
+    analyzed: list[ParsedComponent] = []
+    for component in components:
+        key = online_query_key(component)
+        if key in online_results:
+            analyzed.append(
+                analyze_component(
+                    component,
+                    vulnerability_rules,
+                    license_policies,
+                    online_osv_available=True,
+                    online_osv_result=online_results[key],
+                )
+            )
+        elif key in online_errors:
+            analyzed.append(
+                analyze_component(
+                    component,
+                    vulnerability_rules,
+                    license_policies,
+                    online_osv_available=False,
+                    online_osv_error=online_errors[key],
+                )
+            )
+        else:
+            analyzed.append(analyze_component(component, vulnerability_rules, license_policies))
+    return analyzed
 
 
 def analyze_component(
@@ -37,6 +107,9 @@ def analyze_component(
     license_policies: tuple[LicensePolicy, ...] | None = None,
     *,
     offline_only: bool = False,
+    online_osv_available: bool | None = None,
+    online_osv_error: str | None = None,
+    online_osv_result: list[OsvVulnerability] | None = None,
 ) -> ParsedComponent:
     matched_rules = [
         rule
@@ -44,7 +117,14 @@ def analyze_component(
         if matches_vulnerability_rule(component.ecosystem, component.name, component.version, rule)
     ]
     resolution = component_resolution(component)
-    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(component, resolution, offline_only=offline_only)
+    osv_vulnerabilities, osv_checked, osv_error, mirror_matched = lookup_osv_vulnerabilities(
+        component,
+        resolution,
+        offline_only=offline_only,
+        online_osv_available=online_osv_available,
+        online_osv_error=online_osv_error,
+        online_osv_result=online_osv_result,
+    )
     vulnerability_ids = [item.vulnerability_id for item in osv_vulnerabilities] + [
         rule.vulnerability_id for rule in matched_rules
     ]
@@ -125,22 +205,69 @@ def analyze_component(
     )
 
 
-def lookup_osv_vulnerabilities(component: ParsedComponent, resolution: dict[str, object] | None = None, *, offline_only: bool = False):
+def lookup_osv_vulnerabilities(
+    component: ParsedComponent,
+    resolution: dict[str, object] | None = None,
+    *,
+    offline_only: bool = False,
+    online_osv_available: bool | None = None,
+    online_osv_error: str | None = None,
+    online_osv_result: list[OsvVulnerability] | None = None,
+):
     resolved = resolution or component_resolution(component)
     lookup_version = resolved.get("lookup_version")
     if not supports_osv(component.ecosystem):
         return [], False, "OSV does not support this ecosystem", False
     if not isinstance(lookup_version, str) or not lookup_version:
         return [], False, str(resolved.get("reason") or "exact component version is unavailable"), False
-    mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, lookup_version)
-    if mirror_matched:
-        return mirrored, True, None, True
-    if offline_only or os.getenv("SCA_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"}:
-        return [], False, "SCA offline-only mode: no matching local OSV record", False
+    if online_osv_result is not None:
+        return online_osv_result, True, None, False
+    if offline_only or offline_mode_enabled():
+        return offline_osv_fallback(component, lookup_version, "SCA 显式离线模式", report_degradation=False)
+    if online_osv_available is False:
+        return offline_osv_fallback(component, lookup_version, f"在线 OSV 不可用：{online_osv_error or '网络探测失败'}")
     try:
         return query_osv(component.ecosystem, component.name, lookup_version), True, None, False
     except OsvLookupError as exc:
-        return [], False, str(exc)[:300], False
+        return offline_osv_fallback(component, lookup_version, f"在线 OSV 不可用：{str(exc)[:240]}")
+
+
+def offline_osv_fallback(
+    component: ParsedComponent,
+    lookup_version: str,
+    reason: str,
+    *,
+    report_degradation: bool = True,
+) -> tuple[list[OsvVulnerability], bool, str | None, bool]:
+    mirrored, mirror_matched = lookup_osv_mirror(component.ecosystem, component.name, lookup_version)
+    if mirror_matched:
+        error = f"{reason}；已使用本地 OSV 镜像" if report_degradation else None
+        return mirrored, True, error, True
+    return [], False, f"{reason}；本地 OSV 镜像没有匹配记录", False
+
+
+def offline_mode_enabled() -> bool:
+    return os.getenv("SCA_OFFLINE_ONLY", "").lower() in {"1", "true", "yes"}
+
+
+def online_query_key(component: ParsedComponent) -> tuple[str, str, str] | None:
+    resolution = component_resolution(component)
+    version = resolution.get("lookup_version")
+    if not supports_osv(component.ecosystem) or not isinstance(version, str):
+        return None
+    return component.ecosystem, component.name.lower(), version
+
+
+def unique_online_queries(components: list[ParsedComponent]) -> list[tuple[tuple[str, str, str], ParsedComponent, str]]:
+    queries: list[tuple[tuple[str, str, str], ParsedComponent, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for component in components:
+        key = online_query_key(component)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        queries.append((key, component, key[2]))
+    return queries
 
 
 def determine_risk_source(

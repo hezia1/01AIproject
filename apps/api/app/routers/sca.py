@@ -372,7 +372,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         license_policies = effective_license_policies(load_license_policies(), policy_overrides)
         gate_policy = effective_gate_policy(policy_overrides)
         analyzed_components = apply_tool_vulnerabilities(
-            analyze_components(parsed_components, vulnerability_rules, license_policies, offline_only=payload.quick_mode),
+            analyze_components(parsed_components, vulnerability_rules, license_policies),
             tool_scan,
         )
         assurance = build_sca_assurance(

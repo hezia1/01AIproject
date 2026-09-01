@@ -43,7 +43,7 @@ python scripts/sca_ci.py --source . --offline --json sca-result.json --sarif sca
 ]
 ```
 
-命中本地镜像时，扫描结果会标记为 `osv_mirror`；镜像中没有该组件版本时才会尝试在线 OSV。没有镜像且在线查询失败时，平台会明确降级为本地规则与许可证策略，不能视为完整外部情报。
+普通 API 扫描优先查询在线 OSV；网络失败或显式使用 `--offline` 时，命中人工导入本地镜像的结果标记为 `osv_mirror`。平台不会自动保存在线查询结果。没有镜像记录且在线查询失败时，平台会明确降级为本地规则与许可证策略，不能视为完整外部情报。
 
 ## CVSS / EPSS / KEV 与 VEX
 
