@@ -4133,6 +4133,9 @@ th {
 .dast-strategy-match p { color: #64748b; font-size: 12px; line-height: 1.6; margin: 0 0 7px; }
 .dast-strategy-match code, .dast-id-line code { color: #2563eb; font-size: 11px; overflow-wrap: anywhere; }
 .dast-generate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dast-strategy-feedback { border: 1px solid; border-radius: 9px; font-size: 11px; line-height: 1.55; margin-top: 10px; padding: 10px 12px; }
+.dast-strategy-feedback.success { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+.dast-strategy-feedback.error { background: #fff7ed; border-color: #fed7aa; color: #9a3412; }
 
 .dast-execution-console, .dast-state-panel, .dast-verdict-panel, .dast-evidence-panel { background: #fff; border: 1px solid #dbe5f0; border-radius: 15px; padding: 20px; }
 .dast-execution-console > .panel-header, .dast-state-panel > .panel-header, .dast-verdict-panel > .panel-header, .dast-evidence-panel > .panel-header { align-items: center; display: flex; gap: 18px; justify-content: space-between; }

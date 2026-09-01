@@ -3508,6 +3508,7 @@ function DastGovernanceView({ project, loading: parentLoading, onExportReport }:
   const [strategyJson, setStrategyJson] = useState("");
   const [busy, setBusy] = useState(false);
   const [activeAction, setActiveAction] = useState("");
+  const [strategyFeedback, setStrategyFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [executionFeedback, setExecutionFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [message, setMessage] = useState("");
   const [queueFilters, setQueueFilters] = useState({ keyword: "", validation: "all", verdict: "all" });
@@ -3575,7 +3576,7 @@ function DastGovernanceView({ project, loading: parentLoading, onExportReport }:
   }
   useEffect(() => {
     setCandidates([]); setFlows([]); setRuns([]); setSnapshots([]); setReport(null); setDiscovery(null); setPreflight(null); setRuntimeTargets([]);
-    setCandidateId(""); setFlowId(""); setRunId(""); setMessage(""); setActiveAction(""); setExecutionFeedback(null);
+    setCandidateId(""); setFlowId(""); setRunId(""); setMessage(""); setActiveAction(""); setStrategyFeedback(null); setExecutionFeedback(null);
     setQueueFilters({ keyword: "", validation: "all", verdict: "all" }); setVerdictPanelFilter("all"); setEvidenceDrawerOpen(false);
     void load(undefined, undefined, true);
   }, [project.id]);
@@ -3603,15 +3604,17 @@ function DastGovernanceView({ project, loading: parentLoading, onExportReport }:
   }
 
   async function materialize() {
-    if (!selectedCandidate) return setMessage("请先选择一条 SAST / AGENT 漏洞。");
+    const reportStrategyResult = (tone: "success" | "error", text: string) => { setStrategyFeedback({ tone, text }); setMessage(text); };
+    setStrategyFeedback(null);
+    if (!selectedCandidate) return reportStrategyResult("error", "请先选择一条 SAST / AGENT 漏洞。");
     const existingFlow = flows.find((flow) => flow.finding_id === selectedCandidate.id);
-    if (selectedCandidate.target_status !== "configured") return setMessage("当前还没有可访问的运行目标：已上线项目请在项目资产配置运行地址；只有源码的项目请先到 SANDBOX 启动项目隔离实例，启动成功后返回这里同步。");
-    if (selectedCandidate.missing.some((item) => item.includes("参数"))) return setMessage("系统尚未唯一定位运行时输入点。请先“同步运行资产”；系统会自动重新映射，不需要在此手工填写。");
+    if (selectedCandidate.target_status !== "configured") return reportStrategyResult("error", "当前还没有可访问的运行目标：已上线项目请在项目资产配置运行地址；只有源码的项目请先到 SANDBOX 启动项目隔离实例，启动成功后返回这里同步。");
+    if (selectedCandidate.missing.some((item) => item.includes("参数"))) return reportStrategyResult("error", "系统尚未唯一定位运行时输入点。请先“同步运行资产”；系统会自动重新映射，不需要在此手工填写。");
     beginAction(existingFlow ? "open-strategy" : "materialize", existingFlow ? "正在校验已生成策略是否仍与当前源码路由和运行资产一致…" : "正在把上游漏洞转换为 DAST 策略，并校验目标、参数和证据要求…");
     try {
       const flow = await request<DastBusinessFlow>(`/dast/business-candidates/${selectedCandidate.id}/materialize`, { method: "POST" });
-      await load(flow.id); setFlowId(flow.id); setMessage(existingFlow ? "已校验并打开与当前源码及运行资产一致的策略。" : "已把上游漏洞自动转换为 DAST 策略草案；无需重复填写目标、方法、参数和证据标准。"); revealExecutionConsole();
-    } catch (error) { await load(undefined, undefined, false); setMessage(`${existingFlow ? "策略校验或打开" : "策略生成"}失败：${errorMessage(error)}`); } finally { finishAction(); }
+      await load(flow.id); setFlowId(flow.id); reportStrategyResult("success", existingFlow ? "已校验并打开与当前源码及运行资产一致的策略。" : "已把上游漏洞自动转换为 DAST 策略草案；无需重复填写目标、方法、参数和证据标准。"); revealExecutionConsole();
+    } catch (error) { await load(undefined, undefined, false); reportStrategyResult("error", `${existingFlow ? "策略校验或打开" : "策略生成"}失败：${errorMessage(error)}`); } finally { finishAction(); }
   }
   async function saveStrategy() {
     if (!selectedFlow) return;
@@ -3720,6 +3723,7 @@ function DastGovernanceView({ project, loading: parentLoading, onExportReport }:
           {selectedMappingItems.length ? <div className="dast-mapping-notice"><strong>系统正在自动定位运行时输入点</strong><span>当前 SAST 证据还不能唯一确定“哪个 URL 的哪个参数”。系统会继续结合源码数据流和“同步运行资产”结果自动匹配；这不是要求您填写。定位前不会生成空参数攻击请求。</span></div> : !selectedBlockingItems.length ? <div className="dast-ready-banner"><Check size={16} />运行时验证所需字段已由系统补全</div> : null}
           <div className="dast-strategy-match"><span>匹配策略</span><strong>{selectedCandidate.recommended_strategy_name}</strong><p>{selectedCandidate.strategy_description}</p><code>{selectedCandidate.recommended_strategy_id}</code>{selectedCandidate.required_capabilities.length ? <small>隔离执行能力：{selectedCandidate.required_capabilities.join(" / ")}</small> : <small>可由 DAST 有界 HTTP 执行器完成</small>}</div>
           <div className="dast-generate-actions"><button className="primary-action" disabled={busy || (!linkedSelectedFlow && (selectedMappingItems.length > 0 || selectedCandidate.strategy_match === "ai_required"))} onClick={() => void materialize()}>{activeAction === "materialize" ? <><LoaderCircle className="sandbox-spin" size={16} />正在生成策略…</> : activeAction === "open-strategy" ? <><LoaderCircle className="sandbox-spin" size={16} />正在打开…</> : linkedSelectedFlow ? "打开已生成策略" : selectedMappingItems.length ? "等待自动定位输入点" : selectedCandidate.strategy_match === "builtin" ? "自动生成 DAST 策略" : "等待新策略模板"}</button>{aiHealth?.configured && selectedCandidate.strategy_match === "ai_required" ? <button className="secondary-action" disabled={busy} onClick={() => void generateAiStrategy()}>{activeAction === "ai-strategy" ? <><LoaderCircle className="sandbox-spin" size={16} />DeepSeek 生成中…</> : "DeepSeek 生成待审批模板"}</button> : null}</div>
+          {strategyFeedback ? <div className={`dast-strategy-feedback ${strategyFeedback.tone}`} role="status">{strategyFeedback.text}</div> : null}
         </> : <div className="workbench-empty">选择一条漏洞查看自动识别结果。</div>}
       </div>
     </section>

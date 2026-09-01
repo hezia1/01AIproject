@@ -29,6 +29,18 @@ STATIC_ONLY_RULE_TOKENS = (
     "auth_events_not_audited", "insufficient_logging", "cwe-778",
     "cwe-798", "cwe-259", "cwe-321", "cwe-327",
 )
+DAST_FLOW_NAME_MAX_LENGTH = 200
+
+
+def bounded_strategy_name(title: object, suffix: str, fallback: str) -> str:
+    """Build a readable strategy name that always fits the database column."""
+    normalized_title = re.sub(r"\s+", " ", str(title or fallback)).strip() or fallback
+    normalized_suffix = re.sub(r"\s+", " ", str(suffix)).strip()
+    tail = f" · {normalized_suffix}" if normalized_suffix else ""
+    title_budget = DAST_FLOW_NAME_MAX_LENGTH - len(tail)
+    if len(normalized_title) > title_budget:
+        normalized_title = normalized_title[:max(1, title_budget - 1)].rstrip(" ·:;-") + "…"
+    return f"{normalized_title}{tail}"[:DAST_FLOW_NAME_MAX_LENGTH]
 
 
 @lru_cache(maxsize=32)
@@ -109,7 +121,10 @@ def classify_vulnerability(source: str, rule_id: str, title: str, review: dict[s
         return "prompt_injection" if "prompt" in text else "agent_capability"
     checks = (
         ("sql_injection", ("sql", "cwe-89", "sqli")),
-        ("xss", ("xss", "cross-site", "cwe-79")),
+        # Check the complete CSRF phrase before XSS.  The previous generic
+        # ``cross-site`` token classified "cross-site request forgery" as XSS.
+        ("csrf", ("csrf", "cross-site request forgery", "cwe-352")),
+        ("xss", ("xss", "cross-site scripting", "cwe-79")),
         ("ssrf", ("ssrf", "cwe-918")),
         ("command_injection", ("command injection", "os command", "cwe-78", "命令注入")),
         ("path_traversal", ("path traversal", "directory traversal", "cwe-22", "路径穿越")),
@@ -119,7 +134,6 @@ def classify_vulnerability(source: str, rule_id: str, title: str, review: dict[s
         ("cors", ("cors", "cross-origin resource sharing", "跨域资源共享")),
         ("file_upload", ("file upload", "unrestricted upload", "cwe-434", "文件上传")),
         ("broken_authentication", ("predictable reset", "reset token", "cwe-640", "密码重置令牌")),
-        ("csrf", ("csrf", "cross-site request forgery", "cwe-352")),
         ("sensitive_data_exposure", ("full user object", "sensitive data exposure", "cwe-200", "完整用户对象")),
         ("security_misconfiguration", ("insecure cookie", "cwe-614", "security misconfiguration", "安全配置")),
         ("access_control", ("idor", "access", "authorization", "authz", "越权", "cwe-639", "cwe-862")),
@@ -336,7 +350,7 @@ def build_flow_blueprint(candidate: dict[str, object], *, finding_id: str) -> di
     parsed = urlparse(target_url)
     allowed_paths = _unique([urlparse(str(url)).path or "/" for url in urls])
     vulnerability_type = str(candidate.get("vulnerability_type") or "unclassified")
-    parameter_required_types = {"sql_injection", "xss", "ssrf", "command_injection", "path_traversal", "template_injection", "open_redirect", "file_upload", "xxe", "unsafe_deserialization", "code_injection", "broken_authentication", "csrf"}
+    parameter_required_types = {"sql_injection", "xss", "ssrf", "command_injection", "path_traversal", "template_injection", "open_redirect", "file_upload", "xxe", "unsafe_deserialization", "code_injection", "broken_authentication"}
     if vulnerability_type in parameter_required_types and not parameters:
         raise ValueError("尚未从 SAST 数据流或运行资产中唯一定位输入点；系统不会生成可能误伤目标的空参数策略。")
     strategy_id = str(candidate.get("recommended_strategy_id") or "web-baseline")
@@ -352,7 +366,10 @@ def build_flow_blueprint(candidate: dict[str, object], *, finding_id: str) -> di
     parameter = str(parameters[0]) if parameters else ""
     point = next((item for item in injection_points if isinstance(item, dict) and str(item.get("name") or "") == parameter), {"name": parameter, "location": "query"})
     parameter_location = str(point.get("location") or "query")
-    requested_method = str((attack_surface.get("methods") or ["GET"])[0]).upper()
+    candidate_methods = [str(value).upper() for value in (attack_surface.get("methods") or ["GET"])]
+    requested_method = candidate_methods[0]
+    if vulnerability_type == "csrf":
+        requested_method = next((method for method in candidate_methods if method in {"POST", "PUT", "PATCH", "DELETE"}), "POST")
     if vulnerability_type == "access_control":
         access_model = str(attack_surface.get("access_model") or "resource_read")
         if access_model == "privileged_route":
@@ -451,7 +468,7 @@ def build_flow_blueprint(candidate: dict[str, object], *, finding_id: str) -> di
         ).encode("utf-8")
     ).hexdigest()
     return {
-        "name": f"{candidate.get('title') or finding_id} · 自动动态验证",
+        "name": bounded_strategy_name(candidate.get("title"), "自动动态验证", finding_id),
         "target_url": f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}",
         "flow_mode": "hybrid" if vulnerability_type in {"xss", "csrf", "agent_capability", "prompt_injection"} else "api",
         "strategy_source": "template",
@@ -466,7 +483,7 @@ def build_flow_blueprint(candidate: dict[str, object], *, finding_id: str) -> di
             "strategy_id": strategy_id,
             "vulnerability_type": vulnerability_type,
             "required_capabilities": list(candidate.get("required_capabilities") or template_for(vulnerability_type).required_capabilities),
-            "adapter_version": 4,
+            "adapter_version": 5,
             "mapping_fingerprint": mapping_fingerprint,
         },
         "requester": "automatic-dast-adapter",

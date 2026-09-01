@@ -11,7 +11,7 @@ from app.routers.dast import _adjudicate_sandbox_result, build_dast_report, busi
 from app.models import DastSandboxResult, DastVerdict
 from app.services.dast_probe import build_probe_result
 from app.services.dast_business_flow import dry_run, execute_api_flow, execute_api_flow_result
-from app.services.dast_candidate_adapter import TEMPLATES, build_flow_blueprint, normalize_candidate
+from app.services.dast_candidate_adapter import TEMPLATES, bounded_strategy_name, build_flow_blueprint, classify_vulnerability, normalize_candidate
 from app.services.dast_sandbox_contract import build_sandbox_handoff, execution_preflight, required_capabilities, step_adapter, validate_flow_policy
 from app.services.verification_strategies import recommended_dast_strategies, resolve_dast_strategy
 
@@ -519,6 +519,46 @@ def test_dast_refuses_to_materialize_parameterized_strategy_without_input_point(
         }, finding_id="finding-xss")
 
 
+def test_generated_strategy_name_preserves_suffix_within_database_limit() -> None:
+    name = bounded_strategy_name("Semgrep finding " * 40, "自动动态验证", "finding-long")
+
+    assert len(name) <= 200
+    assert name.endswith("· 自动动态验证")
+    assert "…" in name
+
+
+def test_semgrep_cross_site_request_forgery_is_classified_as_csrf() -> None:
+    vulnerability_type = classify_vulnerability(
+        "SAST",
+        "javascript.express.security.audit.express-check-csurf-middleware-usage",
+        "A CSRF middleware was not detected for this Express application. Cross-site request forgery can change state.",
+        {"cwe": "CWE-352"},
+    )
+
+    assert vulnerability_type == "csrf"
+
+
+def test_project_level_csrf_strategy_uses_state_changing_method_without_injection_parameter() -> None:
+    blueprint = build_flow_blueprint({
+        "title": "Express application has no CSRF middleware",
+        "vulnerability_type": "csrf",
+        "recommended_strategy_id": "csrf-isolated-session",
+        "evidence_requirements": ["三组请求/响应"],
+        "missing": [],
+        "attack_surface": {
+            "urls": ["https://example.test/api"],
+            "methods": ["GET", "POST", "DELETE"],
+            "parameters": [],
+            "injection_points": [],
+        },
+    }, finding_id="finding-csrf")
+
+    assert blueprint["steps"][0]["probe"] == "csrf"
+    assert blueprint["steps"][0]["method"] == "POST"
+    assert blueprint["steps"][0]["parameters"] == []
+    assert blueprint["sufficiency_criteria"]["adapter_version"] == 5
+
+
 def test_materialized_access_control_flow_has_isolated_sessions_and_ids() -> None:
     blueprint = build_flow_blueprint({
         "title": "Order IDOR", "vulnerability_type": "access_control",
@@ -528,7 +568,7 @@ def test_materialized_access_control_flow_has_isolated_sessions_and_ids() -> Non
     }, finding_id="finding-1")
 
     assert blueprint["strategy_source"] == "template"
-    assert blueprint["sufficiency_criteria"]["adapter_version"] == 4
+    assert blueprint["sufficiency_criteria"]["adapter_version"] == 5
     assert len(blueprint["sufficiency_criteria"]["mapping_fingerprint"]) == 64
     assert [role["credential_ref"] for role in blueprint["roles"]] == ["sandbox:auto:resource_owner", "sandbox:auto:peer_user"]
     assert blueprint["allowed_paths"] == ["/api/orders/TEST-1"]

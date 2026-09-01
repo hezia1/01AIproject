@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -48,7 +49,7 @@ from app.models import (
 )
 from app.repositories.mappers import dast_business_flow_to_schema, dast_business_run_to_schema, dast_business_snapshot_to_schema, dast_plan_to_schema, dast_run_evidence_to_schema, dast_run_to_schema, dast_validation_to_schema
 from app.services.dast_business_flow import dry_run as dry_run_business_flow, execute_api_flow_result, redact as redact_business_value
-from app.services.dast_candidate_adapter import TEMPLATES, build_flow_blueprint, is_runtime_verifiable_finding, normalize_candidate
+from app.services.dast_candidate_adapter import TEMPLATES, bounded_strategy_name, build_flow_blueprint, is_runtime_verifiable_finding, normalize_candidate
 from app.services.dast_deepseek import dast_deepseek_health, generate_business_flow_draft
 from app.services.dast_discovery import discover_assets
 from app.services.dast_sandbox_contract import build_sandbox_handoff, callback_token_hash, execution_preflight, new_callback_token, required_capabilities, validate_flow_policy
@@ -767,7 +768,7 @@ def materialize_business_candidate(finding_id: UUID, db: Session = Depends(get_d
     if learned is not None:
         target_url = str((candidate.get("attack_surface") or {}).get("urls", [project.api_base_url or project.runtime_url])[0])
         blueprint.update({
-            "name": f"{finding.title} · 复用本地审核策略",
+            "name": bounded_strategy_name(finding.title, "复用本地审核策略", str(finding_id)),
             "target_url": target_url,
             "flow_mode": learned.flow_mode,
             "strategy_source": "learned_template",
@@ -785,7 +786,11 @@ def materialize_business_candidate(finding_id: UUID, db: Session = Depends(get_d
         requester=blueprint["requester"], status="draft",
     )
     db.add(record)
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="DAST 策略保存失败：生成内容不符合数据库约束，请刷新候选后重试。") from exc
     db.refresh(record)
     return dast_business_flow_to_schema(record)
 
