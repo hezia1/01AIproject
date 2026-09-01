@@ -5,9 +5,11 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, unquote
 from uuid import uuid4
@@ -22,7 +24,10 @@ NODE_RESOLVER_IMAGE = "node:20-alpine"
 TOOL_TIMEOUT_SECONDS = 120
 HEALTH_TIMEOUT_SECONDS = 20
 DATABASE_IMPORT_TIMEOUT_SECONDS = 600
+DATABASE_UPDATE_TIMEOUT_SECONDS = 600
 GRYPE_OFFLINE_MAX_DATABASE_AGE = "720h"
+GRYPE_DATABASE_MAX_AGE_HOURS = 720
+_grype_database_update_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,18 @@ class ToolHealthResult:
     status: str
     recommended_grype_input: str
     checks: list[ToolHealthCheck]
+
+
+@dataclass(frozen=True)
+class GrypeDatabaseStatus:
+    status: str
+    valid: bool
+    schema_version: str | None = None
+    built_at: str | None = None
+    expires_at: str | None = None
+    database_path: str | None = None
+    detail: str | None = None
+    can_update: bool = False
 
 
 def offline_assets_dir() -> Path:
@@ -214,6 +231,117 @@ def run_health_command(command: list[str], timeout: int = HEALTH_TIMEOUT_SECONDS
 
     output = output_excerpt(completed.stdout) or output_excerpt(completed.stderr)
     return completed.returncode, output or f"exit code {completed.returncode}"
+
+
+def grype_database_status() -> GrypeDatabaseStatus:
+    docker_path = shutil.which("docker")
+    if docker_path is None:
+        return GrypeDatabaseStatus(status="unavailable", valid=False, detail="Docker CLI was not found", can_update=False)
+    docker_info = run_health_command(["docker", "info", "--format", "{{.ServerVersion}}"])
+    if docker_info[0] != 0:
+        return GrypeDatabaseStatus(status="unavailable", valid=False, detail=f"Docker Engine 不可用：{docker_info[1]}", can_update=False)
+    image = run_health_command(["docker", "image", "inspect", GRYPE_IMAGE])
+    if image[0] != 0:
+        return GrypeDatabaseStatus(status="unavailable", valid=False, detail=f"未找到本地镜像 {GRYPE_IMAGE}", can_update=False)
+
+    return _read_grype_database_status()
+
+
+def _read_grype_database_status() -> GrypeDatabaseStatus:
+    command = [
+        "docker", "run", "--rm", "--pull=never",
+        "-e", "XDG_CACHE_HOME=/cache",
+        "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}",
+        "-v", f"{grype_cache_dir()}:/cache",
+        GRYPE_IMAGE, "db", "status", "-o", "json",
+    ]
+    returncode, stdout, stderr = run_database_command(command, HEALTH_TIMEOUT_SECONDS)
+    payload: dict[str, object] | None = None
+    try:
+        parsed = json.loads(stdout)
+        payload = parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        payload = None
+
+    if payload is not None:
+        built_at = string_value(payload.get("built"))
+        expires_at = database_expiry(built_at)
+        valid = payload.get("valid") is True and returncode == 0
+        return GrypeDatabaseStatus(
+            status="current" if valid else "stale",
+            valid=valid,
+            schema_version=string_value(payload.get("schemaVersion")),
+            built_at=built_at,
+            expires_at=expires_at,
+            database_path=string_value(payload.get("path")),
+            detail=None if valid else output_excerpt(stderr or stdout),
+            can_update=True,
+        )
+
+    detail = output_excerpt(stderr or stdout) or f"exit code {returncode}"
+    normalized = detail.lower()
+    missing = any(marker in normalized for marker in ("not found", "no database", "does not exist", "unable to find"))
+    return GrypeDatabaseStatus(status="missing" if missing else "error", valid=False, detail=detail, can_update=True)
+
+
+def update_grype_database() -> tuple[bool, str, GrypeDatabaseStatus]:
+    initial = grype_database_status()
+    if not initial.can_update:
+        return False, initial.detail or "Grype 数据库当前无法更新", initial
+    if not _grype_database_update_lock.acquire(blocking=False):
+        return False, "Grype 数据库正在更新，请稍后重新检测。", initial
+    try:
+        grype_cache_dir().mkdir(parents=True, exist_ok=True)
+        command = [
+            "docker", "run", "--rm", "--pull=never",
+            "-e", "XDG_CACHE_HOME=/cache",
+            "-v", f"{grype_cache_dir()}:/cache",
+            GRYPE_IMAGE, "db", "update",
+        ]
+        returncode, stdout, stderr = run_database_command(command, DATABASE_UPDATE_TIMEOUT_SECONDS)
+        if returncode != 0:
+            detail = output_excerpt(stderr or stdout) or f"exit code {returncode}"
+            return False, f"Grype 数据库更新失败：{detail}", _read_grype_database_status()
+        current = _read_grype_database_status()
+        if not current.valid:
+            return False, "Grype 数据库下载完成，但有效性检查未通过。", current
+        return True, "Grype 数据库已更新并通过有效性检查。", current
+    finally:
+        _grype_database_update_lock.release()
+
+
+def run_database_command(command: list[str], timeout: int) -> tuple[int, str, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timed out after {timeout}s"
+    except OSError as exc:
+        return 1, "", str(exc)
+    return completed.returncode, completed.stdout.strip()[:8000], completed.stderr.strip()[:4000]
+
+
+def database_expiry(built_at: str | None) -> str | None:
+    if not built_at:
+        return None
+    try:
+        built = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if built.tzinfo is None:
+        built = built.replace(tzinfo=timezone.utc)
+    return (built + timedelta(hours=GRYPE_DATABASE_MAX_AGE_HOURS)).isoformat().replace("+00:00", "Z")
+
+
+def string_value(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def grype_database_archive() -> Path | None:

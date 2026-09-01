@@ -28,6 +28,7 @@ from app.services.sca_policy_overrides import effective_license_policies, effect
 from app.services.sca_vulnerability_rules import load_vulnerability_rules
 from app.models import (
     Component,
+    GrypeDatabaseStatusResponse,
     ModuleKey,
     ScaReport,
     ScaReportComponent,
@@ -50,7 +51,7 @@ from app.services.sca_native_tree import native_dependency_source_summary
 from app.services.sca_python_environment import PythonEnvironmentInspection, environment_metadata, inspect_python_environment
 from app.services.sca_artifacts import collect_artifact_hashes, source_fingerprint
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
-from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, scan_with_syft_grype
+from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, grype_database_status, scan_with_syft_grype, update_grype_database
 from app.services.sca_assurance import build_sca_assurance, component_resolution
 
 router = APIRouter()
@@ -318,6 +319,17 @@ def get_sca_tool_health() -> ScaToolHealth:
             for check in health.checks
         ],
     )
+
+
+@router.get("/grype-database", response_model=GrypeDatabaseStatusResponse)
+def get_grype_database_status() -> GrypeDatabaseStatusResponse:
+    return GrypeDatabaseStatusResponse(**asdict(grype_database_status()))
+
+
+@router.post("/grype-database/update", response_model=GrypeDatabaseStatusResponse)
+def update_grype_database_from_network() -> GrypeDatabaseStatusResponse:
+    updated, message, status = update_grype_database()
+    return GrypeDatabaseStatusResponse(**asdict(status), updated=updated, message=message)
 
 
 @router.post("/scan", response_model=ScaScanResult)

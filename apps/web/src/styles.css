@@ -2066,6 +2066,34 @@ th {
   font-size: 18px;
 }
 
+.grype-database-panel .panel-header > div span {
+  display: block;
+  margin-top: 4px;
+}
+
+.grype-database-actions strong {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.grype-database-actions button {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .grype-database-panel .kv-list > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .grype-database-actions strong {
+    justify-content: flex-start;
+    width: 100%;
+  }
+}
+
 .empty-inline {
   color: #64748b;
   display: block;

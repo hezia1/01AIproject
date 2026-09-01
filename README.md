@@ -211,7 +211,7 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 - 快速模式限制为最多 200 个依赖文件、3000 个组件、1200 个源码文件、60 MiB 源码内容和每个本地模块 45 秒软时限；限制命中会以部分覆盖返回，不会伪装成深度扫描。快速模式只限制基础扫描范围，不再覆盖用户明确勾选的增强引擎：勾选 SCA Docker 或在项目配置中启用 Semgrep 后，本次扫描会真实尝试执行，并在批次历史中记录成功、降级或失败原因。
 
 - SCA 支持 npm、PyPI、Maven、Go、Bundler、Composer、Cargo 和 NuGet 的常见清单/锁文件。启用 Docker 增强后，只有 `package.json` 而没有锁文件/安装目录的 npm 项目会在排除常见生成目录的临时源码副本中，通过固定 Node 镜像执行 `npm install --package-lock-only --ignore-scripts`；临时目录会清理，原项目不写入 `package-lock.json` 或 `node_modules`。
-- Docker 增强按职责执行：Syft 只生成一次 CycloneDX SBOM，Grype 直接读取该 SBOM 做组件漏洞匹配，Trivy 默认只扫描配置错误和明文密钥。Grype 健康检查失败时，Trivy 才在同一次源码扫描中启用漏洞匹配作为回退；Grype 健康时，Grype 与 Trivy 并行执行。Trivy 回退命中可确认漏洞，但未命中不会代替完整 SBOM 匹配而把组件自动标记为安全。配置和密钥结果单独保存并展示，不计入组件漏洞数量；疑似密钥的原始匹配值不会保存。
+- Docker 增强按职责执行：Syft 只生成一次 CycloneDX SBOM，Grype 直接读取该 SBOM 做组件漏洞匹配，Trivy 默认只扫描配置错误和明文密钥。Grype 健康检查失败时，Trivy 才在同一次源码扫描中启用漏洞匹配作为回退；Grype 健康时，Grype 与 Trivy 并行执行。SCA“扫描引擎与漏洞情报源”提供 Grype 数据库有效期检测，并在数据库过期或缺失时允许用户显式联网更新；更新与扫描复用 `artifacts/sca-offline/grype-cache`，扫描本身仍禁止自动更新。Trivy 回退命中可确认漏洞，但未命中不会代替完整 SBOM 匹配而把组件自动标记为安全。配置和密钥结果单独保存并展示，不计入组件漏洞数量；疑似密钥的原始匹配值不会保存。
 - SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。Semgrep 社区安全规则只在治理界面由用户确认许可证后显式更新到 `artifacts/sast-offline/community-rules`；更新固定官方仓库提交 SHA，扫描阶段不联网，并按源码语言与配置类型只加载本地匹配目录。JavaScript/TypeScript 本地规则覆盖命令执行、SQL 模板、对象越权、批量赋值、JWT 算法、Cookie、CORS、用户正则、敏感请求日志和错误披露等高价值模式；同一规则的多处命中归并为一个 Finding，并保留全部代码位置。
 - AGENT 扫描 Markdown Frontmatter、JSON、YAML、TOML 及常见 Agent/MCP/插件配置。
 - SANDBOX 会读取 `package.json`、Python 依赖文件、`pom.xml`、Gradle、`go.mod`、Dockerfile、Compose、Procfile 和 README 等上下文，生成受限启动计划。

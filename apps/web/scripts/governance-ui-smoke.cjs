@@ -41,6 +41,11 @@ async function assertSastControlsFit(page, viewport) {
     const scaTabs = await page.locator(".sca-workspace .module-workspace-tabs button strong").allTextContents();
     assert(JSON.stringify(scaTabs) === JSON.stringify(["概览", "风险组件", "依赖影响", "例外与 VEX", "历史与报告"]), `${viewport.width}px SCA 工作区不正确`);
     assert(!(await page.locator(".sca-workspace").innerText()).includes("高级设置（可选）"), `${viewport.width}px SCA 仍显示旧高级设置入口`);
+    await page.locator(".sca-workspace summary").filter({ hasText: /^扫描引擎与漏洞情报源$/ }).click();
+    const scaEngineText = await page.locator(".sca-workspace").innerText();
+    assert(scaEngineText.includes("Grype 漏洞数据库") && scaEngineText.includes("检测 Grype 数据库"), `${viewport.width}px SCA 缺少 Grype 数据库检测入口`);
+    const grypeControlOverflow = await page.locator(".grype-database-panel button").evaluateAll((elements) => elements.filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent?.trim()));
+    assert(grypeControlOverflow.length === 0, `${viewport.width}px Grype 数据库控件文字横向溢出：${grypeControlOverflow.join(" | ")}`);
     for (const tab of scaTabs) {
       await page.locator(".sca-workspace .module-workspace-tabs").getByRole("button", { name: new RegExp(`^${tab}`) }).click();
       results.push(await assertNoOverflow(page, viewport, `SCA-${tab}`));

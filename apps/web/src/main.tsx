@@ -27,6 +27,7 @@ type ScaToolSecurityFinding = { kind: "misconfiguration" | "secret"; rule_id: st
 type ScaToolStatus = { enabled: boolean; status: string; syft_component_count: number; grype_vulnerability_count: number; trivy_vulnerability_count?: number; trivy_vulnerability_fallback?: boolean; trivy_misconfiguration_count?: number; trivy_secret_count?: number; security_findings?: ScaToolSecurityFinding[]; grype_input?: string | null; syft_status?: string; syft_detail?: string | null; grype_status?: string; grype_detail?: string | null; trivy_status?: string; trivy_detail?: string | null; dependency_resolution_status?: string; dependency_resolution_detail?: string | null; errors: string[] };
 type ScaToolHealthCheck = { name: string; status: string; detail: string | null; remediation: string | null };
 type ScaToolHealth = { status: string; recommended_grype_input: string; checks: ScaToolHealthCheck[] };
+type GrypeDatabaseStatus = { status: "current" | "stale" | "missing" | "unavailable" | "error"; valid: boolean; schema_version: string | null; built_at: string | null; expires_at: string | null; database_path: string | null; detail: string | null; can_update: boolean; updated?: boolean | null; message?: string | null };
 type ScanAssurance = { status?: string; execution_status?: string; confidence?: string; component_count?: number; resolved_component_count?: number; lock_or_environment_component_count?: number; declared_exact_component_count?: number; constraint_component_count?: number; verified_component_count?: number; unverified_component_count?: number; vulnerability_coverage_percent?: number; reasons?: string[]; statement?: string; completed_engines?: string[]; enabled_engines?: string[]; limitations?: string[] };
 type SastEngineStatus = { status?: string; execution_status?: string; detail?: string; statement?: string; config?: string; confidence?: string; expected_agent_count?: number; agent_count?: number; incomplete_roles?: string[]; limitations?: string[]; completed_engines?: string[]; enabled_engines?: string[] };
 type ScaScanResult = { project_id: string; scan_task_id: string; source_path: string; scanned_files: string[]; component_count: number; components: Component[]; tool_status?: ScaToolStatus | null; assurance?: ScanAssurance };
@@ -2436,7 +2437,46 @@ function ScaOverviewCapabilities({ project, components, toolScanEnabled, loading
       <button type="button" onClick={() => onOpenTab("history")}><span>交付与追溯</span><strong>历史和报告</strong><small>SBOM、批次与扫描证据</small><ArrowRight size={17} /></button>
     </div>
     <section className="panel full module-delivery-actions"><div><span>当前扫描能力</span><h3>基础解析始终可用，Docker 增强按需启用</h3><p>SCA 在网络可用时优先查询在线 OSV，失败时回退人工准备的本地镜像；勾选 Docker 增强后，无论快速或深度范围都会实际执行 Syft/Grype/Trivy。只有 package.json 而没有锁文件时，会在临时隔离容器中生成依赖快照，且不会修改项目源码。</p></div><div className="advanced-actions"><label className="inline-check"><input type="checkbox" checked={toolScanEnabled} disabled={loading} onChange={(event) => onToolScanChange(event.target.checked)} />使用 Docker 增强扫描</label><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("cyclonedx")}>导出 CycloneDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportReport()}>导出 SCA 报告</button></div></section>
-    <details className="advanced-details module-admin-details"><summary>扫描引擎与漏洞情报源</summary><div className="advanced-details-body"><p>这部分用于检查本机工具链和离线情报准备情况；普通项目复核可以保持默认设置。</p><ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} /><OsvMirrorPanel /><ScaIntelligencePanel /></div></details>
+    <details className="advanced-details module-admin-details"><summary>扫描引擎与漏洞情报源</summary><div className="advanced-details-body"><p>这部分用于检查本机工具链和离线情报准备情况；普通项目复核可以保持默认设置。</p><GrypeDatabasePanel /><ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} /><OsvMirrorPanel /><ScaIntelligencePanel /></div></details>
+  </section>;
+}
+
+function GrypeDatabasePanel() {
+  const [database, setDatabase] = useState<GrypeDatabaseStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function checkDatabase() {
+    setChecking(true);
+    setMessage(null);
+    try { setDatabase(await request<GrypeDatabaseStatus>("/sca/grype-database")); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Grype 数据库检测失败"); }
+    finally { setChecking(false); }
+  }
+
+  async function updateDatabase() {
+    setUpdating(true);
+    setMessage("正在联网下载 Grype 最新漏洞库，请勿关闭服务。");
+    try {
+      const result = await request<GrypeDatabaseStatus>("/sca/grype-database/update", { method: "POST" });
+      setDatabase(result);
+      setMessage(result.message ?? (result.updated ? "Grype 数据库更新完成。" : "Grype 数据库更新失败。"));
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Grype 数据库更新失败"); }
+    finally { setUpdating(false); }
+  }
+
+  const needsUpdate = database !== null && !database.valid && database.can_update;
+  return <section className="panel full grype-database-panel">
+    <div className="panel-header"><div><h2>Grype 漏洞数据库</h2><span>扫描保持离线；只在点击更新时联网下载</span></div><span>{grypeDatabaseStatusLabel(database?.status)}</span></div>
+    <div className="kv-list">
+      <div><span>数据库版本</span><strong>{database?.schema_version ?? "尚未检测"}</strong></div>
+      <div><span>构建时间</span><strong>{formatDateTime(database?.built_at)}</strong></div>
+      <div><span>预计失效时间</span><strong>{formatDateTime(database?.expires_at)}</strong></div>
+      <div className="grype-database-actions"><span>操作</span><strong><button className="secondary-action" disabled={checking || updating} onClick={() => void checkDatabase()}>{checking ? "检测中" : "检测 Grype 数据库"}</button>{needsUpdate ? <button className="primary-action" disabled={updating} onClick={() => void updateDatabase()}>{updating ? "更新中" : "更新到最新"}</button> : null}</strong></div>
+    </div>
+    {database?.detail ? <div className="empty-project">{database.detail}</div> : null}
+    {message ? <div className={database?.updated === false ? "empty-project" : "module-context-note"}>{message}</div> : null}
   </section>;
 }
 
@@ -4775,6 +4815,7 @@ function scaDataStatusLabel(value?: unknown) { const status = String(value ?? ""
 function nativeDependencyStatusLabel(value?: unknown) { const status = String(value ?? ""); return status === "not_applicable" ? "不适用（未发现该生态）" : status === "fallback_used" ? "已使用清单推断" : status === "captured" ? "已读取实际关系" : status === "tool_unavailable" ? "未使用本机工具" : status === "available" ? "已就绪" : status || "未记录"; }
 function osvLookupStatusLabel(value?: string | null) { return value === "available" ? "OSV 已连接" : value === "mirror_used" ? "本地 OSV 镜像" : value === "offline_degraded" ? "离线降级" : value === "not_used" ? "未使用" : "历史批次未记录"; }
 function grypeInputLabel(value?: string | null) { return value === "syft-sbom" ? "Syft SBOM" : value === "platform-sbom" ? "平台基础清单 SBOM" : value === "directory" ? "目录回退" : "-"; }
+function grypeDatabaseStatusLabel(value?: string | null) { return value === "current" ? "有效" : value === "stale" ? "已过期" : value === "missing" ? "未安装" : value === "unavailable" ? "环境不可用" : value === "error" ? "检测失败" : "尚未检测"; }
 function toolHealthStatusLabel(value?: string | null) { return value === "success" ? "可用" : value === "warning" ? "有警告" : value === "failed" ? "不可用" : value ?? "未检查"; }
 function relationTypeLabel(value: string) { return value === "reported_by" ? "产生风险" : value === "validated_by" ? "动态验证" : value === "observed_by" ? "运行时取证" : value; }
 function confidenceLevelLabel(value: string) { return value === "high" ? "高置信度" : value === "medium" ? "中置信度" : "低置信度"; }

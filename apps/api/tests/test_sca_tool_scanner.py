@@ -1,15 +1,19 @@
 from app.models import ScaScanRequest
 from app.services.sca_parser import ParsedComponent
 from app.services.sca_tool_scanner import (
+    GrypeDatabaseStatus,
     SYFT_IMAGE,
     ToolVulnerability,
     build_platform_cyclonedx,
+    database_expiry,
     ensure_grype_database,
+    grype_database_status,
     isolated_dependency_scan_root,
     offline_assets_dir,
     parse_trivy_security_findings,
     scan_with_syft_grype,
     temporary_sbom_file,
+    update_grype_database,
 )
 from types import SimpleNamespace
 
@@ -112,6 +116,63 @@ def test_stale_grype_database_is_not_reimported_on_every_scan(monkeypatch, tmp_p
     assert "database is too old" in str(error)
     assert len(calls) == 1
     assert "import" not in calls[0]
+
+
+def test_grype_database_status_parses_current_database_and_expiry(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.sca_tool_scanner.shutil.which", lambda _name: "C:/docker.exe")
+    monkeypatch.setattr("app.services.sca_tool_scanner.run_health_command", lambda _command: (0, "ok"))
+    monkeypatch.setattr(
+        "app.services.sca_tool_scanner.run_database_command",
+        lambda command, timeout: (0, '{"schemaVersion":"v6.1.9","built":"2026-08-31T06:37:31Z","path":"/cache/grype/db/6/vulnerability.db","valid":true}', ""),
+    )
+
+    status = grype_database_status()
+
+    assert status.status == "current"
+    assert status.valid is True
+    assert status.schema_version == "v6.1.9"
+    assert status.expires_at == "2026-09-30T06:37:31Z"
+    assert database_expiry("invalid") is None
+
+
+def test_grype_database_status_marks_invalid_database_as_stale(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.sca_tool_scanner.shutil.which", lambda _name: "C:/docker.exe")
+    monkeypatch.setattr("app.services.sca_tool_scanner.run_health_command", lambda _command: (0, "ok"))
+    monkeypatch.setattr(
+        "app.services.sca_tool_scanner.run_database_command",
+        lambda command, timeout: (1, '{"schemaVersion":"v6.1.9","built":"2026-07-01T00:00:00Z","path":"/cache/grype/db/6/vulnerability.db","valid":false}', "database is too old"),
+    )
+
+    status = grype_database_status()
+
+    assert status.status == "stale"
+    assert status.valid is False
+    assert status.can_update is True
+    assert "too old" in str(status.detail)
+
+
+def test_grype_database_update_uses_shared_cache_and_rechecks(monkeypatch, tmp_path) -> None:
+    commands: list[list[str]] = []
+    initial = GrypeDatabaseStatus(status="stale", valid=False, can_update=True)
+    current = GrypeDatabaseStatus(status="current", valid=True, schema_version="v6.1.9", can_update=True)
+    monkeypatch.setattr("app.services.sca_tool_scanner.grype_cache_dir", lambda: tmp_path / "grype-cache")
+    monkeypatch.setattr("app.services.sca_tool_scanner.grype_database_status", lambda: initial)
+    monkeypatch.setattr("app.services.sca_tool_scanner._read_grype_database_status", lambda: current)
+
+    def fake_run(command, timeout):
+        commands.append(command)
+        return 0, "database updated", ""
+
+    monkeypatch.setattr("app.services.sca_tool_scanner.run_database_command", fake_run)
+
+    updated, message, status = update_grype_database()
+
+    assert updated is True
+    assert status.valid is True
+    assert "通过有效性检查" in message
+    assert commands[0][-2:] == ["db", "update"]
+    assert "--pull=never" in commands[0]
+    assert f"{tmp_path / 'grype-cache'}:/cache" in commands[0]
 
 
 def test_trivy_security_parser_never_persists_secret_match() -> None:

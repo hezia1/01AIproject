@@ -14,7 +14,7 @@
 
 **OSV 路由**：普通扫描先用单次查询判断在线 OSV 是否可达；可达时使用最多 8 个并发查询。网络失败时整批回退人工导入的 `artifacts/sca-offline/osv-mirror.json`，避免每个组件重复等待网络超时；平台不会把在线查询结果自动写入镜像。显式设置 `SCA_OFFLINE_ONLY=true` 或 CI 使用 `--offline` 时不发起网络请求。
 
-**增强引擎编排**：Syft 对待测目录生成一次 CycloneDX SBOM；Grype 直接读取该 SBOM，不再自行遍历目录生成资产；Trivy 默认关闭漏洞扫描，只负责配置错误和明文密钥。Grype 数据库或执行不可用时，Trivy 才启用离线漏洞扫描作为回退。Grype 健康时，SBOM 漏洞匹配与 Trivy 源码检查并行执行；`.git`、`node_modules`、`dist`、`build`、`coverage` 和 `vendor` 等目录从 Trivy 扫描范围排除。Trivy 回退命中作为漏洞证据，未命中不作为完整 SBOM 的无漏洞证明。配置/密钥结果与组件 CVE 分开计数，且不保存疑似密钥的原始匹配文本。
+**增强引擎编排**：Syft 对待测目录生成一次 CycloneDX SBOM；Grype 直接读取该 SBOM，不再自行遍历目录生成资产；Trivy 默认关闭漏洞扫描，只负责配置错误和明文密钥。Grype 数据库或执行不可用时，Trivy 才启用离线漏洞扫描作为回退。Grype 健康时，SBOM 漏洞匹配与 Trivy 源码检查并行执行；`.git`、`node_modules`、`dist`、`build`、`coverage` 和 `vendor` 等目录从 Trivy 扫描范围排除。SCA 概览的引擎管理区可读取 Grype 数据库 schema、构建时间及按 720 小时上限计算的预计失效时间；过期或缺失时由用户显式触发联网更新，更新后再次校验。检测、更新和扫描共用 `artifacts/sca-offline/grype-cache`，日常扫描继续设置 `GRYPE_DB_AUTO_UPDATE=false`。Trivy 回退命中作为漏洞证据，未命中不作为完整 SBOM 的无漏洞证明。配置/密钥结果与组件 CVE 分开计数，且不保存疑似密钥的原始匹配文本。
 
 **边界**：尚无经过标注语料验证的漏洞准确率与生态兼容率；SCA Finding 当前不自动进入 DAST。
 

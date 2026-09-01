@@ -455,6 +455,19 @@ class ScaToolHealth(BaseModel):
     checks: list[ScaToolHealthCheck] = Field(default_factory=list)
 
 
+class GrypeDatabaseStatusResponse(BaseModel):
+    status: str
+    valid: bool
+    schema_version: str | None = None
+    built_at: str | None = None
+    expires_at: str | None = None
+    database_path: str | None = None
+    detail: str | None = None
+    can_update: bool = False
+    updated: bool | None = None
+    message: str | None = None
+
+
 class ScaScanResult(BaseModel):
     project_id: UUID
     scan_task_id: UUID
