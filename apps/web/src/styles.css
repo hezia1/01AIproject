@@ -1820,12 +1820,66 @@ th {
   background: #f8fafc;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
+  box-sizing: border-box;
   color: #334155;
   display: inline-flex;
   gap: 7px;
+  line-height: 1.35;
   min-height: 42px;
+  min-width: 0;
   padding: 0 12px;
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.inline-check > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inline-check small {
+  color: #64748b;
+  display: block;
+  font-size: 11px;
+}
+
+.sast-scan-config-grid {
+  align-items: stretch;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.sast-community-actions {
+  align-items: stretch;
+  grid-template-columns: minmax(220px, 1fr) minmax(320px, 1.5fr) minmax(190px, .8fr) minmax(150px, .65fr);
+}
+
+.sast-scan-config-grid > button,
+.sast-community-actions > button {
+  min-height: 52px;
+  white-space: normal;
+}
+
+.sast-base-rule-summary {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 12px;
+}
+
+.sast-base-rule-summary > span,
+.sast-base-rule-summary > small {
+  color: #64748b;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sast-base-rule-summary > strong {
+  color: #172033;
+  font-size: 14px;
 }
 
 .filter-grid {

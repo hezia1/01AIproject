@@ -22,6 +22,11 @@ async function assertNoOverflow(page, viewport, label) {
   return `${viewport.width}px ${label}: ${dimensions.document}/${dimensions.viewport}`;
 }
 
+async function assertSastControlsFit(page, viewport) {
+  const overflowing = await page.locator(".sast-rule-config-panel .inline-check, .sast-community-rules-panel .inline-check, .sast-rule-config-panel button, .sast-community-rules-panel button").evaluateAll((elements) => elements.filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent?.trim()));
+  assert(overflowing.length === 0, `${viewport.width}px SAST 配置控件文字横向溢出：${overflowing.join(" | ")}`);
+}
+
 (async () => {
   const browser = await chromium.launch({ channel, headless: true });
   const results = [];
@@ -60,6 +65,8 @@ async function assertNoOverflow(page, viewport, label) {
     assert(strategyText.includes("为什么保留 Semgrep"), `${viewport.width}px SAST 未说明 Semgrep 与本地规则的互补关系`);
     assert(strategyText.includes("固定版 Semgrep") && strategyText.includes("Semgrep YAML 规则包"), `${viewport.width}px SAST 前端缺少 Semgrep 配置与规则包`);
     assert(strategyText.includes("Semgrep 社区安全规则") && strategyText.includes("下载社区规则"), `${viewport.width}px SAST 前端缺少社区规则人工更新入口`);
+    assert(strategyText.includes("平台内置离线安全规则"), `${viewport.width}px SAST 基础规则仍使用不清晰的路径输入`);
+    await assertSastControlsFit(page, viewport);
     const strategyTabs = await page.locator(".module-segmented-tabs button").allTextContents();
     assert(JSON.stringify(strategyTabs) === JSON.stringify(["Semgrep 增强", "Git 增量", "本地规则", "CI / Worker"]), `${viewport.width}px SAST 策略分类不正确`);
     await page.close();
