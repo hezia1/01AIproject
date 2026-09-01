@@ -1,6 +1,5 @@
 from datetime import datetime
 import io
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -11,7 +10,7 @@ import pytest
 from app.db_models import FindingRecord
 from app.models import SastScanRequest
 from app.services.sast_governance import add_custom_rule, add_suppression, apply_suppressions, effective_sast_profile, update_sast_profile, validate_custom_rule_payload
-from app.services.sast_community_rules import community_rules_status, selected_community_configs, update_community_rules
+from app.services.sast_community_rules import _framework_signal_present, _resolve_revision, community_rules_status, selected_community_configs, update_community_rules
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import scan_source_tree
 from app.services.sast_semgrep_rules import BUILTIN_CONFIG, builtin_rule_pack_path
@@ -198,10 +197,11 @@ def test_community_rules_update_is_explicit_pinned_and_language_selected(monkeyp
         )
     archive = archive_buffer.getvalue()
 
-    def fake_fetch(url, _limit):
-        return json.dumps({"sha": revision}).encode() if "api.github.com" in url else archive
+    def fake_fetch(_url, _limit):
+        return archive
 
     monkeypatch.setattr("app.services.sast_community_rules.COMMUNITY_RULES_ROOT", tmp_path / "rules-cache")
+    monkeypatch.setattr("app.services.sast_community_rules._resolve_revision", lambda _ref: revision)
     monkeypatch.setattr("app.services.sast_community_rules._fetch_bytes", fake_fetch)
     source = tmp_path / "source"
     source.mkdir()
@@ -222,6 +222,25 @@ def test_community_rules_update_is_explicit_pinned_and_language_selected(monkeyp
     assert not (tmp_path / "rules-cache" / revision / "rules" / "javascript" / "lang" / "correctness").exists()
     (tmp_path / "rules-cache" / "current.json").write_text('{"revision":"../../outside"}', encoding="utf-8")
     assert community_rules_status()["installed"] is False
+
+
+def test_community_rule_revision_prefers_git_without_github_api(monkeypatch):
+    revision = "b" * 40
+    monkeypatch.setattr("app.services.sast_community_rules.shutil.which", lambda name: "git" if name == "git" else None)
+    monkeypatch.setattr(
+        "app.services.sast_community_rules.subprocess.run",
+        lambda command, **_kwargs: SimpleNamespace(returncode=0, stdout=f"{revision}\trefs/heads/develop\n", stderr=""),
+    )
+    monkeypatch.setattr("app.services.sast_community_rules._fetch_bytes", lambda *_args: pytest.fail("GitHub API should not be called"))
+
+    assert _resolve_revision("develop") == revision
+
+
+def test_framework_detection_uses_dependency_name_boundaries():
+    signals = '{"dependencies":{"express":"4.21.0"}}'
+
+    assert _framework_signal_present("express", signals) is True
+    assert _framework_signal_present("ci", signals) is False
 
 
 def test_semgrep_missing_image_degrades_without_docker_run(monkeypatch, tmp_path):

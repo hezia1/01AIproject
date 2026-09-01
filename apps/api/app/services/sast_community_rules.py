@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 from threading import Lock
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -23,6 +24,7 @@ from zipfile import BadZipFile, ZipFile
 
 
 SOURCE_REPOSITORY = "https://github.com/semgrep/semgrep-rules"
+SOURCE_GIT_REPOSITORY = "https://github.com/semgrep/semgrep-rules.git"
 SOURCE_API = "https://api.github.com/repos/semgrep/semgrep-rules/commits/{ref}"
 SOURCE_ARCHIVE = "https://codeload.github.com/semgrep/semgrep-rules/zip/{revision}"
 RULES_LICENSE_URL = "https://semgrep.dev/legal/rules-license/"
@@ -144,15 +146,7 @@ def update_community_rules(*, source_ref: str = DEFAULT_SOURCE_REF, license_acce
         raise ValueError("社区规则版本只能是安全的分支、标签或提交 SHA")
 
     with _UPDATE_LOCK:
-        try:
-            revision_payload = json.loads(_fetch_bytes(SOURCE_API.format(ref=quote(ref, safe="")), 2 * 1024 * 1024).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CommunityRulesUnavailable("Semgrep 社区规则源返回了无效的版本信息") from exc
-        if not isinstance(revision_payload, dict):
-            raise CommunityRulesUnavailable("Semgrep 社区规则源返回了无效的版本信息")
-        revision = str(revision_payload.get("sha") or "").lower()
-        if not re.fullmatch(r"[0-9a-f]{40}", revision):
-            raise CommunityRulesUnavailable("Semgrep 社区规则源没有返回有效提交 SHA")
+        revision = _resolve_revision(ref)
         archive = _fetch_bytes(SOURCE_ARCHIVE.format(revision=revision), MAX_ARCHIVE_BYTES)
         archive_sha256 = hashlib.sha256(archive).hexdigest()
         target = COMMUNITY_RULES_ROOT / revision
@@ -231,7 +225,7 @@ def select_rule_directories(rules_root: Path, technologies: list[str], dependenc
         technology_root = rules_root / technology
         if not technology_root.is_dir():
             continue
-        if technology == "problem-based-packs":
+        if technology in {"generic", "problem-based-packs"}:
             selected.append(technology_root)
             continue
         base_candidates = [technology_root / "lang" / "security", technology_root / "audit", technology_root / "security"]
@@ -258,11 +252,54 @@ def _framework_signal_present(framework: str, signals: str) -> bool:
         "react": ("react", "next"),
     }
     markers = aliases.get(framework, (framework,))
-    return any(marker in signals for marker in markers)
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])", signals) for marker in markers)
+
+
+def _resolve_revision(ref: str) -> str:
+    if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        return ref.lower()
+    git = shutil.which("git")
+    if git:
+        patterns = [ref] if ref.startswith("refs/") else [f"refs/heads/{ref}", f"refs/tags/{ref}", f"refs/tags/{ref}^{{}}"]
+        environment = dict(os.environ)
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        environment["GIT_LFS_SKIP_SMUDGE"] = "1"
+        try:
+            completed = subprocess.run(
+                [git, "ls-remote", SOURCE_GIT_REPOSITORY, *patterns],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+                env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            candidates = [line.split("\t", 1)[0].lower() for line in completed.stdout.splitlines() if "\t" in line]
+            revision = next((value for value in reversed(candidates) if re.fullmatch(r"[0-9a-f]{40}", value)), "")
+            if revision:
+                return revision
+
+    try:
+        revision_payload = json.loads(_fetch_bytes(SOURCE_API.format(ref=quote(ref, safe="")), 2 * 1024 * 1024).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CommunityRulesUnavailable("Semgrep 社区规则源返回了无效的版本信息") from exc
+    if not isinstance(revision_payload, dict):
+        raise CommunityRulesUnavailable("Semgrep 社区规则源返回了无效的版本信息")
+    revision = str(revision_payload.get("sha") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise CommunityRulesUnavailable("Semgrep 社区规则源没有返回有效提交 SHA")
+    return revision
 
 
 def _install_archive(archive: bytes, target: Path, source_ref: str, revision: str, archive_sha256: str) -> None:
     COMMUNITY_RULES_ROOT.mkdir(parents=True, exist_ok=True)
+    if target.parent.resolve() != COMMUNITY_RULES_ROOT.resolve() or target.name != revision or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise CommunityRulesUnavailable("Semgrep 社区规则安装目标不安全")
+    if target.exists():
+        shutil.rmtree(target)
     staging = COMMUNITY_RULES_ROOT / f".staging-{uuid4().hex}"
     rules_target = staging / "rules"
     inventory: dict[str, dict[str, int]] = {}
@@ -321,8 +358,16 @@ def _install_archive(archive: bytes, target: Path, source_ref: str, revision: st
             "selection": "security YAML only; scans select detected language/config roots",
         }
         _write_json_atomic(staging / "manifest.json", manifest)
-        staging.replace(target)
+        if os.name == "nt":
+            # Renaming a large freshly extracted directory can be denied by
+            # Windows file-indexing/antivirus handles. The active pointer is
+            # still written only after this full copy completes.
+            shutil.copytree(staging, target)
+        else:
+            staging.replace(target)
     except (BadZipFile, OSError) as exc:
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
         raise CommunityRulesUnavailable(f"Semgrep 社区规则安装失败：{exc}") from exc
     finally:
         if staging.exists():
@@ -349,7 +394,11 @@ def _security_rule_path(path: Path) -> bool:
 
 
 def _fetch_bytes(url: str, limit: int) -> bytes:
-    request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ai-security-platform-community-rules/1"})
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "ai-security-platform-community-rules/1"}
+    github_token = os.getenv("GITHUB_TOKEN", "").strip()
+    if github_token and "api.github.com" in url:
+        headers["Authorization"] = f"Bearer {github_token}"
+    request = Request(url, headers=headers)
     try:
         with urlopen(request, timeout=120) as response:
             try:
@@ -359,7 +408,11 @@ def _fetch_bytes(url: str, limit: int) -> bytes:
             if declared > limit:
                 raise CommunityRulesUnavailable("Semgrep 社区规则下载超过大小上限")
             payload = response.read(limit + 1)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+    except HTTPError as exc:
+        if exc.code == 403 and "api.github.com" in url:
+            raise CommunityRulesUnavailable("GitHub API 请求受限；请确认本机 Git 可用，或设置 GITHUB_TOKEN 后重试") from exc
+        raise CommunityRulesUnavailable(f"无法连接 Semgrep 社区规则源：{exc}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
         raise CommunityRulesUnavailable(f"无法连接 Semgrep 社区规则源：{exc}") from exc
     if len(payload) > limit:
         raise CommunityRulesUnavailable("Semgrep 社区规则下载超过大小上限")
