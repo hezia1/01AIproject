@@ -9,9 +9,14 @@ Jenkins and Azure DevOps. Every template invokes `scripts/sast_ci.py`, retains
 JSON/SARIF evidence and returns a non-zero exit code when the configured local
 quality threshold is met.
 
-No template downloads Semgrep images or remote rule packs. If an organization
-enables the optional Semgrep engine, it must preload the pinned image and rules
-under `<repository>\artifacts\sast-offline\` on its own runner.
+No template and no scan downloads Semgrep images or remote rule packs. The SAST
+governance page exposes a separate, operator-triggered community-rule update:
+after accepting the Semgrep Rules License it resolves the official repository
+revision, stores security YAML below
+`<repository>\artifacts\sast-offline\community-rules\<commit-sha>\`, and activates
+that immutable local snapshot. CI runners must preload or restore this ignored
+artifact directory themselves. Scans select only the locally available roots
+matching the source languages/configuration types and never update rules.
 
 For a pull request, pass the merge-base or target commit with `--baseline` and
 `--changed-files-only`. Keep a full Git history for history-secret scanning.

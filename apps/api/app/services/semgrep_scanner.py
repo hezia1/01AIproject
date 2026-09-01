@@ -86,11 +86,15 @@ def build_semgrep_command(root: Path, configs: Iterable[str | Path], include_pat
         for index, config in enumerate(values):
             if isinstance(config, Path) or Path(str(config)).is_absolute():
                 path = Path(config).resolve()
-                if not path.is_file():
-                    raise SemgrepUnavailable(f"Semgrep config file does not exist: {path}")
+                if not path.exists() or not (path.is_file() or path.is_dir()):
+                    raise SemgrepUnavailable(f"Semgrep config path does not exist: {path}")
                 mount = f"/sast-config/{index}"
-                docker_mount_args.extend(["-v", f"{path.parent}:{mount}:ro"])
-                docker_config_args.extend(["--config", f"{mount}/{path.name}"])
+                if path.is_dir():
+                    docker_mount_args.extend(["-v", f"{path}:{mount}:ro"])
+                    docker_config_args.extend(["--config", mount])
+                else:
+                    docker_mount_args.extend(["-v", f"{path.parent}:{mount}:ro"])
+                    docker_config_args.extend(["--config", f"{mount}/{path.name}"])
             else:
                 docker_config_args.extend(["--config", str(config)])
         return [

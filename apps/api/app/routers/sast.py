@@ -34,6 +34,7 @@ from app.services.sast_git import collect_git_context, git_history_secret_findin
 from app.services.sast_sarif import build_sast_sarif
 from app.services.sast_scanner import ParsedFinding, SastScanOutput, dedupe_findings, group_findings_by_issue, sast_tool_health, scan_source_tree
 from app.services.sast_semgrep_rules import materialize_semgrep_rule_packs, semgrep_rule_preflight
+from app.services.sast_community_rules import CommunityRulesUnavailable, community_rules_status, selected_community_configs, update_community_rules
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 from app.services.audit import record_audit
 
@@ -329,7 +330,37 @@ def run_project_agent_review(project_id: UUID, request: Request, db: Session = D
 
 @router.get("/tool-health")
 def get_sast_tool_health() -> dict[str, object]:
-    return sast_tool_health()
+    return {**sast_tool_health(), "community_rules": community_rules_status()}
+
+
+@router.get("/community-rules")
+def get_sast_community_rules() -> dict[str, object]:
+    return community_rules_status()
+
+
+@router.post("/community-rules/update")
+def update_sast_community_rules(payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    try:
+        status = update_community_rules(
+            source_ref=str(payload.get("source_ref") or "develop"),
+            license_accepted=payload.get("license_accepted") is True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CommunityRulesUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    identity = getattr(request.state, "identity", None)
+    if identity is not None:
+        record_audit(
+            db,
+            tenant_id=identity.tenant_id,
+            user_id=identity.user_id,
+            action="sast.community_rules.update",
+            outcome="completed",
+            detail={"revision": status.get("revision"), "rule_count": status.get("rule_count")},
+        )
+        db.commit()
+    return status
 
 
 @router.get("/ai-health")
@@ -638,13 +669,30 @@ def run_sast_engines(source_path: str, profile: dict[str, object], include_paths
     outputs: list[SastScanOutput] = []
     engine_status: dict[str, dict[str, object]] = {}
     if profile["semgrep_enabled"]:
+        community_status: dict[str, object] | None = None
         try:
             semgrep_rules = profile.get("semgrep_rules") if isinstance(profile.get("semgrep_rules"), list) else []
-            extra_configs = materialize_semgrep_rule_packs(item for item in semgrep_rules if isinstance(item, dict))
+            project_configs = materialize_semgrep_rule_packs(item for item in semgrep_rules if isinstance(item, dict))
+            community_configs, community_status = selected_community_configs(
+                source_path,
+                enabled=bool(profile.get("community_rules_enabled", True)),
+            )
+            extra_configs = [*community_configs, *project_configs]
             outputs.append(scan_with_semgrep(source_path, str(profile["semgrep_config"]), extra_configs=extra_configs, include_paths=include_paths))
-            engine_status["semgrep"] = {"status": "completed", "config": profile["semgrep_config"], "custom_yaml_rule_packs": len(extra_configs), "scan_scope": "git-diff" if include_paths else "source-tree"}
+            engine_status["semgrep"] = {
+                "status": "completed",
+                "config": profile["semgrep_config"],
+                "custom_yaml_rule_packs": len(project_configs),
+                "community_rules": community_status,
+                "scan_scope": "git-diff" if include_paths else "source-tree",
+            }
         except SemgrepUnavailable as exc:
-            engine_status["semgrep"] = {"status": "degraded", "config": profile["semgrep_config"], "detail": str(exc)}
+            engine_status["semgrep"] = {
+                "status": "degraded",
+                "config": profile["semgrep_config"],
+                "detail": str(exc),
+                "community_rules": community_status or community_rules_status(),
+            }
     else:
         engine_status["semgrep"] = {"status": "disabled", "config": profile["semgrep_config"]}
     if profile["include_local_rules"]:

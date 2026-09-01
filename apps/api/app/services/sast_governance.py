@@ -16,6 +16,7 @@ DEFAULT_SAST_PROFILE: dict[str, object] = {
     "profile_version": 1,
     "rule_pack_version": BUILTIN_RULE_PACK_VERSION,
     "semgrep_enabled": True,
+    "community_rules_enabled": True,
     "semgrep_config": BUILTIN_CONFIG,
     "include_local_rules": True,
     "clear_previous": True,
@@ -55,6 +56,7 @@ def effective_sast_profile(config: dict[str, object] | None) -> dict[str, object
     except (TypeError, ValueError):
         profile["profile_version"] = 1
     profile["semgrep_enabled"] = bool(profile.get("semgrep_enabled"))
+    profile["community_rules_enabled"] = bool(profile.get("community_rules_enabled"))
     profile["include_local_rules"] = bool(profile.get("include_local_rules"))
     profile["clear_previous"] = bool(profile.get("clear_previous"))
     profile["suppressions"] = normalize_suppressions(profile.get("suppressions"))
@@ -74,7 +76,7 @@ def effective_sast_profile(config: dict[str, object] | None) -> dict[str, object
 
 def update_sast_profile(config: dict[str, object] | None, payload: dict[str, object]) -> dict[str, object]:
     profile = effective_sast_profile(config)
-    for key in ("semgrep_enabled", "include_local_rules", "clear_previous", "scan_git_history_secrets", "changed_files_only", "ai_enabled", "ai_auto_scan", "ai_include_fix_drafts"):
+    for key in ("semgrep_enabled", "community_rules_enabled", "include_local_rules", "clear_previous", "scan_git_history_secrets", "changed_files_only", "ai_enabled", "ai_auto_scan", "ai_include_fix_drafts"):
         if key in payload:
             if not isinstance(payload[key], bool):
                 raise ValueError(f"{key} must be a boolean")

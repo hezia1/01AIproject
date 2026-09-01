@@ -26,7 +26,7 @@
 | 模块 | 当前能力 | 主要输出 |
 | --- | --- | --- |
 | SCA | 多生态依赖解析、SBOM、漏洞与许可证分析、依赖图、VEX、例外和质量门禁 | 组件清单、风险、依赖关系、CycloneDX/SPDX、门禁结果 |
-| SAST | 本地规则、Semgrep YAML 规则、有限数据流分析、Git 基线与历史密钥证据、可选 DeepSeek 七角色复核 | 代码 Finding、证据、SARIF、修复草案、扫描差异 |
+| SAST | 本地规则、固定版本社区/项目 Semgrep YAML 规则、有限数据流分析、Git 基线与历史密钥证据、可选 DeepSeek 七角色复核 | 代码 Finding、证据、SARIF、修复草案、扫描差异 |
 | AGENT | 解析 Agent 指令、Prompt、Skill、MCP、工具和插件配置，归一化权限与资源边界 | Agent 资产、权限矩阵、信任评分、差异与门禁结果 |
 | DAST | 将可动态验证的 SAST/AGENT Finding 转换为受控策略，执行同源 HTTP、浏览器及差分验证 | 验证队列、运行快照、证据链、三色裁决、专项报告 |
 | SANDBOX | 识别常见项目启动信息，在隔离 Docker 网络中启动目标和受控依赖，执行固定探针 | 目标实例、任务事件、HAR/截图/控制台/时延等运行证据 |
@@ -212,7 +212,7 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 
 - SCA 支持 npm、PyPI、Maven、Go、Bundler、Composer、Cargo 和 NuGet 的常见清单/锁文件。启用 Docker 增强后，只有 `package.json` 而没有锁文件/安装目录的 npm 项目会在排除常见生成目录的临时源码副本中，通过固定 Node 镜像执行 `npm install --package-lock-only --ignore-scripts`；临时目录会清理，原项目不写入 `package-lock.json` 或 `node_modules`。
 - Docker 增强按职责执行：Syft 只生成一次 CycloneDX SBOM，Grype 直接读取该 SBOM 做组件漏洞匹配，Trivy 默认只扫描配置错误和明文密钥。Grype 健康检查失败时，Trivy 才在同一次源码扫描中启用漏洞匹配作为回退；Grype 健康时，Grype 与 Trivy 并行执行。Trivy 回退命中可确认漏洞，但未命中不会代替完整 SBOM 匹配而把组件自动标记为安全。配置和密钥结果单独保存并展示，不计入组件漏洞数量；疑似密钥的原始匹配值不会保存。
-- SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。JavaScript/TypeScript 本地规则覆盖命令执行、SQL 模板、对象越权、批量赋值、JWT 算法、Cookie、CORS、用户正则、敏感请求日志和错误披露等高价值模式；同一规则的多处命中归并为一个 Finding，并保留全部代码位置。
+- SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。Semgrep 社区安全规则只在治理界面由用户确认许可证后显式更新到 `artifacts/sast-offline/community-rules`；更新固定官方仓库提交 SHA，扫描阶段不联网，并按源码语言与配置类型只加载本地匹配目录。JavaScript/TypeScript 本地规则覆盖命令执行、SQL 模板、对象越权、批量赋值、JWT 算法、Cookie、CORS、用户正则、敏感请求日志和错误披露等高价值模式；同一规则的多处命中归并为一个 Finding，并保留全部代码位置。
 - AGENT 扫描 Markdown Frontmatter、JSON、YAML、TOML 及常见 Agent/MCP/插件配置。
 - SANDBOX 会读取 `package.json`、Python 依赖文件、`pom.xml`、Gradle、`go.mod`、Dockerfile、Compose、Procfile 和 README 等上下文，生成受限启动计划。
 - Node.js 启动端口会结合 `.env`、`package.json` 的 `main`/`module`/启动脚本以及根目录、`src/`、`server/`、`config/` 下的常见 JS/TS 入口识别；启动前页面会显示并允许校正容器端口和健康检查路径。

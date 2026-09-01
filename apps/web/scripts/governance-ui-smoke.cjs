@@ -59,6 +59,7 @@ async function assertNoOverflow(page, viewport, label) {
     const strategyText = await page.locator(".sast-workspace").innerText();
     assert(strategyText.includes("为什么保留 Semgrep"), `${viewport.width}px SAST 未说明 Semgrep 与本地规则的互补关系`);
     assert(strategyText.includes("固定版 Semgrep") && strategyText.includes("Semgrep YAML 规则包"), `${viewport.width}px SAST 前端缺少 Semgrep 配置与规则包`);
+    assert(strategyText.includes("Semgrep 社区安全规则") && strategyText.includes("下载社区规则"), `${viewport.width}px SAST 前端缺少社区规则人工更新入口`);
     const strategyTabs = await page.locator(".module-segmented-tabs button").allTextContents();
     assert(JSON.stringify(strategyTabs) === JSON.stringify(["Semgrep 增强", "Git 增量", "本地规则", "CI / Worker"]), `${viewport.width}px SAST 策略分类不正确`);
     await page.close();

@@ -15,7 +15,7 @@
 ### 静态与供应链扫描
 
 - SCA 多生态解析、SBOM、漏洞/许可证情报、依赖图、VEX、例外、差异、门禁与 CI。
-- SAST 本地/项目/Semgrep 规则、有限数据流、Git 基线、历史密钥证据、可选七角色 AI 复核、SARIF 与 CI。
+- SAST 本地/项目规则、人工更新并固定版本的社区 Semgrep 安全规则、有限数据流、Git 基线、历史密钥证据、可选七角色 AI 复核、SARIF 与 CI。
 - AGENT 指令/Prompt/Skill/MCP/工具/插件资产、权限矩阵、信任评分、差异、CLI 与 CI 门禁。
 
 ### 动态验证与治理
