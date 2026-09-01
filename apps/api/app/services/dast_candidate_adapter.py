@@ -169,6 +169,8 @@ def normalize_candidate(record: object, project: object, component: object | Non
     urls = _unique(URL_PATTERN.findall(evidence_text))
     if configured_origin:
         urls = [url for url in urls if _origin(url) == configured_origin]
+    else:
+        urls = [url for url in urls if _origin(url) is not None]
     paths = _unique(PATH_PATTERN.findall(evidence_text))
     base = configured_targets[0] if configured_targets else ""
     urls.extend(urljoin(base, path) for path in paths if base)
@@ -713,10 +715,18 @@ def _mounted_route_path(root: Path, route_file: Path, route_path: str) -> str:
 
 
 def _origin(value: str) -> tuple[str, str, int] | None:
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    try:
+        parsed = urlparse(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        # Source evidence commonly contains runtime templates such as
+        # ``http://localhost:${PORT}``.  They are useful code evidence but are
+        # not concrete DAST targets and must not abort the whole candidate list.
         return None
-    return parsed.scheme.lower(), parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80)
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        return None
+    return parsed.scheme.lower(), hostname.lower(), port or (443 if parsed.scheme == "https" else 80)
 
 
 def _injection_payload(name: str, location: str, value: str) -> dict[str, object]:

@@ -257,6 +257,30 @@ def test_dast_candidate_adapter_reuses_project_target_and_runtime_parameter() ->
     assert candidate["missing"] == []
 
 
+def test_dast_candidate_ignores_dynamic_source_url_with_template_port() -> None:
+    finding = SimpleNamespace(
+        source="SAST", rule_id="SAST.TAINT.JAVASCRIPT.SQL", title="SQL injection",
+        ai_review={"category": "sql_injection", "cwe": "CWE-89"},
+        evidence="console.log(`http://localhost:${PORT}`); GET /api/users parameter=id",
+        file_path="app.js", line_start=1,
+    )
+    project = SimpleNamespace(
+        runtime_url="http://127.0.0.1:54108", api_base_url=None, source_path="",
+    )
+
+    candidate = normalize_candidate(finding, project)
+
+    assert candidate["attack_surface"]["urls"] == ["http://127.0.0.1:54108/api/users"]
+    assert candidate["attack_surface"]["parameters"] == ["id"]
+    assert candidate["readiness"] == "ready"
+
+    without_target = normalize_candidate(
+        finding,
+        SimpleNamespace(runtime_url=None, api_base_url=None, source_path=""),
+    )
+    assert without_target["attack_surface"]["urls"] == []
+
+
 def test_dast_candidate_adapter_reports_only_real_blockers() -> None:
     finding = SimpleNamespace(
         source="AGENT", rule_id="agent.prompt-context", title="Prompt context reaches sensitive capability",

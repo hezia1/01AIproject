@@ -29,6 +29,14 @@ ROLE_ENV_FALLBACKS = {
     "peer_user": "DAST_FLOW_USER_B",
     "reset_test_account": "DAST_FLOW_RESET_TEST_ACCOUNT",
 }
+REGISTRATION_PATHS = (
+    "/register", "/signup", "/users/register", "/auth/register",
+    "/api/register", "/api/signup", "/api/auth/register",
+)
+LOGIN_PATHS = (
+    "/login", "/signin", "/users/login", "/auth/login",
+    "/api/login", "/api/signin", "/api/auth/login",
+)
 
 
 @dataclass
@@ -132,8 +140,7 @@ def _read_forms(opener: Any, url: str) -> list[Form]:
 
 
 def _registration_form(opener: Any, base_url: str) -> Form | None:
-    candidates = ("/register", "/signup", "/users/register", "/auth/register", "/api/register")
-    for path in candidates:
+    for path in REGISTRATION_PATHS:
         forms = _read_forms(opener, urljoin(base_url.rstrip("/") + "/", path.lstrip("/")))
         for form in forms:
             names = {name.lower() for name in form.inputs}
@@ -164,8 +171,7 @@ def _cookie_header(jar: CookieJar) -> str:
 
 
 def _login_form(opener: Any, base_url: str) -> Form | None:
-    candidates = ("/login", "/signin", "/users/login", "/auth/login")
-    for path in candidates:
+    for path in LOGIN_PATHS:
         forms = _read_forms(opener, urljoin(base_url.rstrip("/") + "/", path.lstrip("/")))
         for form in forms:
             names = {name.lower() for name in form.inputs}
@@ -205,7 +211,7 @@ def _login_identity(base_url: str, identity: dict[str, str]) -> str | None:
     return _cookie_header(jar) or None
 
 
-def _create_identity(base_url: str, sequence: int) -> dict[str, object] | None:
+def _create_form_identity(base_url: str, sequence: int) -> dict[str, object] | None:
     jar = CookieJar()
     opener = build_opener(NoRedirect(), HTTPCookieProcessor(jar))
     form = _registration_form(opener, base_url)
@@ -254,6 +260,90 @@ def _create_identity(base_url: str, sequence: int) -> dict[str, object] | None:
     return {"cookie": _login_identity(base_url, identity) or cookie, **identity}
 
 
+def _json_post(opener: Any, url: str, payload: dict[str, str]) -> tuple[int, dict[str, object]]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "AI-Security-Sandbox/1.0"},
+        method="POST",
+    )
+    try:
+        response = opener.open(request, timeout=5)
+        status = int(getattr(response, "status", 200))
+        raw = response.read(128_000)
+    except HTTPError as exc:
+        status = int(exc.code)
+        raw = exc.read(128_000)
+    except (URLError, TimeoutError, OSError, ValueError):
+        return 0, {}
+    try:
+        parsed = json.loads(raw.decode("utf-8", errors="replace")) if raw else {}
+    except json.JSONDecodeError:
+        parsed = {}
+    return status, parsed if isinstance(parsed, dict) else {}
+
+
+def _json_auth_artifact(payload: dict[str, object], jar: CookieJar) -> dict[str, str] | None:
+    cookie = _cookie_header(jar)
+    if cookie:
+        return {"cookie": cookie}
+    containers = [payload]
+    for key in ("data", "result", "auth"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    for container in containers:
+        for key in ("token", "access_token", "accessToken", "jwt", "id_token"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return {"token": value.strip()}
+    return None
+
+
+def _login_json_identity(base_url: str, identity: dict[str, str]) -> dict[str, str] | None:
+    for path in LOGIN_PATHS:
+        jar = CookieJar()
+        opener = build_opener(NoRedirect(), HTTPCookieProcessor(jar))
+        status, payload = _json_post(opener, urljoin(base_url.rstrip("/") + "/", path.lstrip("/")), {
+            "username": identity["username"],
+            "email": identity["email"],
+            "password": identity["password"],
+        })
+        if 200 <= status < 300 and (artifact := _json_auth_artifact(payload, jar)):
+            return artifact
+    return None
+
+
+def _create_json_identity(base_url: str, sequence: int) -> dict[str, object] | None:
+    suffix = token_hex(6)
+    identity = {
+        "username": f"dast_user_{sequence}_{suffix}",
+        "email": f"dast_{sequence}_{suffix}@example.invalid",
+        "display_name": f"DAST Test User {sequence}",
+        "password": f"Dast!{token_hex(12)}aA1",
+    }
+    registration_payload = {
+        **identity,
+        "name": identity["display_name"],
+        "password_confirmation": identity["password"],
+        "confirm_password": identity["password"],
+    }
+    for path in REGISTRATION_PATHS:
+        jar = CookieJar()
+        opener = build_opener(NoRedirect(), HTTPCookieProcessor(jar))
+        status, payload = _json_post(opener, urljoin(base_url.rstrip("/") + "/", path.lstrip("/")), registration_payload)
+        if not 200 <= status < 300:
+            continue
+        artifact = _login_json_identity(base_url, identity) or _json_auth_artifact(payload, jar)
+        if artifact:
+            return {**artifact, **identity}
+    return None
+
+
+def _create_identity(base_url: str, sequence: int) -> dict[str, object] | None:
+    return _create_form_identity(base_url, sequence) or _create_json_identity(base_url, sequence)
+
+
 def bootstrap_target_identities(target: Any) -> dict[str, object]:
     """Create two disposable users for a healthy Docker target when possible."""
     project_key, target_key = str(target.project_id), str(target.id)
@@ -270,7 +360,7 @@ def bootstrap_target_identities(target: Any) -> dict[str, object]:
         existing = _vault.get(project_key)
         if existing and {"authenticated_user", "resource_owner", "peer_user", "reset_test_account"}.issubset(existing):
             _target_projects[target_key] = project_key
-            return {**identity_summary(project_key), "detail": "项目级临时测试身份已就绪并可供 DAST 自动复用。", "source": "sandbox-form-bootstrap"}
+            return {**identity_summary(project_key), "detail": "项目级临时测试身份已就绪并可供 DAST 自动复用。", "source": "sandbox-identity-bootstrap"}
     first = _create_identity(str(target.runtime_url), 1)
     second = _create_identity(str(target.runtime_url), 2)
     if not first or not second:
@@ -278,7 +368,7 @@ def bootstrap_target_identities(target: Any) -> dict[str, object]:
             "status": "adapter_required",
             "roles": [],
             "role_count": 0,
-            "detail": "未能通过常见注册表单安全创建测试身份；项目需要登录适配器或管理员密钥引用。",
+            "detail": "未能通过常见 HTML 表单或 JSON API 安全创建测试身份；项目需要登录适配器或管理员密钥引用。",
             "secret_values_exposed": False,
         }
     with _lock:
@@ -289,4 +379,4 @@ def bootstrap_target_identities(target: Any) -> dict[str, object]:
             "reset_test_account": dict(first),
         }
         _target_projects[target_key] = project_key
-    return {**identity_summary(project_key), "detail": "已自动创建两名一次性测试用户；Cookie/密码仅保存在后端内存，不写入页面、数据库或日志。", "source": "sandbox-form-bootstrap", "initialized_at": datetime.utcnow().isoformat()}
+    return {**identity_summary(project_key), "detail": "已自动创建两名一次性测试用户；会话凭据和密码仅保存在后端内存，不写入页面、数据库或日志。", "source": "sandbox-identity-bootstrap", "initialized_at": datetime.utcnow().isoformat()}

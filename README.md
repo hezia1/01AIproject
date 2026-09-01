@@ -193,6 +193,8 @@ DeepSeek 只是一项可选增强能力。未配置或调用失败时，本地�
 
 SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验证、属于当前项目/当前扫描批次，并且能够构造目标与证据标准的 SAST/AGENT Finding 才进入 DAST；SCA 组件风险不进入 DAST 队列。
 
+源码证据中的动态 URL 模板（例如 `${PORT}`）只作为代码上下文，不会被当作可连接目标，也不会导致整批 DAST 候选加载失败。DAST 的“三色裁决”只统计已经完成且证据完整的运行任务；候选队列有内容但尚未执行时，三色裁决仍可为 0。
+
 ### SANDBOX 生命周期
 
 - 目标容器使用平台管理标签、内部网络、能力删除、只读根文件系统和资源上限。
@@ -215,6 +217,7 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 - SAST 对常见 Python、JavaScript/TypeScript 等源码执行本地规则和有限语义分析，并可接入已发布的项目 Semgrep 规则。Semgrep 社区安全规则只在治理界面由用户确认许可证后显式更新到 `artifacts/sast-offline/community-rules`；更新固定官方仓库提交 SHA，扫描阶段不联网，并按源码语言与配置类型只加载本地匹配目录。JavaScript/TypeScript 本地规则覆盖命令执行、SQL 模板、对象越权、批量赋值、JWT 算法、Cookie、CORS、用户正则、敏感请求日志和错误披露等高价值模式；同一规则的多处命中归并为一个 Finding，并保留全部代码位置。
 - AGENT 扫描 Markdown Frontmatter、JSON、YAML、TOML 及常见 Agent/MCP/插件配置。
 - SANDBOX 会读取 `package.json`、Python 依赖文件、`pom.xml`、Gradle、`go.mod`、Dockerfile、Compose、Procfile 和 README 等上下文，生成受限启动计划。
+- 项目专属 Docker 目标健康后，SANDBOX 可通过常见 HTML 表单或 JSON 注册/登录 API 创建两名普通一次性测试用户；凭据仅保存在 API 进程内存中。非 Docker/已上线目标不会被自动注册账号，非通用身份流程仍需显式适配器或管理员密钥引用。
 - Node.js 启动端口会结合 `.env`、`package.json` 的 `main`/`module`/启动脚本以及根目录、`src/`、`server/`、`config/` 下的常见 JS/TS 入口识别；启动前页面会显示并允许校正容器端口和健康检查路径。
 - Compose 只作为依赖提示；项目自带的宿主端口、挂载、密钥和任意命令不会直接照搬。目前自动编排的辅助服务限定为 PostgreSQL 和 Redis。
 
