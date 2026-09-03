@@ -14,9 +14,14 @@ def test_password_hash_rejects_short_passwords() -> None:
     try:
         hash_password("short")
     except ValueError as exc:
-        assert "10" in str(exc)
+        assert "6" in str(exc)
     else:
         raise AssertionError("short passwords must be rejected")
+
+
+def test_six_character_password_is_accepted() -> None:
+    encoded = hash_password("abc123")
+    assert verify_password("abc123", encoded)
 
 
 def test_roles_are_limited_to_user_and_admin() -> None:

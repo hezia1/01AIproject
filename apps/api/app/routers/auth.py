@@ -18,7 +18,7 @@ LEGACY_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 class Credentials(BaseModel):
     username: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=10, max_length=200)
+    password: str = Field(min_length=6, max_length=200)
 
 
 class UserCreate(Credentials):
@@ -28,7 +28,7 @@ class UserCreate(Credentials):
 class UserUpdate(BaseModel):
     enabled: bool | None = None
     role: str | None = None
-    password: str | None = Field(default=None, min_length=10, max_length=200)
+    password: str | None = Field(default=None, min_length=6, max_length=200)
 
 
 def user_payload(user: UserRecord) -> dict[str, object]:

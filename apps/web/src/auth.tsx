@@ -69,12 +69,12 @@ function LoginPanel({ initialized, onAuthenticated }: { initialized: boolean; on
 
   return <main className="auth-shell"><form className="auth-card" onSubmit={(event) => void submit(event)}>
     <div className="auth-brand"><ShieldCheck size={32} /><div><strong>AI 安全平台</strong><span>{initialized ? "登录工作台" : "初始化管理员"}</span></div></div>
-    <p>{initialized ? "登录后进入项目检测与治理工作台。" : "首次启动需要创建管理员。平台不会生成或保存默认密码。"}</p>
+    <p>{initialized ? "使用管理员为你创建的账号登录。普通用户账号请由管理员在“管理中心 → 用户管理”中创建。" : "首次启动只需创建管理员。普通用户账号可在登录后进入“管理中心 → 用户管理”创建。"}</p>
     <label>用户名<input autoComplete="username" minLength={3} maxLength={120} value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
-    <label>密码<input type="password" autoComplete={initialized ? "current-password" : "new-password"} minLength={10} maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-    {!initialized ? <label>确认密码<input type="password" autoComplete="new-password" minLength={10} maxLength={200} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label> : null}
+    <label>密码<input type="password" placeholder="至少 6 位" autoComplete={initialized ? "current-password" : "new-password"} minLength={6} maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+    {!initialized ? <label>确认密码<input type="password" autoComplete="new-password" minLength={6} maxLength={200} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label> : null}
     {message ? <div className="auth-message" role="alert">{message}</div> : null}
     <button className="primary-action" disabled={submitting}>{submitting ? "请稍候…" : initialized ? "登录" : "创建管理员并登录"}</button>
-    <small>会话使用 HttpOnly Cookie；密码只以 scrypt 哈希形式保存。</small>
+    <small>安全说明：浏览器脚本不能读取登录会话，数据库也不会保存你的明文密码。</small>
   </form></main>;
 }

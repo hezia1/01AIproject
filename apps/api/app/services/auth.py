@@ -29,8 +29,8 @@ class Identity:
 
 
 def hash_password(password: str) -> str:
-    if len(password) < 10:
-        raise ValueError("Password must contain at least 10 characters")
+    if len(password) < 6:
+        raise ValueError("Password must contain at least 6 characters")
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
     return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
