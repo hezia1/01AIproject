@@ -34,11 +34,11 @@ async function login(page, username, password, admin = false) {
     await page.getByLabel("确认密码", { exact: true }).fill(testPassword);
     await page.getByRole("button", { name: "注册并登录", exact: true }).click();
     await page.getByRole("button", { name: "安全知识中枢", exact: true }).waitFor();
-    const registered = await page.evaluate(async () => (await fetch("http://127.0.0.1:8000/api/auth/me", { credentials: "include" })).json());
+    const registered = await page.evaluate(async () => (await fetch("/api/auth/me", { credentials: "include" })).json());
     userId = registered.id;
     assert(registered.role === "user", `公开注册不得创建管理员，实际身份为 ${registered.role}`);
 
-    const forbiddenStatus = await page.evaluate(async () => (await fetch("http://127.0.0.1:8000/api/auth/users", { credentials: "include" })).status);
+    const forbiddenStatus = await page.evaluate(async () => (await fetch("/api/auth/users", { credentials: "include" })).status);
     assert(forbiddenStatus === 403, `普通用户调用管理员接口应返回 403，实际为 ${forbiddenStatus}`);
 
     const navigation = await page.locator(".nav-list > .nav-item, .nav-list > .nav-admin-divider .nav-item").allTextContents();
@@ -66,7 +66,7 @@ async function login(page, username, password, admin = false) {
     console.log("Authentication and two-role layout UI smoke passed");
   } finally {
     if (userId) {
-      await page.evaluate(async (id) => { await fetch(`http://127.0.0.1:8000/api/auth/users/${id}`, { method: "DELETE", credentials: "include" }); }, userId).catch(() => undefined);
+      await page.evaluate(async (id) => { await fetch(`/api/auth/users/${id}`, { method: "DELETE", credentials: "include" }); }, userId).catch(() => undefined);
     }
     await browser.close();
   }

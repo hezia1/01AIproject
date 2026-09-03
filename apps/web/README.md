@@ -18,7 +18,7 @@ npm run dev
 http://localhost:5173
 ```
 
-默认 API 地址为 `http://127.0.0.1:8000`，请先启动后端及 PostgreSQL。
+开发服务器默认将同源 `/api` 代理到 `http://127.0.0.1:8000`，请先启动后端及 PostgreSQL。部署时应由反向代理在同一站点提供 `/api`；确需分离地址时可设置 `VITE_API_BASE_URL`，并同时正确配置 Cookie 与跨域策略。
 
 ## 构建验证
 
