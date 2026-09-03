@@ -1,9 +1,13 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { Activity, ArrowRight, BookOpen, Boxes, Bug, Check, FlaskConical, FolderKanban, GitBranch, LoaderCircle, Lock, Network, Play, Plus, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Activity, ArrowRight, BookOpen, Boxes, Bug, Check, FlaskConical, GitBranch, LoaderCircle, Lock, Network, Play, Plus, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { API_BASE, request, requestWithTimeout } from "./api";
+import { AuthGate, useAuth } from "./auth";
+import { UserAdministration } from "./admin";
+import { AppShell, type PrimaryView } from "./app-shell";
 import "./styles.css";
 
-type ViewKey = "projects" | "assets" | "detection" | "governance" | "knowledge" | "modules" | "sca" | "sast" | "agent" | "dast" | "sandbox" | "tasks" | "aspm";
+type ViewKey = "projects" | "assets" | "detection" | "governance" | "knowledge" | "reports" | "admin" | "modules" | "sca" | "sast" | "agent" | "dast" | "sandbox" | "tasks" | "aspm";
 type ModuleKey = "sast" | "sca" | "agent" | "dast" | "sandbox" | "aspm";
 type ExecutableModuleKey = Exclude<ModuleKey, "aspm">;
 type ModuleLoadingState = Record<ExecutableModuleKey, boolean>;
@@ -166,7 +170,6 @@ type KnowledgeRecommendation = { entry: KnowledgeEntry; score: number; reasons: 
 type KnowledgeWorkspace = { project_id: string; project_name: string; entries: KnowledgeEntry[]; recommendations: KnowledgeRecommendation[]; enterprise_published_count: number; status_counts: Record<string, number> };
 type ReportRow = { id: string; title: string; subtitle: string; summary: string; details: [string, string][] };
 
-const API_BASE = "http://127.0.0.1:8000/api";
 const DEFAULT_ENABLED_MODULES: ModuleKey[] = ["sast", "sca", "aspm"];
 const OPTIONAL_MODULES: ModuleKey[] = ["sast", "sca", "agent", "dast", "sandbox"];
 const EMPTY_MODULE_LOADING: ModuleLoadingState = { sca: false, sast: false, agent: false, dast: false, sandbox: false };
@@ -228,10 +231,11 @@ function Root() {
     window.addEventListener("beforeunload", cleanup);
     return () => { window.removeEventListener("pagehide", cleanup); window.removeEventListener("beforeunload", cleanup); };
   }, []);
-  return <App />;
+  return <AuthGate><App /></AuthGate>;
 }
 
 function App() {
+  const { isAdmin } = useAuth();
   const [activeView, setActiveView] = useState<ViewKey>("detection");
   const [modules, setModules] = useState<SecurityModule[]>(fallbackModules);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -940,7 +944,7 @@ function App() {
     if (loading || unifiedLoadingRef.current || moduleLoadingRef.current.dast) return setStatus("DAST 已有任务正在执行");
     setModuleBusy("dast", true);
     try {
-      const response = await fetch(`${API_BASE}/dast/projects/${project.id}/report.html`);
+      const response = await fetch(`${API_BASE}/dast/projects/${project.id}/report.html`, { credentials: "include" });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
@@ -1065,7 +1069,7 @@ function App() {
     setModuleBusy("sca", true);
     try {
       const scanQuery = selectedScaScanId ? `&scan_task_id=${selectedScaScanId}` : "";
-      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/sbom?format=${format}${scanQuery}`);
+      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/sbom?format=${format}${scanQuery}`, { credentials: "include" });
       if (!response.ok) {
         let detail = `${response.status} ${response.statusText}`;
         try {
@@ -1098,7 +1102,7 @@ function App() {
     setModuleBusy("sca", true);
     try {
       const scanQuery = selectedScaScanId ? `?scan_task_id=${selectedScaScanId}` : "";
-      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/report.html${scanQuery}`);
+      const response = await fetch(`${API_BASE}/sca/projects/${project.id}/report.html${scanQuery}`, { credentials: "include" });
       if (!response.ok) {
         let detail = `${response.status} ${response.statusText}`;
         try {
@@ -1126,32 +1130,46 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar"><div className="brand"><ShieldCheck size={26} /><div><strong>AI 安全平台</strong><span>Application Security</span></div></div><nav className="nav-list">
-        <NavButton active={activeView === "projects"} onClick={() => setActiveView("projects")} icon={<FolderKanban size={18} />} label="项目管理" />
-        <NavButton active={activeView === "assets"} onClick={() => setActiveView("assets")} icon={<GitBranch size={18} />} label="项目资产" />
-        <NavButton active={activeView === "detection"} onClick={() => setActiveView("detection")} icon={<Play size={18} />} label="安全检测" />
-        <NavButton active={activeView === "governance"} onClick={() => setActiveView("governance")} icon={<ShieldCheck size={18} />} label="治理总览" />
-        <NavButton active={activeView === "knowledge"} onClick={() => setActiveView("knowledge")} icon={<BookOpen size={18} />} label="安全知识中枢" />
-      </nav></aside>
-      <section className="workspace"><header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><div className="current-project-pill"><span>当前项目</span><strong>{project?.name ?? "未选择"}</strong></div><button className="primary-action" onClick={() => void bootstrap()} disabled={projectControlsLoading}>刷新数据</button></div></header>
+    <AppShell activeView={activeView as PrimaryView} projects={projects} project={project} busy={projectControlsLoading} onNavigate={(view) => setActiveView(view)} onSelectProject={(projectId) => { const next = projects.find((item) => item.id === projectId); if (next) void selectProject(next); }} onRefresh={() => void bootstrap()}>
         <div className={`api-status ${status.includes("失败") || status.includes("未连接") ? "warning" : "ok"}`}>{status}</div>
+        {(activeView === "projects" || activeView === "assets") ? <nav className="project-section-tabs" aria-label="项目工作区"><button className={activeView === "projects" ? "active" : ""} onClick={() => setActiveView("projects")}>项目列表与新增</button><button className={activeView === "assets" ? "active" : ""} disabled={!project} onClick={() => setActiveView("assets")}>资产配置与准备度</button></nav> : null}
         {activeView === "projects" && <ProjectOnboardingWorkspace projects={projects} project={project} draft={projectDraft} importMode={projectImportMode} zipFile={projectZipFile} loading={projectControlsLoading} onDraftChange={setProjectDraft} onImportModeChange={setProjectImportMode} onZipFileChange={setProjectZipFile} onCreate={createProject} onSelect={(nextProject) => void selectProject(nextProject)} onDelete={deleteProject} />}
         {activeView === "assets" && <><ProjectReadinessPanel project={project} readiness={projectReadiness} onOpenDetection={() => setActiveView("detection")} /><ProjectAssetConfig project={project} loading={projectControlsLoading} onSave={updateProjectAssets} /><ProjectAssets project={project} assetProbe={assetProbe} enabledModules={enabledModules} components={components} findings={findings} validations={validations} evidence={evidence} summary={summary} onOpenTasks={() => setActiveView("detection")} onOpenModules={() => setActiveView("detection")} /></>}
         {activeView === "detection" && <SecurityDetectionCenter modules={optionalModules} project={project} enabledModules={enabledModules} savingKey={savingKey} loading={loading || unifiedLoading} runBlocked={anyModuleLoading} moduleLoading={moduleLoading} executionSteps={executionSteps} scanMode={scanMode} sourcePath={sourcePath} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} onToggle={toggleModule} onEnableRelated={enableRelatedModules} onScanModeChange={setScanMode} onSourcePathChange={(value) => { setSourcePath(value); setSastPath(value); setAgentPath(value); }} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onRun={runUnifiedSecurityCheck} />}
     {activeView === "governance" && <GovernanceCenter project={project} enabledModules={enabledModules} summary={summary} components={components} findings={findings} validations={validations} evidence={evidence} graph={evidenceGraph} retestComparisons={retestComparisons} scaScanHistory={scaScanHistory} agentScanHistory={agentScanHistory} agentSnapshot={agentSnapshot} agentScanDiff={agentScanDiff} agentAuditDiff={agentAuditDiff} selectedScaScanId={selectedScaScanId} scaScanDiff={scaScanDiff} dependencyGraph={dependencyGraph} scaToolScanEnabled={scaToolScanEnabled} sandboxTemplates={sandboxTemplates} dastStrategies={dastStrategies} dastStrategyId={dastStrategyId} dastTargetConfirmation={dastTargetConfirmation} loading={loading} unifiedLoading={unifiedLoading} moduleLoading={moduleLoading} targetUrl={targetUrl} runCommand={runCommand} sandboxImage={sandboxImage} selectedFindingId={correlationFindingId} selectedValidationId={correlationValidationId} onTargetUrlChange={setTargetUrl} onRunCommandChange={setRunCommand} onSandboxImageChange={setSandboxImage} onDastStrategyChange={setDastStrategyId} onDastTargetConfirmationChange={setDastTargetConfirmation} onScaToolScanChange={setScaToolScanEnabled} onSelectScaScan={selectScaScanSnapshot} onExportScaSbom={exportScaSbom} onExportScaReport={exportScaReport} onRunSastAgentReview={runSastAgentReview} onRunAgentAiReview={runAgentDeepseekReview} onSelectDastRisk={selectDastRisk} onSelectSandboxRisk={selectSandboxRisk} onSelectSandboxValidation={selectSandboxValidation} onRunDast={createDastValidation} onCreateManualDast={createManualDastValidation} onUpdateManualDast={updateManualDastValidation} onExportDastReport={exportDastReport} onRunSandbox={createSandboxEvidence} onRunModule={runSingleModuleCheck} onUpdateFinding={updateFindingGovernance} />}
         {activeView === "knowledge" && <KnowledgeHubView project={project} findings={findings} validations={validations} evidence={evidence} summary={summary} />}
-      </section>
-    </main>
+        {activeView === "reports" && <ReportCenter project={project} onExportSca={exportScaReport} onExportSbom={exportScaSbom} onExportDast={exportDastReport} />}
+        {activeView === "admin" && isAdmin ? <AdminCenter project={project} agentSnapshot={agentSnapshot} /> : null}
+    </AppShell>
   );
 }
 
-function NavButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) { return <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>{icon}{label}</button>; }
-function viewEyebrow(view: ViewKey) { return view === "projects" ? "项目空间" : view === "assets" ? "项目资产画像" : view === "detection" ? "模块接入与统一执行" : view === "knowledge" ? "可学习、可传递、可治理" : "项目安全治理"; }
-function viewTitle(view: ViewKey) { return view === "projects" ? "创建项目并切换当前项目" : view === "assets" ? "确认待检测的项目资产" : view === "detection" ? "选择安全模块并一键执行检测" : view === "knowledge" ? "安全知识中枢" : "从风险发现到修复复测的完整闭环"; }
+function ReportCenter({ project, onExportSca, onExportSbom, onExportDast }: { project: Project | null; onExportSca: () => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportDast: () => Promise<void> }) {
+  if (!project) return <div className="panel empty-project">请先选择项目，再集中导出项目报告。</div>;
+  return <section className="content-grid report-center">
+    <section className="module-context-note full"><strong>集中交付</strong><span>这里汇总当前项目已有的报告入口；报告只反映实际完成的扫描和证据，不会把未验证或降级状态包装成成功。</span></section>
+    <article className="panel"><div className="panel-header"><div><h2>SCA 供应链报告</h2><span>组件、漏洞、许可证与依赖证据</span></div></div><div className="report-actions"><button className="primary-action" onClick={() => void onExportSca()}>导出 HTML 报告</button><button className="secondary-action" onClick={() => void onExportSbom("cyclonedx")}>CycloneDX SBOM</button><button className="secondary-action" onClick={() => void onExportSbom("spdx")}>SPDX SBOM</button></div></article>
+    <article className="panel"><div className="panel-header"><div><h2>DAST 动态验证报告</h2><span>三色裁决、未验证状态与运行证据</span></div></div><div className="report-actions"><button className="primary-action" onClick={() => void onExportDast()}>导出 DAST 报告</button></div></article>
+    <article className="panel full"><div className="panel-header"><div><h2>SAST、AGENT 与 ASPM</h2><span>保留现有模块内的 SARIF、技术报告和项目安全报告入口</span></div></div><p>这些报告仍使用原有生成逻辑；本次只增加集中入口，不改变扫描、证据或报告内容。</p></article>
+  </section>;
+}
+
+function AdminCenter({ project, agentSnapshot }: { project: Project | null; agentSnapshot: AgentScanSnapshot | null }) {
+  const [section, setSection] = useState<"users" | "rules" | "engines" | "policy">("users");
+  return <section className="admin-center">
+    <nav className="module-workspace-tabs" aria-label="管理中心工作区">
+      {([['users', '用户与项目', '账号和访问'], ['rules', '规则与 Agent 能力', '本地规则和 Skill'], ['engines', '引擎与数据', '工具和离线资源'], ['policy', '策略与审计', '动态边界和治理']] as const).map(([key, label, detail]) => <button type="button" className={section === key ? "active" : ""} onClick={() => setSection(key)} key={key}><strong>{label}</strong><span>{detail}</span></button>)}
+    </nav>
+    {section === "users" ? <UserAdministration /> : null}
+    {section === "rules" ? project ? <section className="content-grid"><section className="module-context-note full"><strong>当前项目：{project.name}</strong><span>管理员在这里维护平台和项目规则；普通用户只使用已发布规则。</span></section><SastRuleManagement project={project} view="rules" /><SastExpertDelivery project={project} view="semgrep" /><ScaPolicyPanel /><ScaPolicyOverridePanel project={project} /><AgentGovernanceConsole project={project} snapshot={agentSnapshot} /><section className="panel full"><div className="panel-header"><h2>Agent Skill</h2><span>已识别 Skill 继续由 AGENT 资产页展示</span></div><p>Skill 安装、版本、权限审核和发布注册表尚未实现，不在本次界面调整中伪装成交付能力；后续统一在此扩展。</p></section></section> : <div className="panel empty-project">请先选择项目，再管理项目规则。</div> : null}
+    {section === "engines" ? <section className="content-grid"><GrypeDatabasePanel /><OsvMirrorPanel /><ScaIntelligencePanel />{project ? <SastCommunityRuleManager project={project} /> : null}</section> : null}
+    {section === "policy" ? <section className="content-grid"><section className="panel full"><div className="panel-header"><h2>策略与审计</h2><span>保留现有治理边界</span></div><p>DAST 策略、SANDBOX 限制、知识审核和审计能力继续使用现有实现；后续可在不改变扫描基础逻辑的前提下逐步集中到此处。</p></section></section> : null}
+  </section>;
+}
 
 function ProjectOnboardingWorkspace({ projects, project, draft, importMode, zipFile, loading, onDraftChange, onImportModeChange, onZipFileChange, onCreate, onSelect, onDelete }: { projects: Project[]; project: Project | null; draft: ProjectDraft; importMode: ProjectImportMode; zipFile: File | null; loading: boolean; onDraftChange: (draft: ProjectDraft) => void; onImportModeChange: (mode: ProjectImportMode) => void; onZipFileChange: (file: File | null) => void; onCreate: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; onSelect: (project: Project) => void; onDelete: (projectId: string) => Promise<void> }) {
-  return <section className="project-workspace onboarding-workspace">
+  const { isAdmin } = useAuth();
+  return <section className={`project-workspace onboarding-workspace ${isAdmin ? "" : "user-project-workspace"}`}>
     <div className="panel project-create onboarding-create">
       <div className="panel-header"><div><h2>陌生项目接入</h2><p>选择一种来源，系统完成受控导入、资产识别和准备度检查。</p></div><span>SCA + SAST + ASPM 默认启用</span></div>
       <div className="import-mode-switch" role="tablist" aria-label="项目接入方式">
@@ -1963,7 +1981,7 @@ function SastEvidenceGovernance({ project }: { project: Project }) {
     if (!selectedScanId) return;
     const endpoint = format === "sarif" ? "sarif" : format === "html" ? "report.html" : "report";
     try {
-      const response = await fetch(`${API_BASE}/sast/projects/${project.id}/${endpoint}?scan_task_id=${selectedScanId}`);
+      const response = await fetch(`${API_BASE}/sast/projects/${project.id}/${endpoint}?scan_task_id=${selectedScanId}`, { credentials: "include" });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -2094,6 +2112,7 @@ function AttackChainSummary({ chains }: { chains: AttackChain[] }) {
 }
 
 function KnowledgeHubView({ project, findings, validations, evidence, summary }: { project: Project | null; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; summary: AspmSummary | null }) {
+  const { isAdmin, user } = useAuth();
   if (!project) return <div className="panel empty-project">请先选择项目，再查看该项目沉淀的安全知识。</div>;
   const projectId = project.id;
   const [activeTab, setActiveTab] = useState<"overview" | "candidates" | "enterprise" | "library" | "effects">("overview");
@@ -2193,7 +2212,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     try {
       await request<KnowledgeEntry>("/knowledge/projects/" + projectId + "/candidates/" + finding.id, {
         method: "POST",
-        body: JSON.stringify({ submitted_by: "security-operator" }),
+        body: JSON.stringify({ submitted_by: user.username }),
       });
       await refreshKnowledgeWorkspace("候选已提交审核，来源 Finding 和证据引用已固化。");
     } catch (error) {
@@ -2209,7 +2228,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     try {
       await request<KnowledgeEntry>("/knowledge/entries/" + entry.id + "/review", {
         method: "POST",
-        body: JSON.stringify({ decision, reviewer: "security-reviewer", note: decision === "publish" ? "证据与适用范围复核通过" : "退回补充证据或适用范围" }),
+        body: JSON.stringify({ decision, reviewer: user.username, note: decision === "publish" ? "证据与适用范围复核通过" : "退回补充证据或适用范围" }),
       });
       await refreshKnowledgeWorkspace(decision === "publish" ? "知识已发布到企业库，并可向同租户其他项目推荐。" : "候选已退回，可补充证据后重新提交。");
     } catch (error) {
@@ -2228,7 +2247,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
       if (!target) throw new Error("没有可回滚的历史版本");
       await request<KnowledgeEntry>("/knowledge/entries/" + entry.id + "/rollback", {
         method: "POST",
-        body: JSON.stringify({ target_version: target.version, reviewer: "security-reviewer", note: "从知识中枢回滚到上一版本" }),
+        body: JSON.stringify({ target_version: target.version, reviewer: user.username, note: "从知识中枢回滚到上一版本" }),
       });
       await refreshKnowledgeWorkspace("已恢复历史内容并生成新的知识版本，历史记录未被覆盖。");
     } catch (error) {
@@ -2320,8 +2339,8 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
           <dl><div><dt>来源</dt><dd>{finding.source} · {finding.rule_id}</dd></div><div><dt>证据</dt><dd>{validationCount} 次验证 · {evidenceCount} 份运行证据</dd></div><div><dt>范围</dt><dd>{finding.file_path ?? "项目级知识"}</dd></div>{entry ? <div><dt>版本</dt><dd>v{entry.version} · 提交人 {entry.submitted_by}</dd></div> : null}</dl>
           <footer><span className={"knowledge-state " + persistedTone}>{persistedState}</span><div className="knowledge-candidate-actions">
             {!entry || entry.status === "rejected" ? <button className="secondary-action" disabled={knowledgeBusyId === finding.id} onClick={() => void submitKnowledgeCandidate(finding)}>{knowledgeBusyId === finding.id ? "提交中…" : entry ? "补充后重提" : "提交审核"}</button> : null}
-            {entry?.status === "pending_review" ? <><button className="primary-action" title={entry.publish_ready ? "证据门槛已满足" : "需先补充 DAST、SANDBOX 或治理结论"} disabled={!entry.publish_ready || knowledgeBusyId === entry.id} onClick={() => void reviewKnowledgeEntry(entry, "publish")}>审核发布</button><button className="secondary-action" disabled={knowledgeBusyId === entry.id} onClick={() => void reviewKnowledgeEntry(entry, "reject")}>退回</button></> : null}
-            {entry?.status === "published" ? <button className="secondary-action" disabled={knowledgeBusyId === entry.id || entry.version <= 1} onClick={() => void rollbackKnowledgeEntry(entry)}>回滚上一版</button> : null}
+            {isAdmin && entry?.status === "pending_review" ? <><button className="primary-action" title={entry.publish_ready ? "证据门槛已满足" : "需先补充 DAST、SANDBOX 或治理结论"} disabled={!entry.publish_ready || knowledgeBusyId === entry.id} onClick={() => void reviewKnowledgeEntry(entry, "publish")}>审核发布</button><button className="secondary-action" disabled={knowledgeBusyId === entry.id} onClick={() => void reviewKnowledgeEntry(entry, "reject")}>退回</button></> : null}
+            {isAdmin && entry?.status === "published" ? <button className="secondary-action" disabled={knowledgeBusyId === entry.id || entry.version <= 1} onClick={() => void rollbackKnowledgeEntry(entry)}>回滚上一版</button> : null}
           </div></footer>
         </article>;
       }) : <div className="knowledge-empty">执行扫描并完成复核后，符合条件的项目经验会出现在这里。</div>}</div>
@@ -2423,6 +2442,7 @@ function ScaWorkspaceNavigation({ active, onChange }: { active: ScaWorkspaceTab;
 }
 
 function ScaOverviewCapabilities({ project, components, toolScanEnabled, loading, onToolScanChange, onExportSbom, onExportReport, onOpenTab }: { project: Project | null; components: Component[]; toolScanEnabled: boolean; loading: boolean; onToolScanChange: (enabled: boolean) => void; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportReport: () => Promise<void>; onOpenTab: (value: ScaWorkspaceTab) => void }) {
+  const { isAdmin } = useAuth();
   const [toolHealth, setToolHealth] = useState<ScaToolHealth | null>(null);
   const [toolHealthLoading, setToolHealthLoading] = useState(false);
   async function refreshToolHealth() {
@@ -2437,7 +2457,7 @@ function ScaOverviewCapabilities({ project, components, toolScanEnabled, loading
       <button type="button" onClick={() => onOpenTab("history")}><span>交付与追溯</span><strong>历史和报告</strong><small>SBOM、批次与扫描证据</small><ArrowRight size={17} /></button>
     </div>
     <section className="panel full module-delivery-actions"><div><span>当前扫描能力</span><h3>基础解析始终可用，Docker 增强按需启用</h3><p>SCA 在网络可用时优先查询在线 OSV，失败时回退人工准备的本地镜像；勾选 Docker 增强后，无论快速或深度范围都会实际执行 Syft/Grype/Trivy。只有 package.json 而没有锁文件时，会在临时隔离容器中生成依赖快照，且不会修改项目源码。</p></div><div className="advanced-actions"><label className="inline-check"><input type="checkbox" checked={toolScanEnabled} disabled={loading} onChange={(event) => onToolScanChange(event.target.checked)} />使用 Docker 增强扫描</label><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("cyclonedx")}>导出 CycloneDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportReport()}>导出 SCA 报告</button></div></section>
-    <details className="advanced-details module-admin-details"><summary>扫描引擎与漏洞情报源</summary><div className="advanced-details-body"><p>这部分用于检查本机工具链和离线情报准备情况；普通项目复核可以保持默认设置。</p><GrypeDatabasePanel /><ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} /><OsvMirrorPanel /><ScaIntelligencePanel /></div></details>
+    <details className="advanced-details module-admin-details"><summary>扫描引擎与漏洞情报源</summary><div className="advanced-details-body"><p>普通用户可以检测和更新 Grype 数据库；漏洞情报导入及来源策略由管理员维护。</p><GrypeDatabasePanel /><ScaToolHealthPanel health={toolHealth} loading={toolHealthLoading} onRefresh={refreshToolHealth} />{isAdmin ? <><OsvMirrorPanel /><ScaIntelligencePanel /></> : null}</div></details>
   </section>;
 }
 
@@ -2481,6 +2501,7 @@ function GrypeDatabasePanel() {
 }
 
 function ScaGovernanceView({ project, components, summary, comparison, scanHistory, selectedScanId, scanDiff, dependencyGraph, toolScanEnabled, loading, onToolScanChange, onSelectScan, onExportSbom, onExportReport, onRun }: { project: Project | null; components: Component[]; summary: AspmSummary | null; comparison: FindingRetestComparison | null; scanHistory: ScaScanHistoryItem[]; selectedScanId: string | null; scanDiff: ScaScanDiff | null; dependencyGraph: DependencyGraph | null; toolScanEnabled: boolean; loading: boolean; onToolScanChange: (enabled: boolean) => void; onSelectScan: (scanTaskId: string) => Promise<void>; onExportSbom: (format: "cyclonedx" | "spdx") => Promise<void>; onExportReport: () => Promise<void>; onRun: () => Promise<void> }) {
+  const { isAdmin } = useAuth();
   const [workspace, setWorkspace] = useState<ScaWorkspaceTab>("overview");
   const [filters, setFilters] = useState({ keyword: "", ecosystem: "all", severity: "all", risk: "all", dependency: "all" });
   const [page, setPage] = useState(1);
@@ -2502,7 +2523,7 @@ function ScaGovernanceView({ project, components, summary, comparison, scanHisto
       {workspace === "overview" ? <ScaOverviewCapabilities project={project} components={components} toolScanEnabled={toolScanEnabled} loading={loading} onToolScanChange={onToolScanChange} onExportSbom={onExportSbom} onExportReport={onExportReport} onOpenTab={setWorkspace} /> : null}
       {workspace === "risks" ? <section className="module-tab-panel"><div className="module-tab-heading"><div><span>风险组件</span><h3>按组件、漏洞和修复动作完成处置</h3></div><small>{risky.length} 个风险组件</small></div><ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索组件、版本或漏洞标识" /><SimpleFilter value={filters.ecosystem} label="全部生态" options={uniqueValues(components.map((item) => item.ecosystem))} onChange={(value) => setFilters({ ...filters, ecosystem: value })} /><SimpleFilter value={filters.severity} label="全部等级" options={uniqueValues(components.map((item) => item.severity ?? "none"))} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.risk} label="全部风险状态" options={uniqueValues(components.map((item) => item.risk_status ?? "not_checked"))} format={riskStatusLabel} onChange={(value) => setFilters({ ...filters, risk: value })} /><SimpleFilter value={filters.dependency} label="全部依赖类型" options={uniqueValues(components.map((item) => item.dependency_type))} format={dependencyTypeLabel} onChange={(value) => setFilters({ ...filters, dependency: value })} /></ModuleFilterBar><table className="concise-table mobile-card-table"><thead><tr><th>组件</th><th>风险状态</th><th>漏洞标识</th><th>建议动作</th></tr></thead><tbody>{pagination.items.length === 0 ? <tr><td colSpan={4} className="empty-cell">没有符合筛选条件的组件。</td></tr> : pagination.items.map((item) => <tr key={item.id}><td data-label="组件"><strong>{item.name}</strong><span className="cell-subtext">{item.version ?? "版本未知"} · {item.ecosystem} · {dependencyTypeLabel(item.dependency_type)}</span></td><td data-label="风险状态">{riskStatusLabel(item.risk_status)}<span className="cell-subtext">{severityLabel(item.severity)}</span></td><td data-label="漏洞标识">{item.vulnerability_ids?.join(", ") || "无已知漏洞标识"}</td><td data-label="建议动作">{item.remediation ?? (isRiskyScaComponent(item) ? "确认可用安全版本后升级" : "暂不需要处理")}</td></tr>)}</tbody></table><Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} />{comparison?.has_comparison ? <RetestComparisonPanel comparison={comparison} /> : <div className="module-context-note"><strong>等待第二次扫描</strong><span>再次扫描后才显示仍存在、消失、新增或变化的风险记录。</span></div>}</section> : null}
       {workspace === "dependencies" ? <section className="module-tab-panel"><div className="module-tab-heading"><div><span>依赖影响</span><h3>从风险传递依赖定位可执行的升级路径</h3></div><small>{dependencyGraph?.summary.node_count ?? 0} 个节点</small></div><section className="panel full"><div className="panel-header"><h2>依赖关系图谱</h2><span>静态依赖关系不等于运行时调用</span></div><DependencyGraphView graph={dependencyGraph} /><ImpactPathTable paths={dependencyGraph?.impact_paths ?? []} nodes={dependencyGraph?.nodes ?? []} /></section><section className="panel full"><div className="panel-header"><h2>升级杠杆</h2><span>{dependencyGraph?.upgrade_levers.length ?? 0} 项建议</span></div><UpgradeLeverTable levers={dependencyGraph?.upgrade_levers ?? []} /></section></section> : null}
-      {workspace === "exceptions" ? <section className="module-tab-panel"><div className="module-tab-heading"><div><span>例外与 VEX</span><h3>记录适用性、风险例外和项目扫描策略</h3></div><small>当前为本地治理记录，不代表真实身份审批</small></div><ScaExceptionPanel project={project} components={components} /><ScaVexPanel project={project} components={components} /><details className="advanced-details module-admin-details"><summary>扫描规则与项目覆盖策略</summary><div className="advanced-details-body"><ScaPolicyPanel /><ScaPolicyOverridePanel project={project} /></div></details></section> : null}
+      {workspace === "exceptions" ? <section className="module-tab-panel"><div className="module-tab-heading"><div><span>例外与 VEX</span><h3>记录适用性、风险例外和项目扫描策略</h3></div><small>审批动作使用当前登录身份</small></div><ScaExceptionPanel project={project} components={components} /><ScaVexPanel project={project} components={components} />{isAdmin ? <details className="advanced-details module-admin-details"><summary>扫描规则与项目覆盖策略</summary><div className="advanced-details-body"><ScaPolicyPanel /><ScaPolicyOverridePanel project={project} /></div></details> : null}</section> : null}
       {workspace === "history" ? <section className="module-tab-panel"><div className="module-tab-heading"><div><span>历史与报告</span><h3>切换批次、导出交付物并查看原始证据</h3></div><small>{scanHistory.length} 个扫描批次</small></div><section className="panel full module-delivery-actions"><div><span>交付物</span><h3>报告和标准 SBOM</h3><p>报告不依赖 Docker；CycloneDX 与 SPDX 使用当前选中批次的组件清单。</p></div><div className="advanced-actions"><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportReport()}>导出 SCA 报告</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("cyclonedx")}>CycloneDX</button><button className="secondary-action" disabled={loading || !project || components.length === 0} onClick={() => void onExportSbom("spdx")}>SPDX</button></div></section><section className="panel full"><div className="panel-header"><h2>与上一批次的组件变化</h2><span>{scanDiff?.has_comparison ? "已生成对比" : "需要至少两次扫描"}</span></div><ScaScanDiffView diff={scanDiff} /></section><section className="panel full"><div className="panel-header"><h2>扫描历史</h2><span>选择后更新当前治理快照</span></div><ScaScanHistoryTable history={scanHistory} selectedScanId={selectedScanId} loading={loading} onSelect={onSelectScan} /></section><section className="panel full"><div className="panel-header"><h2>当前批次扫描依据</h2><span>{selectedScanId ? selectedScanId.slice(0, 8) : "尚未选择"}</span></div><ScaEvidencePanel project={project} selectedScanId={selectedScanId} /></section></section> : null}
     </div>
   </ModuleGovernanceShell>;
@@ -2805,7 +2826,7 @@ function AgentGovernanceConsole({ project, snapshot }: { project: Project; snaps
   async function downloadAgentArtifact(kind: "json" | "html" | "sarif" | "ci") {
     const endpoint = kind === "json" ? "report" : kind === "html" ? "report.html" : kind === "sarif" ? "sarif" : "ci-config";
     try {
-      const response = await fetch(`${API_BASE}/agent/projects/${project.id}/${endpoint}`);
+      const response = await fetch(`${API_BASE}/agent/projects/${project.id}/${endpoint}`, { credentials: "include" });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement("a");
       link.href = url; link.download = `${safeFilename(project.name)}-agent-${kind === "ci" ? "ci-config.json" : `report.${kind}`}`; link.click(); URL.revokeObjectURL(url);
@@ -3354,13 +3375,14 @@ type AgentWorkspaceTab = "overview" | "risks" | "assets" | "validation" | "gover
 type AgentAssetWorkspaceTab = "coverage" | "inventory" | "paths";
 
 function AgentWorkspaceNavigation({ active, onChange }: { active: AgentWorkspaceTab; onChange: (value: AgentWorkspaceTab) => void }) {
+  const { isAdmin } = useAuth();
   const items: Array<[AgentWorkspaceTab, string, string]> = [
     ["overview", "概览", "态势与下一步"],
     ["risks", "风险", "发现与复测"],
     ["assets", "资产与边界", "覆盖、权限与路径"],
     ["validation", "动态验证", "预检与受控探测"],
     ["governance", "策略与交付", "门禁、例外与报告"],
-  ];
+  ].filter(([key]) => key !== "governance" || isAdmin) as Array<[AgentWorkspaceTab, string, string]>;
   return <nav className="agent-workspace-tabs" aria-label="AGENT 工作区">{items.map(([key, label, description]) => <button type="button" className={active === key ? "active" : ""} aria-current={active === key ? "page" : undefined} onClick={() => onChange(key)} key={key}><strong>{label}</strong><span>{description}</span></button>)}</nav>;
 }
 
@@ -3373,6 +3395,7 @@ function AgentAssetWorkspaceNavigation({ active, onChange }: { active: AgentAsse
 }
 
 function AgentOverviewWorkspace({ findings, history, snapshot, onOpenTab }: { findings: Finding[]; history: AgentScanHistoryItem[]; snapshot: AgentScanSnapshot | null; onOpenTab: (value: AgentWorkspaceTab) => void }) {
+  const { isAdmin } = useAuth();
   const latest = history[0];
   const trust = snapshot?.trust_score;
   const gate = snapshot?.quality_gate;
@@ -3388,7 +3411,7 @@ function AgentOverviewWorkspace({ findings, history, snapshot, onOpenTab }: { fi
   return <section className="agent-overview-workspace">
     <div className="agent-overview-grid">
       <article className="agent-trust-hero"><div className="agent-trust-score"><strong>{trust?.score ?? "-"}</strong><span>/ {trust?.score_cap ?? 100}</span></div><div><span>可解释信任评分</span><h3>{trust ? agentTrustGradeLabel(trust.grade) : "等待新扫描"}</h3><p>{trust ? `证据完整度 ${trust.evidence_completeness}% · ${agentConfidenceLabel(trust.confidence)}置信度` : "完成扫描后，根据来源、权限、路径和运行证据形成评分。"}</p></div><button type="button" className="secondary-action" onClick={() => onOpenTab("assets")}>查看评分依据</button></article>
-      <article className={`agent-gate-card ${gate?.decision === "block" ? "blocked" : "ready"}`}><span>质量门禁</span><strong>{gate?.decision === "block" ? "当前阻断" : gate?.decision === "pass" ? "当前通过" : "等待裁决"}</strong><p>{agentUiText(gate?.reasons?.[0] ?? "门禁结论来自最近一次扫描快照。")}</p><button type="button" onClick={() => onOpenTab("governance")}>查看策略</button></article>
+      <article className={`agent-gate-card ${gate?.decision === "block" ? "blocked" : "ready"}`}><span>质量门禁</span><strong>{gate?.decision === "block" ? "当前阻断" : gate?.decision === "pass" ? "当前通过" : "等待裁决"}</strong><p>{agentUiText(gate?.reasons?.[0] ?? "门禁结论来自最近一次扫描快照。")}</p><button type="button" onClick={() => onOpenTab(isAdmin ? "governance" : "assets")}>{isAdmin ? "查看策略" : "查看依据"}</button></article>
     </div>
     <section className="agent-section-card"><div className="agent-section-heading"><div><span>扫描覆盖</span><h3>PPT 三类检查面，一眼确认覆盖情况</h3></div><button type="button" className="text-action" onClick={() => onOpenTab("assets")}>查看全部资产</button></div><div className="agent-coverage-cards"><article><i>01</i><span>指令与 Prompt</span><strong>{instructionAssets}</strong><small>指令文件、Prompt、Skill</small></article><article><i>02</i><span>MCP 与工具</span><strong>{protocolAssets}</strong><small>工具协议、能力与资源声明</small></article><article><i>03</i><span>插件与来源</span><strong>{pluginAssets}</strong><small>插件扩展、安装来源与完整性</small></article><article className={runtimeObserved ? "observed" : "conditional"}><i>04</i><span>运行证据</span><strong>{runtimeObserved ? "已观察" : "有条件"}</strong><small>{runtimeObserved ? "存在有限目标运行证据" : "需要独立预检与明确确认"}</small></article></div></section>
     <div className="agent-overview-columns">
@@ -3428,6 +3451,7 @@ function SastOverviewWorkspace({ project, findings, onOpenTab }: { project: Proj
 }
 
 function SastStrategyWorkspace({ project }: { project: Project }) {
+  const { isAdmin } = useAuth();
   const [tab, setTab] = useState<SastStrategyTab>("semgrep");
   return <section className="module-tab-panel">
     <div className="module-tab-heading"><div><span>扫描策略</span><h3>Semgrep 与本地规则互补，不用二选一</h3></div><small>修改后从下一次扫描生效</small></div>
@@ -3437,14 +3461,15 @@ function SastStrategyWorkspace({ project }: { project: Project }) {
       <button type="button" role="tab" aria-selected={tab === "local"} className={tab === "local" ? "active" : ""} onClick={() => setTab("local")}>本地规则</button>
       <button type="button" role="tab" aria-selected={tab === "ci"} className={tab === "ci" ? "active" : ""} onClick={() => setTab("ci")}>CI / Worker</button>
     </div>
-    {tab === "semgrep" ? <><section className="module-context-note"><strong>为什么保留 Semgrep</strong><span>本地规则适合快速、离线和项目定制检测；Semgrep 提供结构化语义规则与 YAML 专家规则包，用来补充仅靠正则难以覆盖的代码模式。</span></section><SastRuleManagement project={project} view="engine" /><SastExpertDelivery project={project} view="semgrep" /></> : null}
+    {tab === "semgrep" ? <><section className="module-context-note"><strong>为什么保留 Semgrep</strong><span>本地规则适合快速、离线和项目定制检测；Semgrep 提供结构化语义规则与 YAML 专家规则包，用来补充仅靠正则难以覆盖的代码模式。</span></section><SastRuleManagement project={project} view="engine" />{isAdmin ? <SastExpertDelivery project={project} view="semgrep" /> : <SastCommunityRuleManager project={project} />}</> : null}
     {tab === "git" ? <SastExpertDelivery project={project} view="git" /> : null}
-    {tab === "local" ? <SastRuleManagement project={project} view="rules" /> : null}
+    {tab === "local" ? isAdmin ? <SastRuleManagement project={project} view="rules" /> : <div className="module-context-note"><strong>平台本地规则</strong><span>普通用户自动使用管理员发布的本地规则；编写和发布入口只在管理中心提供。</span></div> : null}
     {tab === "ci" ? <SastOperationsConsole project={project} /> : null}
   </section>;
 }
 
 function FindingModuleGovernance({ project, moduleKey, findings, validations, evidence, graph, comparison, scanHistory = [], agentSnapshot = null, agentScanDiff = null, agentAuditDiff = null, loading, onRunReview, onRunAgentAiReview, onRun, onUpdateFinding, afterMetrics }: { project?: Project; moduleKey: "sast" | "agent"; findings: Finding[]; validations: DastValidation[]; evidence: SandboxEvidence[]; graph: EvidenceGraph | null; comparison: FindingRetestComparison | null; scanHistory?: AgentScanHistoryItem[]; agentSnapshot?: AgentScanSnapshot | null; agentScanDiff?: AgentScanDiff | null; agentAuditDiff?: AgentOfflineAuditDiff | null; loading: boolean; onRunReview?: () => Promise<void>; onRunAgentAiReview?: (confirmationPhrase: string) => Promise<void>; onRun: () => Promise<void>; onUpdateFinding: (findingId: string, patch: Partial<Pick<Finding, "status">>) => Promise<void>; afterMetrics?: React.ReactNode }) {
+  const { isAdmin } = useAuth();
   const [filters, setFilters] = useState({ keyword: "", severity: "all", status: "all", category: "all" });
   const [page, setPage] = useState(1);
   const [sastTab, setSastTab] = useState<SastWorkspaceTab>("overview");
@@ -3480,7 +3505,7 @@ function FindingModuleGovernance({ project, moduleKey, findings, validations, ev
       {agentTab === "risks" ? <section className="agent-tab-panel"><div className="agent-tab-heading"><div><span>风险与复测</span><h3>从规则命中走到人工处置结论</h3></div><small>正式问题与扫描提示分开统计</small></div><section className="agent-formal-findings"><div className="agent-result-scope"><div><span>正式问题</span><strong>{findings.length} 条 Finding</strong></div><p>这里只统计可进入处置流程的问题；覆盖缺口和静态路径证据不会重复增加问题数。</p></div><ModuleFilterBar><input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="搜索风险、文件或规则" /><SimpleFilter value={filters.severity} label="全部等级" options={["critical", "high", "medium", "low", "info"]} format={severityLabel} onChange={(value) => setFilters({ ...filters, severity: value })} /><SimpleFilter value={filters.status} label="全部处理状态" options={FINDING_WORKFLOW_STATUSES} format={(value) => statusLabel(value as FindingStatus)} onChange={(value) => setFilters({ ...filters, status: value })} /><details className="agent-more-filter"><summary>更多筛选</summary><SimpleFilter value={filters.category} label="全部风险分类" options={uniqueValues(findings.map((item) => item.ai_review?.category ?? "unknown"))} format={agentCategoryLabel} onChange={(value) => setFilters({ ...filters, category: value })} /></details></ModuleFilterBar><ConciseFindingTable findings={pagination.items} validations={validations} evidence={evidence} graph={graph} onUpdateFinding={onUpdateFinding} /><Pagination page={pagination.page} pageCount={pagination.pageCount} total={filtered.length} onPageChange={setPage} /></section><RetestComparisonPanel comparison={comparison} /><AgentOfflineAuditPanel snapshot={agentSnapshot} findings={findings} />{onRunAgentAiReview ? <AgentDeepSeekReviewPanel snapshot={agentSnapshot} findings={findings} loading={loading} onRun={onRunAgentAiReview} /> : null}<AgentOfflineAuditHistoryPanel diff={agentAuditDiff} findings={findings} /></section> : null}
       {agentTab === "assets" ? <section className="agent-tab-panel"><div className="agent-tab-heading"><div><span>资产与安全边界</span><h3>按检查面查看覆盖、声明权限和潜在路径</h3></div><small>静态声明不等同于运行时事实</small></div><AgentAssetWorkspaceNavigation active={agentAssetTab} onChange={setAgentAssetTab} />{agentAssetTab === "coverage" ? <><AgentScanCoveragePanel history={scanHistory} /><AgentTrustScorePanel snapshot={agentSnapshot} /><AgentProvenancePanel snapshot={agentSnapshot} /><AgentIntelligencePanel snapshot={agentSnapshot} /></> : null}{agentAssetTab === "inventory" ? <><AgentAssetInventoryPanel snapshot={agentSnapshot} /><AgentPermissionMatrixPanel snapshot={agentSnapshot} /></> : null}{agentAssetTab === "paths" ? <><AgentDataflowPanel snapshot={agentSnapshot} /><AgentSemanticDiffPanel diff={agentScanDiff} /></> : null}</section> : null}
       {agentTab === "validation" ? <section className="agent-tab-panel agent-validation-workspace"><div className="agent-tab-heading"><div><span>动态验证</span><h3>预检 → 过滤副本 → 能力探测 → 隔离运行</h3></div><small>每一步都需要独立确认</small></div>{project ? <AgentRuntimePreflightPanel project={project} snapshot={agentSnapshot} /> : <div className="agent-empty-state">请先选择项目。</div>}</section> : null}
-      {agentTab === "governance" ? <section className="agent-tab-panel agent-governance-workspace"><div className="agent-tab-heading"><div><span>策略与交付</span><h3>门禁、例外和报告集中管理</h3></div><small>策略修改从下一次扫描生效</small></div>{project ? <AgentGovernanceConsole project={project} snapshot={agentSnapshot} /> : <div className="agent-empty-state">请先选择项目。</div>}</section> : null}
+      {isAdmin && agentTab === "governance" ? <section className="agent-tab-panel agent-governance-workspace"><div className="agent-tab-heading"><div><span>策略与交付</span><h3>门禁、例外和报告集中管理</h3></div><small>策略修改从下一次扫描生效</small></div>{project ? <AgentGovernanceConsole project={project} snapshot={agentSnapshot} /> : <div className="agent-empty-state">请先选择项目。</div>}</section> : null}
     </div>
   </ModuleGovernanceShell>;
 }
@@ -4541,7 +4566,7 @@ function SastView({ project, findings, categorySummary, sourcePath, loading, onS
   async function exportSarif() {
     if (!project) return;
     try {
-      const response = await fetch(`${API_BASE}/sast/projects/${project.id}/sarif`);
+      const response = await fetch(`${API_BASE}/sast/projects/${project.id}/sarif`, { credentials: "include" });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
@@ -5081,20 +5106,10 @@ async function uploadZipProject(file: File, draft: ProjectDraft): Promise<Projec
   if (draft.api_base_url.trim()) query.set("api_base_url", draft.api_base_url.trim());
   if (draft.sandbox_command.trim()) query.set("sandbox_command", draft.sandbox_command.trim());
   if (draft.sandbox_image.trim()) query.set("sandbox_image", draft.sandbox_image.trim());
-  const response = await fetch(`${API_BASE}/projects/import/zip?${query.toString()}`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
+  const response = await fetch(`${API_BASE}/projects/import/zip?${query.toString()}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/zip" }, body: file });
   if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail ?? payload); } catch { /* keep status */ } throw new Error(detail); }
   return response.json() as Promise<ProjectImportResult>;
 }
-
-async function requestWithTimeout<T>(path: string, init: RequestInit, timeoutMs: number): Promise<T> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-  try { return await request<T>(path, { ...init, signal: controller.signal }); }
-  catch (error) { if (controller.signal.aborted) throw new Error(`扫描超过 ${Math.round(timeoutMs / 1000)} 秒客户端等待上限；服务端会保存已经完成的有界结果`); throw error; }
-  finally { window.clearTimeout(timeout); }
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const method = String(init.method ?? "GET").toUpperCase(); const response = await fetch(`${API_BASE}${path}`, { ...init, cache: method === "GET" ? "no-store" : init.cache, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } }); if (!response.ok) { let detail = `${response.status} ${response.statusText}`; try { const payload = await response.json(); detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message ? String(payload.detail.message) : JSON.stringify(payload.detail ?? payload); } catch { /* keep HTTP status */ } throw new Error(detail); } if (response.status === 204) return undefined as T; return response.json() as Promise<T>; }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><Root /></React.StrictMode>);
 

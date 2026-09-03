@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-08-31-governance-ui",
+  "baseline_id": "2026-09-03-two-role-ui",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -14,7 +14,7 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Platform documents aligned on 2026-08-31, including cold-start onboarding and AGENT/SCA/SAST task-oriented governance workspaces",
+      "current": "Platform documents aligned on 2026-09-03, including local two-role authentication and the simplified task-oriented workspace",
       "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md"],
       "limitations": "Fixture README files describe test targets and are not product capability statements.",
       "required_for": ["p0", "production"]
@@ -48,8 +48,8 @@
       "status": "verified",
       "target": "npm run build exits successfully",
       "current": {"build": "passed", "largest_javascript_chunk_kb": 604.69},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "apps/web/scripts/agent-ui-smoke.cjs", "apps/web/scripts/governance-ui-smoke.cjs"],
-      "limitations": "Vite reports a chunk-size warning; browser smoke suites cover the governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/auth-layout-smoke.cjs"],
+      "limitations": "Vite reports a chunk-size warning; browser smoke suites cover authentication, role-aware navigation, and governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
       "required_for": ["p0", "production"]
     },
     {
@@ -58,7 +58,7 @@
       "metric": "Alembic schema is at repository head",
       "status": "verified",
       "target": "Current database revision equals the repository migration head",
-      "current": "20260828_0014",
+      "current": "20260903_0015",
       "evidence": ["python -m alembic -c alembic.ini current"],
       "limitations": "This verifies the local development database, not backup, rollback, or production upgrade readiness.",
       "required_for": ["p0", "production"]

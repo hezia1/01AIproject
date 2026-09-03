@@ -82,6 +82,8 @@ button {
 .sidebar {
   background: #111827;
   color: #f8fafc;
+  display: flex;
+  flex-direction: column;
   padding: 24px 18px;
 }
 
@@ -126,6 +128,43 @@ button {
   color: #ffffff;
 }
 
+.nav-admin-divider {
+  border-top: 1px solid #334155;
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.nav-admin-divider > span {
+  color: #94a3b8;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 0 12px;
+}
+
+.sidebar-account {
+  border-top: 1px solid #334155;
+  display: grid;
+  gap: 5px;
+  margin-top: auto;
+  padding: 18px 12px 0;
+}
+
+.sidebar-account span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.sidebar-account button {
+  background: transparent;
+  border: 0;
+  color: #cbd5e1;
+  cursor: pointer;
+  padding: 6px 0;
+  text-align: left;
+}
+
 .workspace {
   padding: 28px;
 }
@@ -142,6 +181,28 @@ button {
   display: flex;
   gap: 12px;
 }
+
+.project-switcher {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 2px;
+  min-width: 210px;
+  padding: 6px 10px;
+}
+
+.project-switcher span { color: #64748b; font-size: 11px; }
+.project-switcher select { background: transparent; border: 0; color: #172033; font: inherit; font-weight: 600; min-width: 0; outline: 0; }
+.project-section-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.project-section-tabs button { background: #fff; border: 1px solid #dbe3ef; border-radius: 8px; color: #475569; cursor: pointer; padding: 9px 14px; }
+.project-section-tabs button.active { background: #172033; color: #fff; }
+.auth-brand { align-items: center; display: flex; gap: 12px; }
+.auth-brand strong, .auth-brand span { display: block; }
+.auth-brand span { color: #64748b; font-size: 13px; margin-top: 3px; }
+.auth-message { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412; padding: 10px 12px; }
+.admin-center, .report-center, .report-actions { display: grid; gap: 16px; }
+.report-actions { grid-template-columns: repeat(auto-fit, minmax(150px, max-content)); }
 
 .current-project-pill {
   background: #ffffff;
@@ -741,7 +802,25 @@ th {
   }
 
   .sidebar {
-    display: none;
+    padding: 16px;
+  }
+
+  .brand {
+    margin-bottom: 16px;
+  }
+
+  .nav-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nav-admin-divider {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar-account {
+    grid-template-columns: auto 1fr auto;
+    margin-top: 16px;
   }
 
   .metric-grid,
@@ -799,6 +878,10 @@ th {
 .project-form {
   display: grid;
   gap: 10px;
+}
+
+.user-project-workspace .danger-action {
+  display: none;
 }
 
 .onboarding-create .panel-header {

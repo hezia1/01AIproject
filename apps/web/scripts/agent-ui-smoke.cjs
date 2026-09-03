@@ -17,6 +17,20 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+async function authenticateIfNeeded(page) {
+  const username = page.getByLabel("用户名");
+  if (!(await username.count())) return;
+  const testUsername = process.env.UI_TEST_USERNAME;
+  const testPassword = process.env.UI_TEST_PASSWORD;
+  assert(testUsername && testPassword, "登录界面已启用；请设置 UI_TEST_USERNAME 和 UI_TEST_PASSWORD");
+  await username.fill(testUsername);
+  await page.getByLabel("密码", { exact: true }).fill(testPassword);
+  const confirmation = page.getByLabel("确认密码", { exact: true });
+  if (await confirmation.count()) await confirmation.fill(testPassword);
+  await page.getByRole("button", { name: /登录|创建管理员并登录/ }).click();
+  await page.getByRole("button", { name: "风险治理", exact: true }).waitFor();
+}
+
 (async () => {
   const browser = await chromium.launch({ channel, headless: true });
   const results = [];
@@ -26,12 +40,17 @@ function assert(condition, message) {
       viewport: viewport.width < 760 ? viewports[0] : viewport,
     });
     await page.goto(baseUrl, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "治理总览", exact: true }).click();
+    await authenticateIfNeeded(page);
+    if (process.env.AGENT_UI_PROJECT) {
+      await page.locator(".project-switcher select").selectOption({ label: process.env.AGENT_UI_PROJECT });
+      await page.waitForTimeout(500);
+    }
+    await page.getByRole("button", { name: "风险治理", exact: true }).click();
     await page.getByRole("button", { name: "AGENT 智能体安全", exact: true }).click();
     await page.setViewportSize(viewport);
 
     for (const tab of tabs) {
-      await page.getByRole("button", { name: new RegExp(`^${tab}`) }).click();
+      await page.locator(".agent-workspace-tabs").getByRole("button", { name: new RegExp(`^${tab}`) }).click();
       if (tab === "概览") {
         const overviewText = await page.locator(".agent-workspace").innerText();
         assert(!overviewText.includes("active findings meet or exceed"), `${viewport.width}px 概览仍显示英文门禁原因`);
@@ -42,11 +61,11 @@ function assert(condition, message) {
         if (await trustDetails.count()) await trustDetails.click();
         const assetText = await page.locator(".agent-workspace").innerText();
         assert(!assetText.includes("The score summarizes current scanner evidence"), `${viewport.width}px 评分边界仍显示英文`);
-        assert(assetText.includes("评分快照生成") && assetText.includes("北京时间"), `${viewport.width}px 评分缺少北京时间`);
+        if (!assetText.includes("等待新扫描")) assert(assetText.includes("评分快照生成") && assetText.includes("北京时间"), `${viewport.width}px 评分缺少北京时间`);
       }
       if (tab === "风险") {
         const riskText = await page.locator(".agent-workspace").innerText();
-        assert(riskText.includes("正式问题") && riskText.includes("额外提示"), `${viewport.width}px 风险口径未拆分`);
+        assert(riskText.includes("正式问题") && (riskText.includes("扫描提示") || riskText.includes("额外提示")), `${viewport.width}px 风险口径未拆分`);
         assert(!riskText.includes("个待人工复核"), `${viewport.width}px 仍使用混淆的问题/候选口径`);
         if (viewport.width < 760) {
           const firstRiskRow = page.locator(".agent-formal-findings .mobile-card-table tbody tr").first();
@@ -69,7 +88,7 @@ function assert(condition, message) {
       results.push(`${viewport.width}px ${tab}: ${dimensions.document}/${dimensions.viewport}`);
     }
 
-    await page.getByRole("button", { name: /^策略与交付/ }).click();
+    await page.locator(".agent-workspace-tabs").getByRole("button", { name: /^策略与交付/ }).click();
     await page.locator(".agent-saved-state, .agent-unsaved-banner").first().waitFor();
     assert(await page.locator(".agent-saved-state").count(), `${viewport.width}px 治理策略缺少已保存状态`);
     const runtimeToggle = page.getByLabel(/^允许本项目显示真实目标执行入口/);

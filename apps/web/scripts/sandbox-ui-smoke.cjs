@@ -11,6 +11,20 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+async function authenticateIfNeeded(page) {
+  const username = page.getByLabel("用户名");
+  if (!(await username.count())) return;
+  const testUsername = process.env.UI_TEST_USERNAME;
+  const testPassword = process.env.UI_TEST_PASSWORD;
+  assert(testUsername && testPassword, "登录界面已启用；请设置 UI_TEST_USERNAME 和 UI_TEST_PASSWORD");
+  await username.fill(testUsername);
+  await page.getByLabel("密码", { exact: true }).fill(testPassword);
+  const confirmation = page.getByLabel("确认密码", { exact: true });
+  if (await confirmation.count()) await confirmation.fill(testPassword);
+  await page.getByRole("button", { name: /登录|创建管理员并登录/ }).click();
+  await page.getByRole("button", { name: "风险治理", exact: true }).waitFor();
+}
+
 (async () => {
   const browser = await chromium.launch({ channel, headless: true });
   const results = [];
@@ -18,7 +32,8 @@ function assert(condition, message) {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport: viewport.width < 760 ? viewports[0] : viewport });
     await page.goto(baseUrl, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "治理总览", exact: true }).click();
+    await authenticateIfNeeded(page);
+    await page.getByRole("button", { name: "风险治理", exact: true }).click();
     await page.getByRole("button", { name: "SANDBOX 沙箱证据", exact: true }).click();
     await page.setViewportSize(viewport);
 

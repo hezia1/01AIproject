@@ -2,7 +2,8 @@
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import create_db_schema
-from app.routers import agent, aspm, dast, findings, knowledge, modules, projects, sandbox, scans, sast, sca
+from app.middleware.auth import AuthenticationMiddleware
+from app.routers import agent, aspm, auth, dast, findings, knowledge, modules, projects, sandbox, scans, sast, sca
 
 app = FastAPI(
     title="AI Native Application Security Platform",
@@ -10,6 +11,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.add_middleware(AuthenticationMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -24,6 +26,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(scans.router, prefix="/api/scans", tags=["scans"])
 app.include_router(findings.router, prefix="/api/findings", tags=["findings"])

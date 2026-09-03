@@ -1,1 +1,1 @@
-"""Request middleware for the local API."""
+"""HTTP middleware."""
