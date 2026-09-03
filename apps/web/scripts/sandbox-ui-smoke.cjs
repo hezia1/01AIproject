@@ -17,11 +17,12 @@ async function authenticateIfNeeded(page) {
   const testUsername = process.env.UI_TEST_USERNAME;
   const testPassword = process.env.UI_TEST_PASSWORD;
   assert(testUsername && testPassword, "登录界面已启用；请设置 UI_TEST_USERNAME 和 UI_TEST_PASSWORD");
+  await page.getByRole("button", { name: "管理员登录", exact: true }).click();
   await username.fill(testUsername);
   await page.getByLabel("密码", { exact: true }).fill(testPassword);
   const confirmation = page.getByLabel("确认密码", { exact: true });
   if (await confirmation.count()) await confirmation.fill(testPassword);
-  await page.getByRole("button", { name: /登录|创建管理员并登录/ }).click();
+  await page.getByRole("button", { name: "登录", exact: true }).click();
   await page.getByRole("button", { name: "风险治理", exact: true }).waitFor();
 }
 

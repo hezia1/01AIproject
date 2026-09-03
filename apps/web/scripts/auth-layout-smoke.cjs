@@ -9,7 +9,8 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-async function login(page, username, password) {
+async function login(page, username, password, admin = false) {
+  if (admin) await page.getByRole("button", { name: "管理员登录", exact: true }).click();
   await page.getByLabel("用户名").fill(username);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
@@ -25,15 +26,17 @@ async function login(page, username, password) {
   let userId = null;
   try {
     await page.goto(baseUrl, { waitUntil: "networkidle" });
-    await login(page, adminUsername, adminPassword);
-    const created = await page.evaluate(async ({ username, password }) => {
-      const response = await fetch("http://127.0.0.1:8000/api/auth/users", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password, role: "user" }) });
-      if (!response.ok) throw new Error(await response.text());
-      return response.json();
-    }, { username: testUsername, password: testPassword });
-    userId = created.id;
+    await login(page, adminUsername, adminPassword, true);
     await page.getByRole("button", { name: "退出登录", exact: true }).click();
-    await login(page, testUsername, testPassword);
+    await page.getByRole("button", { name: "用户注册", exact: true }).click();
+    await page.getByLabel("用户名").fill(testUsername);
+    await page.getByLabel("密码", { exact: true }).fill(testPassword);
+    await page.getByLabel("确认密码", { exact: true }).fill(testPassword);
+    await page.getByRole("button", { name: "注册并登录", exact: true }).click();
+    await page.getByRole("button", { name: "安全知识中枢", exact: true }).waitFor();
+    const registered = await page.evaluate(async () => (await fetch("http://127.0.0.1:8000/api/auth/me", { credentials: "include" })).json());
+    userId = registered.id;
+    assert(registered.role === "user", `公开注册不得创建管理员，实际身份为 ${registered.role}`);
 
     const forbiddenStatus = await page.evaluate(async () => (await fetch("http://127.0.0.1:8000/api/auth/users", { credentials: "include" })).status);
     assert(forbiddenStatus === 403, `普通用户调用管理员接口应返回 403，实际为 ${forbiddenStatus}`);
@@ -56,7 +59,7 @@ async function login(page, username, password) {
     assert(!(await page.locator(".sast-workspace").innerText()).includes("新建专家规则包"), "普通用户看到了管理员规则编写入口");
 
     await page.getByRole("button", { name: "退出登录", exact: true }).click();
-    await login(page, adminUsername, adminPassword);
+    await login(page, adminUsername, adminPassword, true);
     assert(await page.getByRole("button", { name: "管理中心", exact: true }).count() === 1, "管理员缺少管理中心");
     await page.getByRole("button", { name: "管理中心", exact: true }).click();
     assert(await page.getByRole("heading", { name: "用户管理", exact: true }).count() === 1, "管理中心没有用户管理工作区");

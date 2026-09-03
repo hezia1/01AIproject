@@ -49,12 +49,13 @@ def set_session_cookie(response: Response, token: str) -> None:
 
 @router.get("/status")
 def auth_status(db: Session = Depends(get_db)) -> dict[str, bool]:
-    return {"initialized": os.getenv("AUTH_DISABLED", "").lower() == "true" or bool(db.scalar(select(func.count()).select_from(UserRecord)))}
+    admin_count = db.scalar(select(func.count()).select_from(UserRecord).where(UserRecord.role == "admin"))
+    return {"initialized": os.getenv("AUTH_DISABLED", "").lower() == "true" or bool(admin_count)}
 
 
 @router.post("/bootstrap", status_code=201)
 def bootstrap_admin(payload: Credentials, response: Response, db: Session = Depends(get_db)) -> dict[str, object]:
-    if db.scalar(select(func.count()).select_from(UserRecord)):
+    if db.scalar(select(func.count()).select_from(UserRecord).where(UserRecord.role == "admin")):
         raise HTTPException(status_code=409, detail="Administrator has already been initialized")
     tenant = db.get(TenantRecord, LEGACY_TENANT_ID)
     if tenant is None:
@@ -66,6 +67,29 @@ def bootstrap_admin(payload: Credentials, response: Response, db: Session = Depe
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     user = UserRecord(id=str(uuid4()), tenant_id=LEGACY_TENANT_ID, username=payload.username.strip(), password_hash=password_hash, role="admin", enabled=True)
+    db.add(user)
+    db.flush()
+    token, _ = create_session(db, user)
+    db.commit()
+    set_session_cookie(response, token)
+    return user_payload(user)
+
+
+@router.post("/register", status_code=201)
+def register_user(payload: Credentials, response: Response, db: Session = Depends(get_db)) -> dict[str, object]:
+    admin_count = db.scalar(select(func.count()).select_from(UserRecord).where(UserRecord.role == "admin"))
+    if not admin_count:
+        raise HTTPException(status_code=409, detail="Administrator initialization required")
+    username = payload.username.strip()
+    if db.scalar(select(UserRecord.id).where(UserRecord.tenant_id == LEGACY_TENANT_ID, func.lower(UserRecord.username) == username.lower())):
+        raise HTTPException(status_code=409, detail="Username already exists")
+    user = UserRecord(
+        tenant_id=LEGACY_TENANT_ID,
+        username=username,
+        password_hash=hash_password(payload.password),
+        role="user",
+        enabled=True,
+    )
     db.add(user)
     db.flush()
     token, _ = create_session(db, user)

@@ -10,7 +10,7 @@ from app.db_models import UserRecord
 from app.services.auth import Identity, SESSION_COOKIE, identity_for_token
 
 
-PUBLIC_PATHS = {"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap"}
+PUBLIC_PATHS = {"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/register", "/api/auth/bootstrap"}
 
 
 def is_admin_operation(method: str, path: str) -> bool:

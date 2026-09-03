@@ -37,3 +37,10 @@ def test_admin_routes_do_not_capture_user_managed_updates() -> None:
     assert not is_admin_operation("POST", "/api/sca/grype-database/update")
     assert not is_admin_operation("POST", "/api/sast/community-rules/update")
     assert not is_admin_operation("POST", "/api/projects/import")
+
+
+def test_registration_is_public_but_user_management_remains_admin_only() -> None:
+    from app.middleware.auth import PUBLIC_PATHS
+
+    assert "/api/auth/register" in PUBLIC_PATHS
+    assert is_admin_operation("POST", "/api/auth/users")

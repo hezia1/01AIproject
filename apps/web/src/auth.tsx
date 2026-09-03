@@ -46,6 +46,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function LoginPanel({ initialized, onAuthenticated }: { initialized: boolean; onAuthenticated: (user: AuthUser) => void }) {
+  type Mode = "user-login" | "admin-login" | "register" | "setup";
+  const [mode, setMode] = useState<Mode>(initialized ? "user-login" : "setup");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -54,12 +56,18 @@ function LoginPanel({ initialized, onAuthenticated }: { initialized: boolean; on
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!initialized && password !== confirmPassword) return setMessage("两次输入的密码不一致");
+    if ((mode === "setup" || mode === "register") && password !== confirmPassword) return setMessage("两次输入的密码不一致");
     setSubmitting(true);
     setMessage("");
     try {
-      const endpoint = initialized ? "/auth/login" : "/auth/bootstrap";
-      onAuthenticated(await request<AuthUser>(endpoint, { method: "POST", body: JSON.stringify({ username: username.trim(), password }) }));
+      const endpoint = mode === "setup" ? "/auth/bootstrap" : mode === "register" ? "/auth/register" : "/auth/login";
+      const next = await request<AuthUser>(endpoint, { method: "POST", body: JSON.stringify({ username: username.trim(), password }) });
+      const wrongLoginType = (mode === "admin-login" && next.role !== "admin") || (mode === "user-login" && next.role !== "user");
+      if (wrongLoginType) {
+        await request("/auth/logout", { method: "POST" }).catch(() => undefined);
+        throw new Error(mode === "admin-login" ? "该账号不是管理员账号" : "管理员请使用下方的“管理员登录”入口");
+      }
+      onAuthenticated(next);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "登录失败");
     } finally {
@@ -67,14 +75,35 @@ function LoginPanel({ initialized, onAuthenticated }: { initialized: boolean; on
     }
   }
 
+  function switchMode(next: Mode) {
+    setMode(next);
+    setPassword("");
+    setConfirmPassword("");
+    setMessage("");
+  }
+
+  const title = mode === "setup" ? "初始化管理员" : mode === "register" ? "用户注册" : mode === "admin-login" ? "管理员登录" : "用户登录";
+  const description = mode === "setup"
+    ? "首次启动需要创建初始管理员。后续管理员账号只能在管理中心新增。"
+    : mode === "register"
+      ? "注册入口只创建普通用户账号，不能创建管理员。"
+      : mode === "admin-login"
+        ? "使用管理员账号进入平台管理中心。"
+        : "使用普通用户账号进入项目检测与治理工作台。";
+
   return <main className="auth-shell"><form className="auth-card" onSubmit={(event) => void submit(event)}>
-    <div className="auth-brand"><ShieldCheck size={32} /><div><strong>AI 安全平台</strong><span>{initialized ? "登录工作台" : "初始化管理员"}</span></div></div>
-    <p>{initialized ? "使用管理员为你创建的账号登录。普通用户账号请由管理员在“管理中心 → 用户管理”中创建。" : "首次启动只需创建管理员。普通用户账号可在登录后进入“管理中心 → 用户管理”创建。"}</p>
+    <div className="auth-brand"><ShieldCheck size={32} /><div><strong>AI 安全平台</strong><span>{title}</span></div></div>
+    <p>{description}</p>
     <label>用户名<input autoComplete="username" minLength={3} maxLength={120} value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
-    <label>密码<input type="password" placeholder="至少 6 位" autoComplete={initialized ? "current-password" : "new-password"} minLength={6} maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-    {!initialized ? <label>确认密码<input type="password" autoComplete="new-password" minLength={6} maxLength={200} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label> : null}
+    <label>密码<input type="password" placeholder="至少 6 位" autoComplete={mode === "register" || mode === "setup" ? "new-password" : "current-password"} minLength={6} maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+    {mode === "setup" || mode === "register" ? <label>确认密码<input type="password" autoComplete="new-password" minLength={6} maxLength={200} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label> : null}
     {message ? <div className="auth-message" role="alert">{message}</div> : null}
-    <button className="primary-action" disabled={submitting}>{submitting ? "请稍候…" : initialized ? "登录" : "创建管理员并登录"}</button>
+    <button className="primary-action" disabled={submitting}>{submitting ? "请稍候…" : mode === "setup" ? "创建初始管理员并登录" : mode === "register" ? "注册并登录" : "登录"}</button>
+    {mode !== "setup" ? <div className="auth-alternatives">
+      {mode !== "user-login" ? <button type="button" onClick={() => switchMode("user-login")}>用户登录</button> : null}
+      {mode !== "admin-login" ? <button type="button" onClick={() => switchMode("admin-login")}>管理员登录</button> : null}
+      {mode !== "register" ? <button type="button" onClick={() => switchMode("register")}>用户注册</button> : null}
+    </div> : null}
     <small>安全说明：浏览器脚本不能读取登录会话，数据库也不会保存你的明文密码。</small>
   </form></main>;
 }
