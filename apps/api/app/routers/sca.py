@@ -3,7 +3,7 @@ from dataclasses import asdict, replace
 from html import escape
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -53,6 +53,7 @@ from app.services.sca_artifacts import collect_artifact_hashes, source_fingerpri
 from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, grype_database_status, scan_with_syft_grype, update_grype_database
 from app.services.sca_assurance import build_sca_assurance, component_resolution
+from app.services.auth import current_identity, require_admin
 
 router = APIRouter()
 
@@ -216,7 +217,9 @@ def list_policy_exceptions(project_id: UUID, db: Session = Depends(get_db)) -> l
 
 
 @router.post("/projects/{project_id}/exceptions", status_code=201)
-def create_policy_exception(project_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+def create_policy_exception(project_id: UUID, payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    identity = current_identity(request)
+    payload = {**payload, "requester": identity.username, "requester_role": identity.role}
     if db.get(ProjectRecord, str(project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     required = ("ecosystem", "package_name", "exception_type", "reason")
@@ -234,7 +237,9 @@ def create_policy_exception(project_id: UUID, payload: dict[str, object], db: Se
 
 
 @router.patch("/exceptions/{exception_id}")
-def update_policy_exception(exception_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+def update_policy_exception(exception_id: UUID, payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    identity = require_admin(request)
+    payload = {**payload, "approver": identity.username, "approver_role": "admin"}
     item = db.get(ScaPolicyExceptionRecord, str(exception_id))
     if item is None:
         raise HTTPException(status_code=404, detail="SCA policy exception not found")
@@ -265,7 +270,8 @@ def list_sca_vex(project_id: UUID, db: Session = Depends(get_db)) -> list[dict[s
 
 
 @router.post("/projects/{project_id}/vex", status_code=201)
-def create_sca_vex(project_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+def create_sca_vex(project_id: UUID, payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    payload = {**payload, "actor": require_admin(request).username}
     if db.get(ProjectRecord, str(project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     required = ("ecosystem", "package_name", "vulnerability_id", "status")
@@ -285,7 +291,8 @@ def create_sca_vex(project_id: UUID, payload: dict[str, object], db: Session = D
 
 
 @router.patch("/vex/{vex_id}")
-def update_sca_vex(vex_id: UUID, payload: dict[str, object], db: Session = Depends(get_db)) -> dict[str, object]:
+def update_sca_vex(vex_id: UUID, payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    payload = {**payload, "actor": require_admin(request).username}
     item = db.get(ScaVexStatementRecord, str(vex_id))
     if item is None:
         raise HTTPException(status_code=404, detail="SCA VEX statement not found")
@@ -1019,7 +1026,7 @@ def exception_role(value: object) -> str | None:
     if role is None:
         return None
     normalized = role.lower().replace("-", "_")
-    if normalized not in {"developer", "security", "legal", "release_manager", "admin"}:
+    if normalized not in {"user", "developer", "security", "legal", "release_manager", "admin"}:
         raise HTTPException(status_code=400, detail="Unsupported SCA governance role")
     return normalized
 

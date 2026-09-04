@@ -22,6 +22,10 @@ def is_admin_operation(method: str, path: str) -> bool:
         return True
     if method == "PATCH" and path.startswith("/api/sca/exceptions/"):
         return True
+    if method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith("/api/sca/") and (path.startswith("/api/sca/vex/") or path.endswith("/vex")):
+        return True
+    if method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith("/api/sast/projects/") and "/suppressions" in path:
+        return True
     if method in {"POST", "PUT", "PATCH", "DELETE"} and "/rules" in path and path.startswith("/api/sast/projects/"):
         return True
     if method in {"POST", "PUT", "PATCH", "DELETE"} and "/semgrep-rules" in path and path.startswith("/api/sast/projects/"):

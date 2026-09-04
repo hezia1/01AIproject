@@ -1,7 +1,7 @@
 ﻿from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.module_registry import get_module, list_modules
 from app.repositories.mappers import project_module_to_schema
+from app.services.configuration_access import require_configuration_access, merge_module_configuration
 
 router = APIRouter()
 
@@ -40,8 +41,9 @@ def list_project_modules(
 
 @router.post("/projects/{project_id}", response_model=ProjectModule, status_code=201)
 def enable_project_module(
-    project_id: UUID, payload: ProjectModuleCreate, db: Session = Depends(get_db)
+    project_id: UUID, payload: ProjectModuleCreate, request: Request, db: Session = Depends(get_db)
 ) -> ProjectModule:
+    require_configuration_access(request, payload.config or {})
     if db.get(ProjectRecord, str(project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -55,7 +57,7 @@ def enable_project_module(
             ProjectModuleRecord.module_key == payload.module_key.value,
         )
     )
-    config = module.default_config | payload.config
+    config = merge_module_configuration(module.default_config, record.config if record else None, payload.config)
 
     if record is None:
         record = ProjectModuleRecord(
@@ -83,8 +85,10 @@ def update_project_module(
     project_id: UUID,
     module_key: ModuleKey,
     payload: ProjectModuleUpdate,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> ProjectModule:
+    require_configuration_access(request, payload.config or {})
     record = db.scalar(
         select(ProjectModuleRecord).where(
             ProjectModuleRecord.project_id == str(project_id),

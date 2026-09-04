@@ -10,6 +10,7 @@
     "test:agent-ui": "node scripts/agent-ui-smoke.cjs",
     "test:governance-ui": "node scripts/governance-ui-smoke.cjs",
     "test:auth-ui": "node scripts/auth-layout-smoke.cjs",
+    "test:admin-ui": "node scripts/admin-workspace-smoke.cjs",
     "test:sandbox-ui": "node scripts/sandbox-ui-smoke.cjs"
   },
   "dependencies": {

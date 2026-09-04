@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-03-two-role-ui",
+  "baseline_id": "2026-09-04-admin-configuration",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -14,7 +14,7 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Platform documents aligned on 2026-09-03, including local two-role authentication and the simplified task-oriented workspace",
+      "current": "Platform documents aligned on 2026-09-04, including module-based administrator configuration and configuration write permissions",
       "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md"],
       "limitations": "Fixture README files describe test targets and are not product capability statements.",
       "required_for": ["p0", "production"]
@@ -38,7 +38,7 @@
       "target": "All runnable tests pass with the Agent staging directory on D:",
       "current": {"passed": 307, "skipped": 1, "failed": 0},
       "evidence": ["python -m pytest apps/api/tests -q with TEMP/TMP/TMPDIR on D:"],
-      "limitations": "Warnings and environment-dependent skipped tests remain visible in the command output.",
+      "limitations": "This count is historical, not a rerun of the full suite. On 2026-09-04 only the five targeted auth/configuration/SCA/SAST/AGENT policy test files were run: 62 passed. No full backend suite was requested or run.",
       "required_for": ["p0", "production"]
     },
     {
@@ -47,8 +47,8 @@
       "metric": "Frontend TypeScript production build",
       "status": "verified",
       "target": "npm run build exits successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 604.69},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/auth-layout-smoke.cjs"],
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 631.01},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:admin-ui", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/admin-workspace-smoke.cjs"],
       "limitations": "Vite reports a chunk-size warning; browser smoke suites cover authentication, role-aware navigation, and governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
       "required_for": ["p0", "production"]
     },

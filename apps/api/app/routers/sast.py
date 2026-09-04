@@ -37,6 +37,7 @@ from app.services.sast_semgrep_rules import materialize_semgrep_rule_packs, semg
 from app.services.sast_community_rules import CommunityRulesUnavailable, community_rules_status, selected_community_configs, update_community_rules
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 from app.services.audit import record_audit
+from app.services.configuration_access import require_configuration_access, require_scan_configuration_access, USER_SAST_PROFILE_FIELDS
 
 router = APIRouter()
 
@@ -45,6 +46,10 @@ router = APIRouter()
 def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depends(get_db)) -> SastScanResult:
     project = ensure_project(db, payload.project_id)
     project_module = enabled_sast_module(db, payload.project_id)
+    # HTTP requests always have an identity. The local Worker is a trusted
+    # in-process caller; queued payloads are checked at submission time.
+    if getattr(request.state, "identity", None) is not None:
+        require_scan_configuration_access(request, payload.model_dump(exclude_unset=True), effective_sast_profile(project_module.config))
     source_path = validate_sast_source_path(project, payload.source_path)
     profile = resolved_scan_profile(project_module.config, payload)
     clear_previous = payload.clear_previous if "clear_previous" in payload.model_fields_set else bool(profile["clear_previous"])
@@ -182,7 +187,8 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
 @router.post("/jobs", response_model=ScanTask, status_code=201)
 def queue_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depends(get_db)) -> ScanTask:
     project = ensure_project(db, payload.project_id)
-    enabled_sast_module(db, payload.project_id)
+    module = enabled_sast_module(db, payload.project_id)
+    require_scan_configuration_access(request, payload.model_dump(exclude_unset=True), effective_sast_profile(module.config))
     source_path = validate_sast_source_path(project, payload.source_path)
     active = db.scalar(select(ScanTaskRecord.id).where(ScanTaskRecord.project_id == str(payload.project_id), ScanTaskRecord.scan_type == "sast_job", ScanTaskRecord.status.in_([ScanStatus.queued.value, ScanStatus.running.value])))
     if active:
@@ -433,6 +439,7 @@ def get_sast_profile(project_id: UUID, db: Session = Depends(get_db)) -> dict[st
 
 @router.patch("/projects/{project_id}/profile")
 def patch_sast_profile(project_id: UUID, payload: dict[str, object], request: Request, db: Session = Depends(get_db)) -> dict[str, object]:
+    require_configuration_access(request, payload, user_fields=USER_SAST_PROFILE_FIELDS)
     module = sast_module(db, project_id)
     try:
         profile = update_sast_profile(module.config, payload)
