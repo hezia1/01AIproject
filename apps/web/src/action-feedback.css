@@ -1,0 +1,14 @@
+button:not(:disabled) { transition: box-shadow .15s ease, filter .15s ease; }
+button:not(:disabled):active, button[data-feedback-pressed="true"] { box-shadow: 0 0 0 3px #2f73da55; filter: brightness(.92); }
+button:focus-visible { outline: 3px solid #3879d4; outline-offset: 3px; }
+button[aria-busy="true"] { cursor: progress; }
+.action-feedback-spinner { display: inline-block; flex: 0 0 auto; width: 12px; height: 12px; margin-left: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: action-feedback-spin .8s linear infinite; }
+.action-feedback-toast { position: fixed; z-index: 10000; right: 20px; bottom: 20px; width: min(420px, calc(100vw - 40px)); display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid #94b6e8; border-radius: 12px; color: #183652; background: #f2f7ff; box-shadow: 0 8px 28px #17203325; overflow-wrap: anywhere; pointer-events: none; }
+.action-feedback-toast.empty { display: none; }
+.action-feedback-toast.error { border-color: #e9a4a4; background: #fff3f3; color: #8f2424; }
+.action-feedback-toast div { flex: 1; min-width: 0; }
+.action-feedback-toast strong, .action-feedback-toast small { display: block; }
+.action-feedback-toast p { max-height: 160px; overflow-y: auto; margin: 8px 0 0; font-size: 13px; white-space: pre-wrap; }
+.action-feedback-toast button { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 2px 6px; font-size: 20px; pointer-events: auto; }
+@keyframes action-feedback-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button:not(:disabled) { transition: none; } .action-feedback-spinner { animation: none; } }

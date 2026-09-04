@@ -1,10 +1,11 @@
 import React, { Children, cloneElement, isValidElement, useState, type ReactNode } from "react";
 
+import { FeedbackButton } from "./action-feedback";
 export const PAGE_SIZE = 10;
 
 export function PageControls({ page, total, onChange }: { page: number; total: number; onChange: (page: number) => void }) {
   const count = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  return <span className="pagination" role="navigation" aria-label="列表分页"><span>共 {total} 条 · 每页 10 条 · 第 {page}/{count} 页</span><button className="secondary-action" disabled={page <= 1} onClick={() => onChange(page - 1)}>上一页</button><button className="secondary-action" disabled={page >= count} onClick={() => onChange(page + 1)}>下一页</button></span>;
+  return <span className="pagination" role="navigation" aria-label="列表分页"><span>共 {total} 条 · 每页 10 条 · 第 {page}/{count} 页</span><FeedbackButton className="secondary-action" disabled={page <= 1} onClick={() => onChange(page - 1)}>上一页</FeedbackButton><FeedbackButton className="secondary-action" disabled={page >= count} onClick={() => onChange(page + 1)}>下一页</FeedbackButton></span>;
 }
 
 /** Keep row handlers and keys intact; pagination is React state, not DOM hiding. */

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-04-admin-maintenance",
+  "baseline_id": "2026-09-04-action-feedback",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -38,7 +38,7 @@
       "target": "All runnable tests pass with the Agent staging directory on D:",
       "current": {"passed": 307, "skipped": 1, "failed": 0},
       "evidence": ["python -m pytest apps/api/tests -q with TEMP/TMP/TMPDIR on D:"],
-      "limitations": "This count is historical, not a rerun of the full suite. Latest on 2026-09-04: six targeted maintenance-policy/SCA/SAST/tool/SANDBOX/configuration test files passed (120 tests); earlier five-file result was 62 passed. No full backend suite was requested or run.",
+      "limitations": "This count is historical, not a rerun of the full suite. Previous maintenance change on 2026-09-04: six targeted test files passed (120 tests); earlier five-file result was 62 passed. Latest action-feedback change is frontend-only; no backend tests were rerun. No full backend suite was requested or run.",
       "required_for": ["p0", "production"]
     },
     {
@@ -47,8 +47,8 @@
       "metric": "Frontend TypeScript production build",
       "status": "verified",
       "target": "npm run build exits successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 640.66},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:admin-ui", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/admin-workspace-smoke.cjs"],
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 642.59},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:admin-ui", "cd apps/web && npm run test:feedback-ui", "cd apps/web && npm run test:pagination-ui", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/admin-workspace-smoke.cjs"],
       "limitations": "Vite reports a chunk-size warning; browser smoke suites cover authentication, role-aware navigation, and governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
       "required_for": ["p0", "production"]
     },

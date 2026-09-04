@@ -1,5 +1,6 @@
 import React from "react";
 import { BookOpen, FileText, FolderKanban, Play, Settings, ShieldCheck } from "lucide-react";
+import { FeedbackButton } from "./action-feedback";
 import { useAuth } from "./auth";
 
 export type PrimaryView = "projects" | "assets" | "detection" | "governance" | "knowledge" | "reports" | "admin";
@@ -27,17 +28,17 @@ export function AppShell({ activeView, projects, project, busy, onNavigate, onSe
         <NavButton active={activeView === "reports"} onClick={() => onNavigate("reports")} icon={<FileText size={18} />} label="报告" />
         {isAdmin ? <div className="nav-admin-divider"><span>平台管理</span><NavButton active={activeView === "admin"} onClick={() => onNavigate("admin")} icon={<Settings size={18} />} label="管理中心" /></div> : null}
       </nav>
-      <div className="sidebar-account"><span>{isAdmin ? "管理员" : "普通用户"}</span><strong>{user.username}</strong><button onClick={() => void logout()}>退出登录</button></div>
+      <div className="sidebar-account"><span>{isAdmin ? "管理员" : "普通用户"}</span><strong>{user.username}</strong><FeedbackButton onClick={() => logout()}>退出登录</FeedbackButton></div>
     </aside>
     <section className="workspace">
-      <header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><label className="project-switcher"><span>当前项目</span><select value={project?.id ?? ""} onChange={(event) => onSelectProject(event.target.value)}><option value="">未选择</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><button className="secondary-action" onClick={onRefresh} disabled={busy}>刷新</button></div></header>
+      <header className="topbar"><div><p className="eyebrow">{viewEyebrow(activeView)}</p><h1>{viewTitle(activeView)}</h1></div><div className="topbar-actions"><label className="project-switcher"><span>当前项目</span><select value={project?.id ?? ""} onChange={(event) => onSelectProject(event.target.value)}><option value="">未选择</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><FeedbackButton className="secondary-action" onClick={onRefresh} disabled={busy}>刷新</FeedbackButton></div></header>
       {children}
     </section>
   </main>;
 }
 
 function NavButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
-  return <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>{icon}{label}</button>;
+  return <FeedbackButton className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>{icon}{label}</FeedbackButton>;
 }
 
 function viewEyebrow(view: PrimaryView) {

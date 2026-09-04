@@ -1,6 +1,32 @@
+import { trackActionRequest } from "./action-feedback-state";
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 
+/** Preserve native Response semantics for report downloads and binary uploads. */
+export async function feedbackFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const finished = trackActionRequest();
+  try {
+    const response = await fetch(input, init);
+    let error: Error | undefined;
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      try { const payload = await response.clone().json(); if (typeof payload.detail === "string") detail = payload.detail; } catch { /* retain status; original body remains readable */ }
+      error = new Error(detail);
+    }
+    finished(error);
+    return response;
+  } catch (error) { finished(error); throw error; }
+}
+
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const finished = trackActionRequest();
+  try {
+    const result = await performRequest<T>(path, init);
+    finished();
+    return result;
+  } catch (error) { finished(error); throw error; }
+}
+
+async function performRequest<T>(path: string, init: RequestInit): Promise<T> {
   const method = String(init.method ?? "GET").toUpperCase();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,

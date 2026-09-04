@@ -12,6 +12,7 @@
     "test:auth-ui": "node scripts/auth-layout-smoke.cjs",
     "test:admin-ui": "node scripts/admin-workspace-smoke.cjs",
     "test:pagination-ui": "node scripts/pagination-smoke.cjs",
+    "test:feedback-ui": "node scripts/action-feedback-smoke.cjs",
     "test:sandbox-ui": "node scripts/sandbox-ui-smoke.cjs"
   },
   "dependencies": {
