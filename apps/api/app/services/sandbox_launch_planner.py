@@ -18,7 +18,6 @@ from app.services.deepseek_client import DeepSeekClient, DeepSeekUnavailable
 from app.services.sandbox_templates import discover_sandbox_templates
 
 
-APPROVED_IMAGE = re.compile(r"^(?:node|python|golang|maven|gradle|eclipse-temurin|php|ruby|rust|alpine|postgres|redis)(?::[A-Za-z0-9_.-]+|@sha256:[a-f0-9]{64})$")
 SAFE_COMMAND = re.compile(r"^(?:npm (?:start|run [A-Za-z0-9_.:-]+)|node [A-Za-z0-9_./-]+|python(?: -m)? [A-Za-z0-9_./:-]+(?: --[A-Za-z0-9_-]+(?: [A-Za-z0-9_./:-]+)?)*|uvicorn [A-Za-z0-9_.:-]+(?: --[A-Za-z0-9_-]+(?: [A-Za-z0-9_./:-]+)?)*|gunicorn [A-Za-z0-9_.:-]+(?: --[A-Za-z0-9_-]+(?: [A-Za-z0-9_./:-]+)?)*|go run [A-Za-z0-9_./-]+|mvn spring-boot:run|java -jar [A-Za-z0-9_./*-]+)$")
 CONTEXT_FILES = (
     "package.json", "package-lock.json", "requirements.txt", "pyproject.toml", "Pipfile",
@@ -29,7 +28,8 @@ SECRET = re.compile(r"(?i)((?:password|passwd|secret|token|api[_-]?key|authoriza
 
 
 def approved_runtime_image(image: str) -> bool:
-    return bool(APPROVED_IMAGE.fullmatch(image.strip()))
+    from app.services.platform_policy import image_repository_allowed
+    return image_repository_allowed(image)
 
 
 def safe_start_command(command: str) -> bool:

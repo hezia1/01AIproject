@@ -2188,6 +2188,8 @@ th {
 }
 
 .pagination {
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
   align-items: center;
   display: flex;
   gap: 12px;

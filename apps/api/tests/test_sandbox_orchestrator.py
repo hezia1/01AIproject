@@ -11,6 +11,14 @@ from threading import Thread
 from types import SimpleNamespace
 from urllib.parse import unquote
 from uuid import uuid4
+from copy import deepcopy
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_maintenance_policy(monkeypatch):
+    from app.services import platform_policy
+    monkeypatch.setattr(platform_policy, "current_policy", lambda: deepcopy(platform_policy.DEFAULT_POLICY))
 
 from app.db_models import SandboxTargetInstanceRecord, SandboxTaskRecord
 from app.services import sandbox_orchestrator as orchestrator
@@ -104,6 +112,7 @@ def test_unhealthy_docker_target_explains_configured_port(monkeypatch) -> None:
 
 
 def test_start_docker_target_uses_project_scoped_isolation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("app.services.platform_policy.dependency_download_allowed", lambda: False)
     calls: list[list[str]] = []
     (tmp_path / "package.json").write_text('{"scripts":{"start":"node server.js"}}', encoding="utf-8")
 
@@ -139,6 +148,8 @@ def test_start_docker_target_uses_project_scoped_isolation(monkeypatch, tmp_path
     assert gateway_run[gateway_run.index("-p"):gateway_run.index("-p") + 2] == ["-p", "127.0.0.1:49152:8080"]
     assert ["network", "connect"] == next(call[:2] for call in calls if call[:2] == ["network", "connect"])
     prepare = next(call for call in calls if call[:2] == ["run", "--rm"])
+    assert prepare[prepare.index("--network") + 1] == "none"
+    assert target.policy["dependency_download_allowed"] is False
     assert f"{tmp_path.resolve()}:/source:ro" in prepare
     assert any(value.startswith("aisec-sbx-work-") and value.endswith(":/workspace") for value in prepare)
     assert any(value.startswith("aisec-sbx-work-") and value.endswith(":/workspace") for value in run)

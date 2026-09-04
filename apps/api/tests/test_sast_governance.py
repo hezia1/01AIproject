@@ -6,6 +6,13 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
+from copy import deepcopy
+
+
+@pytest.fixture(autouse=True)
+def isolated_maintenance_policy(monkeypatch):
+    from app.services import platform_policy
+    monkeypatch.setattr(platform_policy, "current_policy", lambda: deepcopy(platform_policy.DEFAULT_POLICY))
 
 from app.db_models import FindingRecord
 from app.models import SastScanRequest

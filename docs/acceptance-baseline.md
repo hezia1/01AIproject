@@ -1,6 +1,6 @@
 # P0 量化验收基线
 
-基线 ID：`2026-09-04-admin-configuration`。机器可读事实位于 [`acceptance/criteria.json`](../acceptance/criteria.json)，校验器位于 [`scripts/acceptance_check.py`](../scripts/acceptance_check.py)。
+基线 ID：`2026-09-04-admin-maintenance`。机器可读事实位于 [`acceptance/criteria.json`](../acceptance/criteria.json)，校验器位于 [`scripts/acceptance_check.py`](../scripts/acceptance_check.py)。
 
 ## 结论
 
@@ -22,10 +22,10 @@ P0 的文档对齐、能力声明、后端回归、前端构建和数据库迁�
 | --- | --- | --- | --- |
 | 历史文档对齐 | 已验证 | 2026-08-31 冷启动接入、AGENT 与 SCA/SAST 治理界面基线及 Git 历史 | 只证明文档口径一致 |
 | 能力声明校准 | 已验证 | 注册表、前端回退、报告边界与回归测试 | 不替代扫描效果评估 |
-| 后端自动化测试 | 定向验证 | 2026-09-04：认证、配置权限及 SCA/SAST/AGENT 政策五个测试文件合计 62 passed；全量 317 passed/1 skipped 为历史记录 | 本次按用户要求未重跑全量后端测试；不能将历史全量结果当作本次结果 |
-| 前端生产构建 | 已验证 | `npm run build` 成功；管理中心长文本/权限、双角色登录，以及 AGENT、SCA/SAST、SANDBOX 浏览器冒烟通过 | 主包约 631.01 kB；Vite 仍有分包体积告警 |
-| 管理员配置归位 | 已验证 | 1600px/390px 模块分类布局、临时项目真实配置保存、普通用户写入 403、启停不重置政策、DAST 普通用户授权确认 | 未执行新的目标扫描；硬编码配置化和新 Skill 系统仍暂缓 |
-| 数据库迁移 | 已验证 | `20260903_0015 (head)` | 不是生产升级/回滚验证 |
+| 后端自动化测试 | 定向验证 | 2026-09-04 本轮：维护策略、SCA/SAST 策略、SCA 工具、SANDBOX、配置权限六个文件合计 120 passed；此前 62 passed 和全量 317 passed/1 skipped 为历史记录 | 本次按用户要求未重跑全量后端测试；不能将历史全量结果当作本次结果 |
+| 前端生产构建 | 已验证 | `npm run build` 成功；管理中心长文本/权限、双角色登录，以及 AGENT、SCA/SAST、SANDBOX 浏览器冒烟通过 | 主包约 641 kB；Vite 仍有分包体积告警 |
+| 管理员配置归位 | 已验证 | 1600px/390px 模块分类布局、临时项目真实配置保存、普通用户写入 403、启停不重置政策、DAST 普通用户授权确认 | 另通过 10/10/3 分页、SCA/SAST 编辑、维护策略并发与权限验证；未执行新的目标扫描；命令/资源上限、DAST 公共映射和新 Skill 系统未完成 |
+| 数据库迁移 | 已验证 | `20260904_0016 (head)` | 不是生产升级/回滚验证 |
 | 陌生项目冷启动 | 已验证 | 本地目录、受控 ZIP、HTTP(S) Git 接入；准备度 API；有界快速扫描；API 冒烟 | 私有仓库仍依赖主机 Git 凭据；DAST/SANDBOX 仍需授权运行目标 |
 | 检测准确率/召回率 | 未建立基线 | 无 | 缺少标注正负样本集 |
 | DAST 复现率 | 未建立基线 | 无 | 缺少版本化重放语料 |

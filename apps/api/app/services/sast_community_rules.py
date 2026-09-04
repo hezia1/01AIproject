@@ -139,6 +139,8 @@ def community_rules_status() -> dict[str, Any]:
 
 
 def update_community_rules(*, source_ref: str = DEFAULT_SOURCE_REF, license_accepted: bool = False) -> dict[str, Any]:
+    from app.services.platform_policy import require_download
+    require_download("semgrep_download_allowed")
     if not license_accepted:
         raise ValueError("必须先确认 Semgrep Rules License，平台才会下载社区规则")
     ref = source_ref.strip()

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-04-admin-configuration",
+  "baseline_id": "2026-09-04-admin-maintenance",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -14,7 +14,7 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Platform documents aligned on 2026-09-04, including module-based administrator configuration and configuration write permissions",
+      "current": "Platform documents aligned on 2026-09-04, including 10-item pagination, rule editing, persistent download policy and sandbox image repository configuration",
       "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md"],
       "limitations": "Fixture README files describe test targets and are not product capability statements.",
       "required_for": ["p0", "production"]
@@ -38,7 +38,7 @@
       "target": "All runnable tests pass with the Agent staging directory on D:",
       "current": {"passed": 307, "skipped": 1, "failed": 0},
       "evidence": ["python -m pytest apps/api/tests -q with TEMP/TMP/TMPDIR on D:"],
-      "limitations": "This count is historical, not a rerun of the full suite. On 2026-09-04 only the five targeted auth/configuration/SCA/SAST/AGENT policy test files were run: 62 passed. No full backend suite was requested or run.",
+      "limitations": "This count is historical, not a rerun of the full suite. Latest on 2026-09-04: six targeted maintenance-policy/SCA/SAST/tool/SANDBOX/configuration test files passed (120 tests); earlier five-file result was 62 passed. No full backend suite was requested or run.",
       "required_for": ["p0", "production"]
     },
     {
@@ -47,7 +47,7 @@
       "metric": "Frontend TypeScript production build",
       "status": "verified",
       "target": "npm run build exits successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 631.01},
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 640.66},
       "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:admin-ui", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/admin-workspace-smoke.cjs"],
       "limitations": "Vite reports a chunk-size warning; browser smoke suites cover authentication, role-aware navigation, and governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
       "required_for": ["p0", "production"]
@@ -58,7 +58,7 @@
       "metric": "Alembic schema is at repository head",
       "status": "verified",
       "target": "Current database revision equals the repository migration head",
-      "current": "20260903_0015",
+      "current": "20260904_0016",
       "evidence": ["python -m alembic -c alembic.ini current"],
       "limitations": "This verifies the local development database, not backup, rollback, or production upgrade readiness.",
       "required_for": ["p0", "production"]

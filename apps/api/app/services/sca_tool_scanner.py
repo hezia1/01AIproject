@@ -166,7 +166,7 @@ def check_syft_grype_health() -> ToolHealthResult:
     checks.append(check_image("grype_image", GRYPE_IMAGE, "docker pull anchore/grype:latest"))
     checks.append(check_image("trivy_image", TRIVY_IMAGE, "docker pull aquasec/trivy:latest"))
 
-    grype_db = run_health_command(["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"])
+    grype_db = run_health_command(["docker", "run", "--rm", "--pull=never", "-e", "XDG_CACHE_HOME=/cache", "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"])
     if grype_db[0] == 0:
         checks.append(ToolHealthCheck(name="grype_db", status="success", detail=grype_db[1]))
     else:
@@ -285,6 +285,11 @@ def _read_grype_database_status() -> GrypeDatabaseStatus:
 
 
 def update_grype_database() -> tuple[bool, str, GrypeDatabaseStatus]:
+    from app.services.platform_policy import require_download
+    try:
+        require_download("grype_download_allowed")
+    except ValueError as exc:
+        return False, str(exc), grype_database_status()
     initial = grype_database_status()
     if not initial.can_update:
         return False, initial.detail or "Grype 数据库当前无法更新", initial
@@ -357,7 +362,7 @@ def grype_database_remediation() -> str:
 
 
 def ensure_grype_database() -> str | None:
-    status_command = ["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"]
+    status_command = ["docker", "run", "--rm", "--pull=never", "-e", "XDG_CACHE_HOME=/cache", "-e", f"GRYPE_DB_MAX_ALLOWED_BUILT_AGE={GRYPE_OFFLINE_MAX_DATABASE_AGE}", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "status"]
     status = run_health_command(status_command)
     if status[0] == 0:
         return None
@@ -370,7 +375,7 @@ def ensure_grype_database() -> str | None:
     if archive is None:
         return f"Grype 离线数据库不可用：{status[1]}；未找到可导入的数据库归档"
     import_result = run_health_command(
-        ["docker", "run", "--rm", "-e", "XDG_CACHE_HOME=/cache", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "import", f"/cache/{archive.name}"],
+        ["docker", "run", "--rm", "--pull=never", "-e", "XDG_CACHE_HOME=/cache", "-v", f"{grype_cache_dir()}:/cache", GRYPE_IMAGE, "db", "import", f"/cache/{archive.name}"],
         timeout=DATABASE_IMPORT_TIMEOUT_SECONDS,
     )
     if import_result[0] != 0:
@@ -456,8 +461,8 @@ def scan_with_syft_grype(source_path: str, fallback_components: list[ParsedCompo
     dependency_resolution_detail: str | None = None
 
     with isolated_dependency_scan_root(root) as (scan_root, dependency_resolution_status, dependency_resolution_detail):
-        if dependency_resolution_status == "failed" and dependency_resolution_detail:
-            errors.append(f"Dependency resolution failed: {dependency_resolution_detail}")
+        if dependency_resolution_status in {"failed", "blocked"} and dependency_resolution_detail:
+            errors.append(f"Dependency resolution {dependency_resolution_status}: {dependency_resolution_detail}")
         syft_payload, syft_error = run_tool_json(scan_root, SYFT_IMAGE, ["dir:/workspace", "-o", "cyclonedx-json"])
         if syft_error:
             errors.append(f"Syft failed: {syft_error}")
@@ -563,6 +568,13 @@ def isolated_dependency_scan_root(root: Path):
         return
     if any(path.is_file() for path in lock_files) or (root / "node_modules").is_dir():
         yield root, "not_needed", "已存在 npm 锁文件或已安装依赖目录"
+        return
+
+    from app.services.platform_policy import require_download
+    try:
+        require_download("sca_dependency_resolution_allowed")
+    except ValueError as exc:
+        yield root, "blocked", f"依赖联网解析被策略阻止：{exc} 继续使用已有清单，不能声明完整依赖覆盖。"
         return
 
     with tempfile.TemporaryDirectory(prefix="sca-npm-resolve-") as directory:
@@ -684,6 +696,7 @@ def run_tool_json(
         "docker",
         "run",
         "--rm",
+        "--pull=never",
         "-v",
         f"{root}:/workspace:ro",
         "-w",

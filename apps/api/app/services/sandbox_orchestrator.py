@@ -93,6 +93,11 @@ def _ensure_runtime_image(image: str) -> None:
         return
     if not approved_runtime_image(image):
         raise SandboxOrchestrationError(f"本地没有目标镜像 {image}，且它不在可自动拉取的官方运行时白名单中")
+    from app.services.platform_policy import require_download
+    try:
+        require_download("sandbox_image_download_allowed")
+    except ValueError as exc:
+        raise SandboxOrchestrationError(str(exc)) from exc
     pulled = _run_docker(["pull", image], timeout=300)
     if pulled.returncode != 0 or not _image_exists(image):
         raise SandboxOrchestrationError(f"自动拉取官方运行镜像 {image} 失败：{_safe_container_diagnostic(pulled.stderr)}")
@@ -432,8 +437,11 @@ def start_docker_target(db: Session, project: ProjectRecord, *, image: str, comm
             _remove_managed_network(network_name, instance_id)
             raise SandboxOrchestrationError(volume.stderr.strip() or "创建项目依赖卷失败")
         record.policy = {**record.policy, "workspace_volume_name": workspace_volume_name, "dependency_prepared": False}
+        from app.services.platform_policy import dependency_download_allowed
+        dependency_download = dependency_download_allowed()
+        record.policy = {**record.policy, "dependency_download_allowed": dependency_download}
         prepared = _run_docker([
-            "run", "--rm", "--network", edge_network_name,
+            "run", "--rm", "--network", edge_network_name if dependency_download else "none",
             "--label", f"{MANAGED_LABEL}=true", "--label", f"ai-security-platform.instance-id={instance_id}",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--memory", "1g", "--cpus", "2", "--pids-limit", "256",
             "-v", f"{source}:/source:ro", "-v", f"{workspace_volume_name}:/workspace", "-w", "/workspace",
@@ -445,7 +453,8 @@ def start_docker_target(db: Session, project: ProjectRecord, *, image: str, comm
             _stop_support_services(support_names, instance_id)
             _remove_managed_network(edge_network_name, instance_id)
             _remove_managed_network(network_name, instance_id)
-            raise SandboxOrchestrationError(f"项目依赖准备失败。{detail or '请检查锁文件、依赖源或专用构建环境。'}")
+            network_reason = "管理员已禁止依赖联网下载，准备容器使用无网络模式。" if not dependency_download else ""
+            raise SandboxOrchestrationError(f"项目依赖准备失败。{network_reason}{detail or '请检查锁文件、依赖源或专用构建环境。'}")
         record.policy = {**record.policy, "dependency_prepared": True}
         mounts = ["-v", f"{workspace_volume_name}:/workspace"]
     else:

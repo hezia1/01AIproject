@@ -77,6 +77,8 @@ def list_sca_policies(project_id: UUID | None = None, db: Session = Depends(get_
                 "severity": item.severity.value,
                 "affected": item.affected,
                 "fixed_version": item.fixed_version,
+                "summary": item.summary,
+                "references": list(item.references),
                 "source": policy_source(item.vulnerability_id, "vulnerability", overrides),
             }
             for item in vulnerability_rules
@@ -87,6 +89,10 @@ def list_sca_policies(project_id: UUID | None = None, db: Session = Depends(get_
                 "policy": item.policy,
                 "keywords": list(item.keywords),
                 "approval_required": item.approval_required,
+                "summary": item.summary,
+                "obligations": list(item.obligations),
+                "approval_roles": list(item.approval_roles),
+                "remediation": item.remediation,
                 "enabled": bool(item.keywords),
                 "source": policy_source(item.policy_id, "license", overrides),
             }
@@ -924,12 +930,12 @@ def build_tool_status(enabled: bool, tool_scan: ToolScanResult | None) -> ScaToo
         return ScaToolStatus(enabled=True, status="failed", errors=["tool scan did not run"])
     successful_tools = sum(status in {"success", "fallback"} for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
     failed_tools = sum(status == "failed" for status in (tool_scan.syft_status, tool_scan.grype_status, tool_scan.trivy_status))
-    failed_tools += int(tool_scan.dependency_resolution_status == "failed")
+    failed_tools += int(tool_scan.dependency_resolution_status in {"failed", "blocked"})
     fallback_completed = (
         tool_scan.trivy_vulnerability_fallback
         and tool_scan.trivy_status == "success"
         and tool_scan.syft_status in {"success", "fallback"}
-        and tool_scan.dependency_resolution_status != "failed"
+        and tool_scan.dependency_resolution_status not in {"failed", "blocked"}
     )
     if fallback_completed and tool_scan.grype_status == "failed" and failed_tools == 1:
         status = "fallback"

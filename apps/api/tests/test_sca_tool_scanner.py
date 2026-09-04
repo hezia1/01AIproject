@@ -16,6 +16,14 @@ from app.services.sca_tool_scanner import (
     update_grype_database,
 )
 from types import SimpleNamespace
+import pytest
+from copy import deepcopy
+
+
+@pytest.fixture(autouse=True)
+def isolated_maintenance_policy(monkeypatch):
+    from app.services import platform_policy
+    monkeypatch.setattr(platform_policy, "current_policy", lambda: deepcopy(platform_policy.DEFAULT_POLICY))
 
 
 def test_default_offline_assets_directory_is_under_repository_root() -> None:

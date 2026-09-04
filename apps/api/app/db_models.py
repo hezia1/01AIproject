@@ -8,6 +8,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 
+class PlatformPolicyRecord(Base):
+    __tablename__ = "platform_policies"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    actor: Mapped[str] = mapped_column(String(120), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class TenantRecord(Base):
     __tablename__ = "tenants"
 
