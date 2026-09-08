@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import create_db_schema
 from app.middleware.auth import AuthenticationMiddleware
-from app.routers import agent, aspm, auth, dast, findings, knowledge, modules, projects, sandbox, scans, sast, sca, platform_policy
+from app.routers import agent, aspm, auth, dast, findings, knowledge, modules, projects, sandbox, scans, sast, sca, platform_policy, security_skills
 
 app = FastAPI(
     title="AI Native Application Security Platform",
@@ -39,6 +39,7 @@ app.include_router(dast.router, prefix="/api/dast", tags=["dast"])
 app.include_router(sandbox.router, prefix="/api/sandbox", tags=["sandbox"])
 app.include_router(aspm.router, prefix="/api/aspm", tags=["aspm"])
 app.include_router(knowledge.router, prefix="/api/knowledge", tags=["knowledge"])
+app.include_router(security_skills.router, prefix="/api/security-skills", tags=["security-skills"])
 
 
 @app.on_event("startup")

@@ -38,6 +38,8 @@ def is_admin_operation(method: str, path: str) -> bool:
         return True
     if path.endswith("/rollback") and path.startswith("/api/knowledge/entries/"):
         return True
+    if method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith("/api/security-skills") and "/projects/" not in path:
+        return True
     return False
 
 

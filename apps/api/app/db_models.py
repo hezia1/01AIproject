@@ -198,6 +198,53 @@ class KnowledgeEntryVersionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class SecuritySkillRecord(Base):
+    __tablename__ = "security_skills"
+    __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_security_skill_tenant_slug"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=False)
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    module: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft")
+    active_version: Mapped[int | None] = mapped_column(Integer)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SecuritySkillVersionRecord(Base):
+    __tablename__ = "security_skill_versions"
+    __table_args__ = (UniqueConstraint("skill_id", "version", name="uq_security_skill_version"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    skill_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("security_skills.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft")
+    change_note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class SecuritySkillRunRecord(Base):
+    __tablename__ = "security_skill_runs"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    skill_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("security_skills.id"), nullable=False)
+    skill_version_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("security_skill_versions.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    matched_finding_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    result_summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    requested_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class SastAgentRunRecord(Base):
     """Auditable DeepSeek multi-agent execution without storing credentials or raw headers."""
 

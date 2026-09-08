@@ -41,5 +41,7 @@ npm run test:dev-server
 
 登录和业务冒烟需要已启动的 Web/API、可用数据库以及通过环境变量提供的 `UI_TEST_USERNAME` / `UI_TEST_PASSWORD`；权限相关脚本需要测试管理员身份。分页与操作反馈脚本使用模拟数据/接口，不能替代真实扫描验证。具体站点地址可用脚本对应的 `AUTH_UI_BASE_URL`、`ADMIN_UI_BASE_URL`、`GOVERNANCE_UI_BASE_URL`、`AGENT_UI_BASE_URL`、`SANDBOX_UI_BASE_URL` 覆盖。
 
+声明式 Skill 注册表使用 `npm run test:skill-ui` 验证 1440px/390px 布局、管理员创建入口和能力边界；站点可通过 `SKILL_UI_BASE_URL` 覆盖。脚本只读取页面，不创建或执行 Skill。
+
 管理页脚本会建立临时项目/用户并暂时保存配置，登录脚本会建立临时普通用户；执行后必须核实清理及配置恢复，仅清理当次测试产生的数据。不要将页面显示正常、HTTP 200 或模拟测试通过写成实际扫描成功。本轮是否执行及通过情况只记录在对应维护核实记录中。
 

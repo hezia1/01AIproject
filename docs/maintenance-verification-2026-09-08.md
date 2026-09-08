@@ -4,14 +4,14 @@
 
 ## 仓库与验收目标
 
-- 最新文档复核起点为 `main`，`HEAD` 与 `origin/main` 同为 `35e8fdc03d33524bc32da3ac690b72cd96e97205`，领先/落后为 `0/0`，工作区干净。该提交固定了本地前端 IPv4 地址；此前 `7a384b3` 上完成的文档核验改动曾被撤销，本次按当前实现重新纳入。
+- 本轮 Skill 实现起点为 `main`，`HEAD` 与 `origin/main` 同为 `9ef98fa9fc9375b5405e81c56f52f8e6549151a4`，领先/落后为 `0/0`，工作区干净；该提交已包含前端 IPv4 地址修复和此前重新核验的文档。
 - 当前验收源码仅使用 `D:\project\PYproject\testproject`。该仓库为干净的 `main`，提交 `1f8fed3`。没有使用 `D:\project\PYproject\test_project`，也没有把数据库中的 DVNA 记录当作当前验收项目。
 - PostgreSQL 中与当前路径精确匹配的项目为 `test01`，ID `3968feaf-f278-437f-a5a7-1e810dae4f19`。本轮未重新执行 SCA、SAST、AGENT、DAST 或 SANDBOX 目标扫描；存量完成状态不作为本轮扫描成功证据。
 - 最新只读查询显示该项目有 5 个历史完成 SAST 任务、1 个历史完成 SCA 任务和 122 条存量 Finding；没有 AGENT 扫描任务。这些数字只描述数据库存量，不代表本轮重新扫描或检测效果。
 
 ## 数据库与服务
 
-- `python -m alembic -c alembic.ini current` 返回 `20260904_0016 (head)`，与仓库迁移链头一致。
+- 声明式 Skill 表迁移后，`python -m alembic -c alembic.ini current` 返回 `20260908_0017 (head)`，与仓库迁移链头一致。
 - PostgreSQL 16 与 Redis 7 容器处于运行状态。
 - `GET http://127.0.0.1:8000/api/health` 返回 `{"status":"ok"}`。该接口实现只证明 HTTP 路由响应，不检查数据库、Redis、Docker、扫描器、情报新鲜度或任务成功状态。
 
@@ -23,9 +23,9 @@
 python -B -m pytest tests -q -rs -p no:cacheprovider
 ```
 
-最终结果：`398 passed, 1 skipped, 32 warnings`，无失败。唯一跳过项是符号链接创建用例，原因是当前 Windows 账号不允许创建符号链接。32 条告警来自 `datetime.utcnow()` 弃用提示，未作为测试通过以外的质量结论。
+加入 4 个 Skill 清单/匹配/权限边界测试后的最终结果：`402 passed, 1 skipped, 32 warnings`，无失败。唯一跳过项是符号链接创建用例，原因是当前 Windows 账号不允许创建符号链接。32 条告警来自 `datetime.utcnow()` 弃用提示，未作为测试通过以外的质量结论。
 
-本次文档更新期间已在以 `35e8fdc` 为实现基线的当前工作树上重新运行完整套件，结果仍为 `398 passed, 1 skipped, 32 warnings`。测试临时目录位于仓库 `.tmp` 下，结束后已核对绝对路径并清理。该结果只适用于本次记录所核对的代码，不得省略来源后冒充任意未来提交的测试结果。
+此前以 `35e8fdc` 为实现基线的文档更新曾运行完整套件，历史结果为 `398 passed, 1 skipped, 32 warnings`。本轮 Skill 实现后的当前结果以上述 `402 passed, 1 skipped, 32 warnings` 为准。两次测试临时目录均位于仓库 `.tmp` 下，结束后已核对绝对路径并清理；历史计数不得冒充未来提交的测试结果。
 
 为获取跳过原因，曾在未先创建新临时目录的情况下再次设置临时目录变量；Python 回退到 `C:` 系统临时目录，18 个 Agent 暂存安全边界用例按设计失败。该环境无效运行不计入最终测试结论；创建 D 盘目录后重新执行即得到上述最终通过结果。
 
@@ -48,6 +48,9 @@ python -B -m pytest tests -q -rs -p no:cacheprovider
 界面测试使用唯一临时管理员。管理中心脚本创建的临时项目和普通用户已清理；首次删除临时管理员时，`user_sessions` 外键要求先删除会话，清理事务回滚。随后按会话、审计、成员关系、用户的顺序完成清理，并把维护策略版本、操作者和更新时间恢复到测试前状态。最终核实临时账号和临时项目数量均为 0。
 
 ## 验收结论与边界
+
+- 声明式 Skill 定向测试 `4 passed`；真实数据库路由函数完成创建、发布、对 `testproject` 执行和历史读取。执行读取 42 条当前有效 Finding，匹配 14 条高危/严重且具位置证据的 SAST Finding；这不是重新扫描或检测效果指标。临时 Skill、运行记录和 3 条对应审计已清理。
+- 当前环境缺少 Starlette `TestClient` 所需的 `httpx2`，因此没有把 HTTP 客户端路径写成通过；同一路由函数和真实 PostgreSQL 会话验证通过。新增 `npm run test:skill-ui`，前端使用独立 `AUTH_DISABLED=true` 测试服务做 1440px/390px 浏览器冒烟，入口、能力边界和无横向溢出断言通过，随后停止独立测试服务；原 5173/8000 服务保持运行。
 
 - 已审核根目录、API、Web、产品、架构、模块、路线图、管理配置、CI、SANDBOX、交接、反馈和验收文档；测试 fixture 内的 README 仅描述测试输入，不作为项目现状文档改写。
 - `acceptance/criteria.json` 已通过严格 JSON 解析和重复键检查；本轮删除了会被普通 JSON 解析器静默覆盖的重复 `status` 字段，并统一基线 ID 与实现来源提交。

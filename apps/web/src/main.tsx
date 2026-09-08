@@ -11,6 +11,7 @@ import "./styles.css";
 import { MaintenancePolicy, useDownloadPermission } from "./maintenance-policy";
 import { ScaPolicyFields } from "./sca-policy-fields";
 import { PagedTable, PagedItems } from "./pagination";
+import { SecuritySkillRegistry } from "./security-skill-registry";
 
 type ViewKey = "projects" | "assets" | "detection" | "governance" | "knowledge" | "reports" | "admin" | "modules" | "sca" | "sast" | "agent" | "dast" | "sandbox" | "tasks" | "aspm";
 type ModuleKey = "sast" | "sca" | "agent" | "dast" | "sandbox" | "aspm";
@@ -2404,6 +2405,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     </section> : null}
 
     {activeTab === "library" ? <section className="knowledge-library-workspace">
+      <SecuritySkillRegistry project={project} isAdmin={isAdmin} />
       <section className="knowledge-library-panel">
         <div className="knowledge-section-heading"><div><span>规则资产</span><h3>当前项目已出现的检测规则与风险分类</h3></div><strong>{rules.length} 条</strong></div>
         <div className="knowledge-rule-list">{<PagedItems>{ruleStats.map((item) => <article key={item.rule}><div><Bug size={16} /><span><strong>{item.rule}</strong><small>{item.categories.join("、")}</small></span></div><b>{item.count} 次命中</b></article>)}</PagedItems>}{ruleStats.length === 0 ? <div className="knowledge-empty">当前项目还没有规则命中。</div> : null}</div>

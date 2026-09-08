@@ -85,6 +85,8 @@ def create_db_schema() -> None:
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_entries_tenant_status ON knowledge_entries (tenant_id, status)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_entries_project ON knowledge_entries (source_project_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_knowledge_versions_entry ON knowledge_entry_versions (entry_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_security_skills_tenant_status ON security_skills (tenant_id, status)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_security_skill_runs_project ON security_skill_runs (project_id, started_at)"))
         connection.execute(text("""CREATE TABLE IF NOT EXISTS user_sessions (
             id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             token_hash VARCHAR(64) NOT NULL UNIQUE, expires_at TIMESTAMP NOT NULL,

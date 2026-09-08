@@ -1,6 +1,6 @@
 # P0 量化验收基线
 
-基线 ID：`2026-09-08-documentation-and-local-dev-refresh`。机器可读事实位于 [`acceptance/criteria.json`](../acceptance/criteria.json)，校验器位于 [`scripts/acceptance_check.py`](../scripts/acceptance_check.py)。本轮命令与环境证据见 [维护核实记录](maintenance-verification-2026-09-08.md)。
+基线 ID：`2026-09-08-declarative-skill-registry`。机器可读事实位于 [`acceptance/criteria.json`](../acceptance/criteria.json)，校验器位于 [`scripts/acceptance_check.py`](../scripts/acceptance_check.py)。本轮命令与环境证据见 [维护核实记录](maintenance-verification-2026-09-08.md)。
 
 ## 结论
 
@@ -22,10 +22,10 @@
 | --- | --- | --- | --- |
 | 当前文档对齐 | 已验证 | 2026-09-08 对照 HEAD、数据库迁移、当前验收项目、完整后端结果、生产构建与界面冒烟 | 文档核对不替代检测效果基准 |
 | 能力声明校准 | 已验证 | 注册表、前端回退、报告边界与回归测试 | 不替代扫描效果评估 |
-| 后端自动化测试 | 已验证 | D 盘真实临时目录下完整套件 `398 passed, 1 skipped`，无失败 | 32 条 `datetime.utcnow()` 弃用告警；符号链接用例因当前 Windows 账号不允许创建链接而跳过 |
-| 前端生产构建与冒烟 | 部分验证 | `npm run build`、`test:dev-server`、IPv4 HTTP 和最新双角色登录冒烟成功；此前反馈、分页、登录、管理中心、SCA/SAST 治理、SANDBOX 六组通过 | AGENT 冒烟在 `testproject` 无 AGENT 扫描基线时无法得到五步运行计划并失败；主包 642.59 kB，仍有分包告警 |
-| 管理员配置归位 | 已验证 | 1600px/390px 模块分类布局、临时项目真实配置保存、普通用户写入 403、启停不重置政策、DAST 普通用户授权确认 | 另通过 10/10/3 分页、SCA/SAST 编辑、维护策略并发与权限验证；未执行新的目标扫描；命令/资源上限、DAST 公共映射和新 Skill 系统未完成 |
-| 数据库迁移 | 已验证 | `20260904_0016 (head)` | 不是生产升级/回滚验证 |
+| 后端自动化测试 | 已验证 | D 盘真实临时目录下完整套件 `402 passed, 1 skipped`，无失败 | 32 条 `datetime.utcnow()` 弃用告警；符号链接用例因当前 Windows 账号不允许创建链接而跳过 |
+| 前端生产构建与冒烟 | 部分验证 | `npm run build`、Skill 注册表 1440px/390px、`test:dev-server`、IPv4 HTTP 和最新双角色登录冒烟成功；此前反馈、分页、登录、管理中心、SCA/SAST 治理、SANDBOX 六组通过 | AGENT 冒烟在 `testproject` 无 AGENT 扫描基线时无法得到五步运行计划并失败；主包 649.79 kB，仍有分包告警 |
+| 管理员配置归位 | 已验证 | 管理员创建/版本/发布声明式 Skill，普通用户只能读取和执行已发布版本；原有模块配置边界不变 | Skill 仅复核现有 Finding；外部包安装/签名、自动触发、命令/资源上限和 DAST 公共映射未完成 |
+| 数据库迁移 | 已验证 | `20260908_0017 (head)` | 已在当前开发数据库升级并读取；不是生产升级/回滚验证 |
 | 陌生项目冷启动 | 已验证 | 本地目录、受控 ZIP、HTTP(S) Git 接入；准备度 API；有界快速扫描；API 冒烟 | 私有仓库仍依赖主机 Git 凭据；DAST/SANDBOX 仍需授权运行目标 |
 | 检测准确率/召回率 | 未建立基线 | 无 | 缺少标注正负样本集 |
 | DAST 复现率 | 未建立基线 | 无 | 缺少版本化重放语料 |
@@ -79,6 +79,7 @@ npm run test:admin-ui
 npm run test:agent-ui
 npm run test:governance-ui
 npm run test:sandbox-ui
+npm run test:skill-ui
 ```
 
 数据库迁移：

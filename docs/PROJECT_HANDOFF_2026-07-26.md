@@ -2,7 +2,7 @@
 
 > 文件名因历史链接保留；正文已核对到 **2026-09-08**，不再代表 2026-07-26 的实现状态。本轮验证范围见 [维护核实记录](maintenance-verification-2026-09-08.md)。
 
-2026-09-04 已交付：管理中心按模块整理已有配置并修复长文本布局；SAST 默认政策/抑制、SCA VEX 与通用模块配置写入受管理员权限保护，模块启停保留配置。同日增加每页 10 条数据列表、SCA/SAST 规则编辑、SANDBOX 镜像白名单与五类联网资源策略，数据库迁移到 `20260904_0016`。普通用户继续独立确认和执行 DAST；资源更新受管理员允许。命令/资源上限、DAST 公共映射及 Skill 安装系统仍未配置化，见 [管理员配置说明](admin-configuration.md) 和 deferred-work 的 CFG-001 / UI-007 / UI-008。
+2026-09-08 已交付声明式 Security Skill 注册表：管理员创建不可变版本并发布，普通用户可对项目执行已发布版本，结果和审计写入 PostgreSQL；当前动作仅复核现有 Finding，不替换扫描器或运行任意代码。数据库迁移到 `20260908_0017`。外部 Skill 包安装/签名、自动触发编排、命令/资源上限和 DAST 公共映射仍未配置化，见 [管理员配置说明](admin-configuration.md) 和 deferred-work 的 CFG-001 / UI-007 / UI-008。
 
 ## 当前结论
 
@@ -20,9 +20,9 @@
 
 - 核实起点：分支 `main`，远端 `origin` 指向 `https://github.com/hezia1/01AIproject.git`；开始时已有 16 个用户未提交修改并全部保留，fetch 后 HEAD 与 `origin/main` 同为 `7a384b3f9690ed445e48db622c61b0fff4ebd31b`。本次文档提交的最终同步结果在交付答复中报告。
 - PostgreSQL 只读查询成功；`/api/health` 可达，其实现固定返回 `ok`，只证明 HTTP 路由响应，不证明扫描器、情报库或 Redis 健康。
-- 数据库实际迁移版本和仓库迁移链头均为 `20260904_0016`。
+- 数据库实际迁移版本和仓库迁移链头均为 `20260908_0017`。
 - 当前验收源码为 `D:\project\PYproject\testproject`，提交 `1f8fed353712940752a7bd9d7ddff06a65fb4791`；数据库项目名为 `test01`，ID 为 `3968feaf-f278-437f-a5a7-1e810dae4f19`，源码路径匹配。遗留项目记录不作为当前验收目标；该路径仅是本机验收配置，不进入扫描规则。
-- 完整后端套件在 D 盘临时目录下为 **398 passed, 1 skipped**，无失败；唯一跳过是当前 Windows 账号不能创建符号链接，另有 32 条 `datetime.utcnow()` 弃用告警。旧清单的 `307 passed, 1 skipped` 与交接文档的 `317 passed, 1 skipped` 仅保留为历史记录。
+- 完整后端套件在 D 盘临时目录下为 **402 passed, 1 skipped**，无失败；唯一跳过是当前 Windows 账号不能创建符号链接，另有 32 条 `datetime.utcnow()` 弃用告警。旧清单的 `307 passed, 1 skipped`、`317 passed, 1 skipped` 和加入 Skill 前的 `398 passed, 1 skipped` 仅保留为历史记录。
 - 前端生产构建通过，主包 642.59 kB，仍有分包体积告警；反馈、分页、登录、管理中心、SCA/SAST 治理和 SANDBOX 六组冒烟通过，AGENT 冒烟失败。实际范围、原因及临时数据清理见 [维护核实记录](maintenance-verification-2026-09-08.md)。
 - 本地开发前端现固定监听 `127.0.0.1:5173` 并启用严格端口；`test:dev-server`、IPv4 HTTP 和双角色登录冒烟已通过。若端口被占用，Vite 会明确失败而不会静默切换。
 
@@ -66,7 +66,7 @@ npm run dev
 ### SAST
 
 - 已有项目规则、有限语义分析、Git 基线和可选七角色 AI 复核。
-- `security_skill` 仍是单次复核输出；知识中枢可以持久化项目候选、人工发布和跨项目推荐，但尚未将知识自动编译成可执行企业 Skill，也没有行业历史漏洞语料或自动改写规则的学习闭环。
+- SAST AI 的 `security_skill` 仍只是单次复核草案，不会自动进入注册表。知识中枢已具备独立的声明式 Skill 注册、版本、人工发布和现有 Finding 复核执行；尚未实现草案转换审批、外部 Skill 包安装/签名、行业语料或自动改写规则的学习闭环。
 
 ### DAST
 

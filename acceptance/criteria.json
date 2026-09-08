@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-08-documentation-and-local-dev-refresh",
-  "reviewed_source_commit": "35e8fdc03d33524bc32da3ac690b72cd96e97205",
+  "baseline_id": "2026-09-08-declarative-skill-registry",
+  "reviewed_source_commit": "9ef98fa9fc9375b5405e81c56f52f8e6549151a4",
   "reviewed_on": "2026-09-08",
   "scope": "single-host development and demonstration",
   "status_definitions": {
@@ -27,7 +27,7 @@
       "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
       "status": "verified",
       "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
-      "current": "Capability-claim regression tests passed within the 398-test full backend run on 2026-09-08",
+      "current": "Capability-claim and declarative Skill boundary tests passed within the 402-test full backend run on 2026-09-08",
       "evidence": ["apps/api/app/module_registry.py", "apps/web/src/main.tsx", "apps/api/tests/test_module_registry_claims.py"],
       "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
       "required_for": ["p0", "production"]
@@ -38,7 +38,7 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"scope": "full", "passed": 398, "skipped": 1, "failed": 0, "warnings": 32, "full_suite_run": true},
+      "current": {"scope": "full", "passed": 402, "skipped": 1, "failed": 0, "warnings": 32, "full_suite_run": true},
       "evidence": ["From apps/api with an existing D: temp directory: python -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-08.md"],
       "historical_records": [
         {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
@@ -64,8 +64,8 @@
       "metric": "Alembic schema is at repository head",
       "status": "verified",
       "target": "Current database revision equals the repository migration head",
-      "current": "20260904_0016",
-      "evidence": ["python -m alembic -c alembic.ini current on 2026-09-08", "apps/api/migrations/versions/20260904_0016_platform_policy.py", "docs/maintenance-verification-2026-09-08.md"],
+      "current": "20260908_0017",
+      "evidence": ["python -m alembic -c alembic.ini current on 2026-09-08", "apps/api/migrations/versions/20260908_0017_security_skills.py", "docs/maintenance-verification-2026-09-08.md"],
       "limitations": "This verifies the local development database, not backup, rollback, or production upgrade readiness.",
       "required_for": ["p0", "production"]
     },
