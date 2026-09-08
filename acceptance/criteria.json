@@ -1,6 +1,8 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-04-action-feedback",
+  "baseline_id": "2026-09-08-documentation-refresh",
+  "reviewed_source_commit": "7a384b3f9690ed445e48db622c61b0fff4ebd31b",
+  "reviewed_on": "2026-09-08",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -14,9 +16,9 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Platform documents aligned on 2026-09-04, including 10-item pagination, rule editing, persistent download policy and sandbox image repository configuration",
-      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md"],
-      "limitations": "Fixture README files describe test targets and are not product capability statements.",
+      "current": "Product, architecture, handoff, application and CI documents reviewed against local authentication, role permissions, migration head, frontend scripts and actual verification scope on 2026-09-08",
+      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-08.md"],
+      "limitations": "This is a documentation review, not a full scanner acceptance run. Fixture README files describe test targets. Historical command counts retain their source commits and do not imply a rerun.",
       "required_for": ["p0", "production"]
     },
     {
@@ -25,7 +27,7 @@
       "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
       "status": "verified",
       "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
-      "current": "Calibrated and protected by backend regression tests",
+      "current": "Capability-claim regression tests passed within the 398-test full backend run on 2026-09-08",
       "evidence": ["apps/api/app/module_registry.py", "apps/web/src/main.tsx", "apps/api/tests/test_module_registry_claims.py"],
       "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
       "required_for": ["p0", "production"]
@@ -36,9 +38,13 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"passed": 307, "skipped": 1, "failed": 0},
-      "evidence": ["python -m pytest apps/api/tests -q with TEMP/TMP/TMPDIR on D:"],
-      "limitations": "This count is historical, not a rerun of the full suite. Previous maintenance change on 2026-09-04: six targeted test files passed (120 tests); earlier five-file result was 62 passed. Latest action-feedback change is frontend-only; no backend tests were rerun. No full backend suite was requested or run.",
+      "current": {"scope": "full", "passed": 398, "skipped": 1, "failed": 0, "warnings": 32, "full_suite_run": true},
+      "evidence": ["From apps/api with an existing D: temp directory: python -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-08.md"],
+      "historical_records": [
+        {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
+        {"source_commit": "1685a12", "source_file": "docs/PROJECT_HANDOFF_2026-07-26.md", "reported_passed": 317, "reported_skipped": 1}
+      ],
+      "limitations": "One symlink test was skipped because the current Windows account cannot create symlinks. The suite emitted 32 datetime.utcnow deprecation warnings. The 307 and 317 counts are retained only as historical documentation records.",
       "required_for": ["p0", "production"]
     },
     {
@@ -46,10 +52,11 @@
       "category": "engineering",
       "metric": "Frontend TypeScript production build",
       "status": "verified",
-      "target": "npm run build exits successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 642.59},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:admin-ui", "cd apps/web && npm run test:feedback-ui", "cd apps/web && npm run test:pagination-ui", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:agent-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "apps/web/scripts/admin-workspace-smoke.cjs"],
-      "limitations": "Vite reports a chunk-size warning; browser smoke suites cover authentication, role-aware navigation, and governed workspaces at 1600px and 390px but are not a complete end-to-end product suite.",
+      "status": "partially_verified",
+      "target": "npm run build and all seven documented browser smoke suites exit successfully",
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 642.59, "smoke_passed": 6, "smoke_failed": 1, "failed_smoke": "test:agent-ui"},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:admin-ui", "cd apps/web && npm run test:feedback-ui", "cd apps/web && npm run test:pagination-ui", "cd apps/web && npm run test:auth-ui", "cd apps/web && npm run test:governance-ui", "cd apps/web && npm run test:sandbox-ui", "docs/maintenance-verification-2026-09-08.md"],
+      "limitations": "Vite reports a chunk-size warning. test:agent-ui failed because the configured testproject has no AGENT scan task and therefore no five-step runtime plan; the script also required child-process termination after its assertion. Follow deferred-work UI-011.",
       "required_for": ["p0", "production"]
     },
     {
@@ -59,7 +66,7 @@
       "status": "verified",
       "target": "Current database revision equals the repository migration head",
       "current": "20260904_0016",
-      "evidence": ["python -m alembic -c alembic.ini current"],
+      "evidence": ["python -m alembic -c alembic.ini current on 2026-09-08", "apps/api/migrations/versions/20260904_0016_platform_policy.py", "docs/maintenance-verification-2026-09-08.md"],
       "limitations": "This verifies the local development database, not backup, rollback, or production upgrade readiness.",
       "required_for": ["p0", "production"]
     },
@@ -69,9 +76,9 @@
       "metric": "A previously unseen project can be safely imported, inventoried, readiness-checked, and scanned in bounded quick mode",
       "status": "verified",
       "target": "Local directory, guarded ZIP, and HTTP(S) Git inputs produce project-scoped readiness and bounded static scan results",
-      "current": "Local and ZIP API smoke checks pass; full manifest recognition and quick-scan limits have regression tests",
+      "current": "Historical local and ZIP API checks and manifest/quick-limit regression tests exist; 2026-09-08 verified only the configured testproject path, source commit and stored database records",
       "evidence": ["apps/api/app/services/project_onboarding.py", "apps/api/tests/test_project_onboarding.py", "apps/web/src/main.tsx"],
-      "limitations": "Private Git access depends on host credentials; dynamic validation remains blocked until an authorized runtime target is configured.",
+      "limitations": "Cold-start import and target scans were not rerun in this documentation maintenance. Private Git access depends on host credentials; dynamic validation requires an authorized runtime target. Stored scan status is not a fresh execution result.",
       "required_for": ["p0", "production"]
     },
     {
@@ -113,7 +120,7 @@
       "metric": "Sandbox policy enforcement and escape resistance",
       "status": "partially_verified",
       "target": "Versioned negative corpus covering network, filesystem, process, capability, resource, secret, and escape boundaries",
-      "current": "Policy tests and deterministic safe/MCP fixtures pass in the supported local environment",
+      "current": "Policy tests and deterministic safe/MCP fixtures passed in the 2026-09-08 full backend run; the complete isolation matrix and independent escape assessment remain absent",
       "evidence": ["apps/api/tests/fixtures/agent_runtime_safe", "apps/api/tests/fixtures/agent_runtime_mcp", "apps/api/tests"],
       "limitations": "The platform is not eBPF/Sysmon/EDR and has no independent container escape assessment.",
       "required_for": ["production"]

@@ -4,6 +4,8 @@
 
 > 当前版本提供本地用户名/密码登录和 `user` / `admin` 两种身份，但仍是单机研发与演示环境，没有生产级组织/租户隔离、外部身份源、密码恢复和审计保护。请勿直接暴露到公网，也不要对未获授权的目标执行动态验证。
 
+文档核对日期：**2026-09-08**。本轮仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-08.md)；历史测试和扫描数量仅代表其记录版本。
+
 ## 目录
 
 界面按钮与表单已接入统一反馈：点击高亮、异步处理中、防重复提交和失败提示；完成提示不冒充扫描成功。交互规则和测试见 [按钮反馈说明](docs/ui-action-feedback.md)。
@@ -121,6 +123,8 @@ cd apps\api
 - Swagger API：<http://127.0.0.1:8000/docs>
 - ReDoc：<http://127.0.0.1:8000/redoc>
 
+`/api/health` 当前固定返回 `{"status":"ok"}`，只证明 HTTP 路由可以响应，不检查数据库、工具或扫描任务。Swagger/ReDoc 及业务 API 需要已登录的会话；数据库迁移和扫描执行状态需分别核实。
+
 首次启动时 Web 会要求创建初始管理员，平台不会生成默认用户名或密码。初始化后默认显示用户登录，页面下方提供“管理员登录”和“用户注册”；公开注册始终只能创建普通用户。新增管理员账号只能由已有管理员在“管理中心 → 用户管理”创建。密码至少 6 位，会话使用 HttpOnly Cookie，密码只保存 scrypt 哈希。普通用户可以新增和切换项目、选择接入五个执行模块、运行基础检测、使用 ASPM 风险治理与安全知识中枢；管理员额外维护用户、本地/项目规则、平台策略和后续 Agent Skill 能力。
 
 ### 4. 启动前端
@@ -177,7 +181,7 @@ DeepSeek 只是一项可选增强能力。未配置或调用失败时，本地�
 | `sandbox_image` | SANDBOX 使用的受信运行时镜像 |
 | `sandbox_command` | 经过白名单校验的应用启动命令 |
 
-项目可以逐项启用或停用六个模块。未满足运行条件的模块会显示阻塞或降级原因，不会把未执行任务标记为完成。
+Web 可逐项启用或停用 SCA、SAST、AGENT、DAST、SANDBOX 五个执行模块；ASPM 随项目加载保持启用，用于汇总治理。模块注册表包含六个模块，不代表界面提供六个独立执行开关。未满足运行条件的任务应显示实际阻塞或降级原因。
 
 ## 使用流程
 
@@ -237,6 +241,8 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 
 以下 CLI 不要求启动 Web 或 API 服务。
 
+本地 CLI 与平台 API 的认证和能力范围不同：CLI 不使用 Web Cookie；SCA CLI 不执行 Docker 增强工具，也不自动读取数据库中的项目 VEX、例外和策略覆盖。依赖在线 OSV、Semgrep 或本地规则资源的能力仍需满足各自条件。
+
 ### SCA
 
 ```powershell
@@ -292,6 +298,8 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 - [Jenkins SAST 示例](ci/sast/Jenkinsfile)
 - [Azure Pipelines SAST 示例](azure-pipelines-sast.yml)
 
+SCA API 门禁示例尚未接入当前 Cookie 登录，默认启用认证时会收到 401；本地 CLI 示例不受这一 API 认证缺口影响。API 门禁通过也不等于目标扫描成功，具体状态限制见 [SCA 门禁说明](docs/sca-ci-gate.md) 和 [暂缓事项](docs/deferred-work.md)。
+
 ## 测试
 
 ### 后端测试
@@ -314,14 +322,24 @@ Agent 运行时暂存目录必须位于 `D:` 盘；直接沿用系统默认的 `
 cd apps\web
 npm ci
 npm run build
+npm run test:feedback-ui
+npm run test:pagination-ui
+npm run test:auth-ui
+npm run test:admin-ui
+npm run test:agent-ui
+npm run test:governance-ui
 npm run test:sandbox-ui
 ```
+
+七组冒烟的服务、浏览器、临时账号及清理要求见 [`apps/web/README.md`](apps/web/README.md)。反馈和分页用例需要 Vite 开发服务；生产构建通过不代表这些浏览器用例已执行。
 
 部分 SANDBOX 和增强扫描能力依赖本机 Docker、固定镜像或离线漏洞库；缺少外部条件时，相应测试或能力会按设计显示跳过、阻塞或降级。
 
 ## 验收基线
 
-仓库使用机器可读的 [`acceptance/criteria.json`](acceptance/criteria.json) 记录当前证据和缺口，并通过 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 校验。P0 门禁只验证已经具备可复现证据的交付项；精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度在缺少版本化语料时保持“未建立基线”，不得用演示数据替代。
+“基线”是某个版本可追溯的能力、测试和环境记录，用于后续比较，不是全功能通过或质量保证。仓库用 [`acceptance/criteria.json`](acceptance/criteria.json) 保存这些证据和缺口，校验器 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 只检查记录结构和状态，不会自动运行测试或连接数据库。
+
+2026-09-08 已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `398 passed, 1 skipped`；前端生产构建和六组界面冒烟通过，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0
@@ -368,6 +386,7 @@ npm run test:sandbox-ui
 | --- | --- |
 | [`docs/prd.md`](docs/prd.md) | 产品目标、用户、范围和验收方向 |
 | [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与未建立基线项 |
+| [`docs/maintenance-verification-2026-09-08.md`](docs/maintenance-verification-2026-09-08.md) | 本轮文档核实、真实验证范围和历史证据来源 |
 | [`docs/deferred-work.md`](docs/deferred-work.md) | 暂缓事项、重新启动条件、完成标准和进展记录 |
 | [`docs/architecture.md`](docs/architecture.md) | 架构原则、模块和数据流 |
 | [`docs/module-system.md`](docs/module-system.md) | 六模块职责与关系 |
