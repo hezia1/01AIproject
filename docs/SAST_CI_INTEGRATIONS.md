@@ -1,19 +1,13 @@
 # SAST CI integrations
 
-Status: local/CI templates exist; implementation reviewed 2026-09-08. The API
-now requires a local username/password session and enforces user/admin
-permissions. It still has no production IAM, CI service identity or hosted CI
-service. The local CLI runs scanner code directly and does not log in to the
-platform API. This review does not establish that a hosted pipeline has run;
-current verification is recorded in
-[the maintenance record](maintenance-verification-2026-09-08.md).
+Status: implemented local/CI templates, reviewed 2026-08-28. The platform does
+not provide production IAM or a hosted CI service; credentials and enforcement
+remain the responsibility of the selected CI environment.
 
 The repository ships deterministic templates for GitHub Actions, GitLab CI,
 Jenkins and Azure DevOps. Every template invokes `scripts/sast_ci.py`, retains
 JSON/SARIF evidence and returns a non-zero exit code when the configured local
-quality gate blocks. The CLI's zero exit code means that the evaluated gate did
-not block; inspect `engine_status`, scanned files and the evidence before
-claiming a successful or complete scan.
+quality threshold is met.
 
 No template and no scan downloads Semgrep images or remote rule packs. The SAST
 governance page exposes a separate, operator-triggered community-rule update:
@@ -38,11 +32,8 @@ new-findings-only comparison. CI templates use the local CLI threshold; export
 the project CI configuration from the SAST governance page when a project needs
 its exact profile represented in a platform pipeline.
 
-Queue scans with `POST /api/sast/jobs` using a valid `ai_security_session`
-Cookie obtained from `POST /api/auth/login`, then run a worker in the same
-deployed environment as the API and database. The bundled local CLI templates
-do not implement API login, cookie renewal or a service-token flow; API-based
-CI needs an authenticated integration, not `AUTH_DISABLED=true`:
+Queue scans with `POST /api/sast/jobs`, then run a worker in the same deployed
+environment as the API and database:
 
 ```powershell
 cd D:\project\PYproject\AI网安项目

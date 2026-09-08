@@ -1,10 +1,8 @@
 # Web 控制台
 
-前端采用 React 19、TypeScript 和 Vite 7，已接入真实 FastAPI 接口，覆盖项目配置、五个执行模块（SCA、SAST、AGENT、DAST、SANDBOX）、ASPM 风险治理、安全知识中枢、报告和管理员配置。
+前端采用 React 19、TypeScript 和 Vite 7，已接入真实 FastAPI 接口，覆盖项目配置、六模块工作区、扫描结果、动态验证、沙箱证据和 ASPM 项目级治理。
 
-文档按 2026-09-08 仓库实现复核；本轮运行结果见 [维护核实记录](../../docs/maintenance-verification-2026-09-08.md)。已实现本地登录、普通用户注册和 `user` / `admin` 两角色界面：两类用户均可使用项目、检测、风险治理、安全知识中枢和报告，管理员另有管理中心；后端继续执行权限检查。普通用户在管理员允许时可人工更新 Grype 数据库和 Semgrep 社区规则。
-
-业务页面仍主要集中在 `src/main.tsx`，登录、应用框架、用户管理、分页、操作反馈和维护策略已拆成独立组件。已有七组 Playwright 浏览器冒烟脚本，尚未建立完整浏览器回归、错误监控和充分分包。当前本地会话与共享工作区不等同于生产级 IAM 或租户隔离，适用边界见 [API README](../api/README.md)。
+当前前端仍集中在 `src/main.tsx`，尚无自动化 UI 测试；生产发布前需要补充分包、组件拆分、错误监控和浏览器端回归测试。登录鉴权也尚未启用，因此只适合受控的本地研发与演示环境。
 
 ## 本地启动
 
@@ -30,13 +28,5 @@ npm ci
 npm run build
 ```
 
-构建结果以当次命令为准；既有主 JavaScript 包体积告警仍是工程债务，不应描述成已完成生产优化。
-
-## 界面冒烟
-
-`package.json` 提供 `test:auth-ui`、`test:admin-ui`、`test:governance-ui`、`test:agent-ui`、`test:sandbox-ui`、`test:pagination-ui` 和 `test:feedback-ui`。浏览器由 `playwright-core` 控制，默认使用本机 Chrome，可通过 `PLAYWRIGHT_CHANNEL` 选择已安装的浏览器通道。
-
-登录和业务冒烟需要已启动的 Web/API、可用数据库以及通过环境变量提供的 `UI_TEST_USERNAME` / `UI_TEST_PASSWORD`；权限相关脚本需要测试管理员身份。分页与操作反馈脚本使用模拟数据/接口，不能替代真实扫描验证。具体站点地址可用脚本对应的 `AUTH_UI_BASE_URL`、`ADMIN_UI_BASE_URL`、`GOVERNANCE_UI_BASE_URL`、`AGENT_UI_BASE_URL`、`SANDBOX_UI_BASE_URL` 覆盖。
-
-管理页脚本会建立临时项目/用户并暂时保存配置，登录脚本会建立临时普通用户；执行后必须核实清理及配置恢复，仅清理当次测试产生的数据。不要将页面显示正常、HTTP 200 或模拟测试通过写成实际扫描成功。本轮是否执行及通过情况只记录在对应维护核实记录中。
+当前构建可以完成，但主 JavaScript 包仍有体积告警；该告警是已知工程债务，不应描述成已经完成的生产优化。
 
