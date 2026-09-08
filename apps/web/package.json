@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "test:dev-server": "node scripts/dev-server-config-smoke.cjs",
     "test:agent-ui": "node scripts/agent-ui-smoke.cjs",
     "test:governance-ui": "node scripts/governance-ui-smoke.cjs",
     "test:auth-ui": "node scripts/auth-layout-smoke.cjs",
