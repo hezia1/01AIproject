@@ -92,6 +92,7 @@ def create_db_schema() -> None:
         connection.execute(text("ALTER TABLE security_skill_runs ADD COLUMN IF NOT EXISTS trigger VARCHAR(40) NOT NULL DEFAULT 'manual'"))
         connection.execute(text("ALTER TABLE security_skill_runs ADD COLUMN IF NOT EXISTS trigger_scan_task_id UUID REFERENCES scan_tasks(id)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_security_skill_auto_run ON security_skill_runs (skill_id, trigger_scan_task_id) WHERE trigger_scan_task_id IS NOT NULL"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_project_graph_latest ON project_graph_snapshots (project_id, graph_type, version DESC)"))
         connection.execute(text("""CREATE TABLE IF NOT EXISTS user_sessions (
             id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             token_hash VARCHAR(64) NOT NULL UNIQUE, expires_at TIMESTAMP NOT NULL,

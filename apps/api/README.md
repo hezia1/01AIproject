@@ -1,8 +1,8 @@
 # API 服务
 
-FastAPI 服务承载项目、模块、SCA、SAST、AGENT、DAST、SANDBOX 和 ASPM API。项目、任务、Finding、组件、动态验证和证据均持久化到 PostgreSQL，数据库结构通过 Alembic 管理。
+FastAPI 服务承载项目、模块、SCA、SAST、AGENT、DAST、SANDBOX、ASPM 和项目图谱 API。项目、任务、Finding、组件、动态验证、证据和图谱快照均持久化到 PostgreSQL，数据库结构通过 Alembic 管理。代码图谱只读源码，业务图谱只聚合已存储的项目事实，两者都不执行项目代码。
 
-文档按 2026-09-08 仓库实现复核；本轮运行结果见 [维护核实记录](../../docs/maintenance-verification-2026-09-08.md)。
+文档按 2026-09-09 仓库实现复核；本轮运行结果见 [维护核实记录](../../docs/maintenance-verification-2026-09-09.md)。
 
 当前 SAST 后台任务由 `scripts/sast_worker.py` 轮询 PostgreSQL 队列；本地基础设施包含 Redis，但 SAST 队列仍使用 PostgreSQL，尚不是生产级分布式任务系统。
 

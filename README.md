@@ -37,11 +37,13 @@
 | DAST | 将可动态验证的 SAST/AGENT Finding 转换为受控策略，执行同源 HTTP、浏览器及差分验证 | 验证队列、运行快照、证据链、三色裁决、专项报告 |
 | SANDBOX | 识别常见项目启动信息，在隔离 Docker 网络中启动目标和受控依赖，执行固定探针 | 目标实例、任务事件、HAR/截图/控制台/时延等运行证据 |
 | ASPM | 汇总组件、Finding、验证、沙箱证据和整改状态 | 项目总览、证据图、复测对比、项目安全报告 |
-| 安全知识中枢 | 将项目 Finding、动态证据和治理结论组织为可追溯经验，并注册受控声明式 Skill | 候选审核、版本回滚、租户级发布、跨项目推荐、Skill 版本与执行记录 |
+| 安全知识中枢 | 将 Finding、动态证据和治理结论组织为可追溯经验，注册声明式 Skill，并生成单项目代码/业务图谱快照 | 知识审核/推荐、Skill 版本/执行记录、版本化图谱 |
 
 平台数据保存在 PostgreSQL 中。已经完成的 DAST 运行、证据和三色裁决会随项目恢复，不依赖当前浏览器页面状态。
 
 可执行 Skill 位于“安全知识中枢 → 规则与 Skill”。平台预置 5 个租户级通用 Skill，同一租户的所有项目共享；管理员创建不可变版本、发布，并可逐项选择仅手动执行或在 SCA/SAST/AGENT 成功完成后自动执行。普通用户只能查看和手动执行已发布版本。当前唯一动作是按来源、规则、分类、等级、状态和证据要求复核项目的当前 Finding；它不会重新运行或替换扫描器，不执行上传脚本，不修改 Finding。Skill 显示“执行完成”只表示筛选流程完成，零命中不能解释为“无漏洞”。
+
+同一页面可手动重建代码图谱和业务知识图谱。代码图谱只读取受管源码，以 Python AST 和 JavaScript/TypeScript 保守解析生成文件、函数、类、导入、调用和路由关系，不执行项目代码。业务图谱将路由与当前 Finding、DAST 业务流、角色、验证证据和已发布知识关联为版本化快照。关系会显示置信度和依据；同文件或同规则关联是启发式线索，不是运行时证明。当前为单项目有界图谱，不等于跨项目/组织风险图谱或完整程序分析。
 
 ## 系统架构
 
@@ -331,9 +333,11 @@ npm run test:admin-ui
 npm run test:agent-ui
 npm run test:governance-ui
 npm run test:sandbox-ui
+npm run test:skill-ui
+npm run test:graphs-ui
 ```
 
-七组冒烟的服务、浏览器、临时账号及清理要求见 [`apps/web/README.md`](apps/web/README.md)。反馈和分页用例需要 Vite 开发服务；生产构建通过不代表这些浏览器用例已执行。
+九组冒烟的服务、浏览器、临时账号及清理要求见 [`apps/web/README.md`](apps/web/README.md)。反馈和分页用例需要 Vite 开发服务；生产构建通过不代表这些浏览器用例已执行。
 
 部分 SANDBOX 和增强扫描能力依赖本机 Docker、固定镜像或离线漏洞库；缺少外部条件时，相应测试或能力会按设计显示跳过、阻塞或降级。
 
@@ -341,7 +345,7 @@ npm run test:sandbox-ui
 
 “基线”是某个版本可追溯的能力、测试和环境记录，用于后续比较，不是全功能通过或质量保证。仓库用 [`acceptance/criteria.json`](acceptance/criteria.json) 保存这些证据和缺口，校验器 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 只检查记录结构和状态，不会自动运行测试或连接数据库。
 
-2026-09-09 加入 5 个通用 Skill 和扫描完成自动触发后，已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `404 passed, 1 skipped`；前端生产构建和 Skill 页面 1440px/390px 冒烟通过。此前七组综合界面冒烟仍只有六组通过，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
+2026-09-09 加入通用 Skill 自动触发和单项目版本化代码/业务图谱后，已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `407 passed, 1 skipped`；前端生产构建、Skill 和图谱页面 1440px/390px 冒烟通过。九组已记录界面冒烟中有八组具备通过证据，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0

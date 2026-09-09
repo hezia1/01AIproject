@@ -23,6 +23,7 @@ from app.db_models import (
     ProjectModuleRecord,
     ProjectMembershipRecord,
     ProjectRecord,
+    ProjectGraphSnapshotRecord,
     SandboxTargetInstanceRecord,
     SandboxEvidenceRecord,
     SandboxTaskEventRecord,
@@ -215,6 +216,7 @@ def delete_project(project_id: UUID, db: Session = Depends(get_db)) -> None:
     db.execute(delete(ScaPolicyOverrideRecord).where(ScaPolicyOverrideRecord.project_id == project_key))
     db.execute(delete(ScaVexStatementRecord).where(ScaVexStatementRecord.project_id == project_key))
     db.execute(delete(SecuritySkillRunRecord).where(SecuritySkillRunRecord.project_id == project_key))
+    db.execute(delete(ProjectGraphSnapshotRecord).where(ProjectGraphSnapshotRecord.project_id == project_key))
     db.execute(delete(FindingRecord).where(FindingRecord.project_id == project_key))
     db.execute(delete(ComponentRecord).where(ComponentRecord.project_id == project_key))
     db.execute(delete(ScanTaskRecord).where(ScanTaskRecord.project_id == project_key))

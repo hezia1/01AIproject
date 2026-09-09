@@ -159,5 +159,6 @@ def test_project_delete_removes_dependents_before_findings_components_and_scans(
     assert session.tables.index("sandbox_task_events") < session.tables.index("sandbox_tasks")
     assert session.tables.index("knowledge_entry_versions") < session.tables.index("knowledge_entries")
     assert session.tables.index("security_skill_runs") < session.tables.index("scan_tasks")
+    assert session.tables.index("project_graph_snapshots") < session.tables.index("scan_tasks")
     assert session.tables.index("findings") < session.tables.index("components") < session.tables.index("scan_tasks")
     assert session.deleted is project

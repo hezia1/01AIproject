@@ -15,7 +15,8 @@
     "test:pagination-ui": "node scripts/pagination-smoke.cjs",
     "test:feedback-ui": "node scripts/action-feedback-smoke.cjs",
     "test:sandbox-ui": "node scripts/sandbox-ui-smoke.cjs",
-    "test:skill-ui": "node scripts/security-skill-ui-smoke.cjs"
+    "test:skill-ui": "node scripts/security-skill-ui-smoke.cjs",
+    "test:graphs-ui": "node scripts/project-graphs-ui-smoke.cjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",

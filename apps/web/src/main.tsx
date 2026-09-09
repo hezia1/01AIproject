@@ -12,6 +12,7 @@ import { MaintenancePolicy, useDownloadPermission } from "./maintenance-policy";
 import { ScaPolicyFields } from "./sca-policy-fields";
 import { PagedTable, PagedItems } from "./pagination";
 import { SecuritySkillRegistry } from "./security-skill-registry";
+import { ProjectGraphs } from "./project-graphs";
 
 type ViewKey = "projects" | "assets" | "detection" | "governance" | "knowledge" | "reports" | "admin" | "modules" | "sca" | "sast" | "agent" | "dast" | "sandbox" | "tasks" | "aspm";
 type ModuleKey = "sast" | "sca" | "agent" | "dast" | "sandbox" | "aspm";
@@ -2405,6 +2406,7 @@ function KnowledgeHubView({ project, findings, validations, evidence, summary }:
     </section> : null}
 
     {activeTab === "library" ? <section className="knowledge-library-workspace">
+      <ProjectGraphs project={project} />
       <SecuritySkillRegistry project={project} isAdmin={isAdmin} />
       <section className="knowledge-library-panel">
         <div className="knowledge-section-heading"><div><span>规则资产</span><h3>当前项目已出现的检测规则与风险分类</h3></div><strong>{rules.length} 条</strong></div>

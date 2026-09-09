@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-09-security-skill-automation",
-  "reviewed_source_commit": "1088ed89fc2b27ecd98c07175527571a02001390",
+  "baseline_id": "2026-09-09-project-graphs",
+  "reviewed_source_commit": "4e73278394b2984fbd8cae1b5393a0af2e2ff8c3",
   "reviewed_on": "2026-09-09",
   "scope": "single-host development and demonstration",
   "status_definitions": {
@@ -16,7 +16,7 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Product, architecture, handoff, module and acceptance documents reviewed against the tenant-wide built-in Skills, automatic trigger implementation, migration head and actual verification scope on 2026-09-09",
+      "current": "Product, architecture, handoff, module and acceptance documents reviewed against the tenant-wide built-in Skills, automatic triggers, bounded project graphs, migration head and actual verification scope on 2026-09-09",
       "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-09.md"],
       "limitations": "This is a documentation review, not a full scanner acceptance run. Fixture README files describe test targets. Historical command counts retain their source commits and do not imply a rerun.",
       "required_for": ["p0", "production"]
@@ -27,8 +27,8 @@
       "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
       "status": "verified",
       "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
-      "current": "Capability-claim, declarative Skill and automatic-trigger boundary tests passed within the 404-test full backend run on 2026-09-09",
-      "evidence": ["apps/api/app/module_registry.py", "apps/api/app/services/security_skill_registry.py", "apps/api/tests/test_security_skill_registry.py", "apps/web/src/security-skill-registry.tsx"],
+      "current": "Capability-claim, declarative Skill, automatic-trigger and bounded graph tests passed within the 407-test full backend run on 2026-09-09",
+      "evidence": ["apps/api/app/module_registry.py", "apps/api/app/services/security_skill_registry.py", "apps/api/app/services/project_graphs.py", "apps/api/tests/test_security_skill_registry.py", "apps/api/tests/test_project_graphs.py", "apps/web/src/project-graphs.tsx"],
       "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
       "required_for": ["p0", "production"]
     },
@@ -38,7 +38,7 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"scope": "full", "passed": 404, "skipped": 1, "failed": 0, "warnings": 32, "full_suite_run": true},
+      "current": {"scope": "full", "passed": 407, "skipped": 1, "failed": 0, "warnings": 32, "full_suite_run": true},
       "evidence": ["From apps/api with an existing D: temp directory: python -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-09.md"],
       "historical_records": [
         {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
@@ -52,9 +52,9 @@
       "category": "engineering",
       "metric": "Frontend TypeScript production build",
       "status": "partially_verified",
-      "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all eight documented browser smoke suites exit successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 651.11, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 7, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-09.md"],
+      "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all nine documented browser smoke suites exit successfully",
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 655.32, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 8, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-09.md"],
       "limitations": "Vite reports a chunk-size warning. The latest local-address change reran the build, development-server configuration smoke, IPv4 HTTP smoke and authentication browser smoke. The earlier seven-suite run still has one unresolved failure: test:agent-ui requires a five-step runtime plan while the configured testproject has no AGENT scan task; follow deferred-work UI-011.",
       "required_for": ["p0", "production"]
     },
@@ -64,9 +64,9 @@
       "metric": "Alembic schema is at repository head",
       "status": "verified",
       "target": "Current database revision equals the repository migration head",
-      "current": "20260909_0018",
-      "evidence": ["python -m alembic -c alembic.ini current on 2026-09-09", "apps/api/migrations/versions/20260909_0018_security_skill_automation.py", "docs/maintenance-verification-2026-09-09.md"],
-      "limitations": "The 0018 to 0017 to 0018 migration path was verified only on the local development database after confirming it contained no custom Skills or runs; this does not establish backup or production upgrade readiness.",
+      "current": "20260909_0019",
+      "evidence": ["python -m alembic -c alembic.ini current on 2026-09-09", "apps/api/migrations/versions/20260909_0019_project_graphs.py", "docs/maintenance-verification-2026-09-09.md"],
+      "limitations": "The 0019 to 0018 to 0019 graph-table migration path was verified only on the local development database. Downgrade intentionally removes graph snapshots; it does not establish backup or production upgrade readiness.",
       "required_for": ["p0", "production"]
     },
     {

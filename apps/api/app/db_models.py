@@ -249,6 +249,25 @@ class SecuritySkillRunRecord(Base):
     finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class ProjectGraphSnapshotRecord(Base):
+    __tablename__ = "project_graph_snapshots"
+    __table_args__ = (UniqueConstraint("project_id", "graph_type", "version", name="uq_project_graph_version"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("projects.id"), nullable=False)
+    graph_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    generator_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="completed")
+    nodes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    edges: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    limitations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class SastAgentRunRecord(Base):
     """Auditable DeepSeek multi-agent execution without storing credentials or raw headers."""
 
