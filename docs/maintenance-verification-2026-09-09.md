@@ -47,3 +47,11 @@
 - 尚无外部 Skill 包来源、签名/信任校验、安装卸载、定时或其他事件触发、独立并发队列、知识候选自动转换和效果基准。
 - 未重新执行目标 SCA/SAST/AGENT 扫描；存量扫描状态不能作为本轮新扫描成功证据。
 - 精确率、误报率、召回率、DAST 复现率、生态兼容率和生产就绪度没有新增基准。
+
+## PPT 最终平台差距核对
+
+- 2026-09-09 按项目所有者要求，将本机 `artifacts/audit-ppt-20260809/01.pptx` 作为最终平台目标蓝图逐页核对。该文件共 5 页，SHA-256 为 `7CE2B46AC1FDC66967129DB12E07417C6B26BF4F615F8EB0F0990C0FB26F4738`；`D:\project\PYproject\dast-ppt-review-20260817\source.pptx` 与其哈希相同。
+- 核对以提交 `0247fef7a3884fec587c848db5558f5e835a117c`、数据库迁移 `20260909_0019`、当前服务和 `testproject` 数据为事实基线，没有把 PPT 的预期效果写成当前能力。
+- 全部目标、当前状态、剩余缺口、验收标准和完成优先级集中写入 [`platform-target-gap-register.md`](platform-target-gap-register.md)。`deferred-work.md` 继续记录实施状态和完成证据。
+- 当前 `testproject` 不包含 AGENT 内容。项目所有者决定暂时忽略因此产生的 AGENT 综合冒烟失败；机器可读 P0 状态在验收口径另行调整前仍保持失败，不能写成已经通过。
+- 本次只修改文档和机器可读文档证据，不修改扫描器、权限或数据库，也没有重新执行目标扫描或完整后端测试。`acceptance_check.py --profile baseline` 通过；P0 按既有口径仍因前端综合项失败。前端生产构建通过，最大 JavaScript 包仍为 655.32 kB 并保留 Vite 大包告警；`test:dev-server` 通过。Skill 冒烟首次连接日常认证服务时因未提供测试凭据而明确失败，随后在一次性 `AUTH_DISABLED=true` 的 8001/5174 隔离服务上与图谱冒烟一同通过 1440px/390px 验证，临时服务已停止。没有运行已决定暂时忽略的 AGENT 综合冒烟。

@@ -392,6 +392,7 @@ npm run test:graphs-ui
 | --- | --- |
 | [`docs/prd.md`](docs/prd.md) | 产品目标、用户、范围和验收方向 |
 | [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与未建立基线项 |
+| [`docs/platform-target-gap-register.md`](docs/platform-target-gap-register.md) | PPT 最终平台目标、当前实现差距、完成标准和优先级 |
 | [`docs/maintenance-verification-2026-09-09.md`](docs/maintenance-verification-2026-09-09.md) | 本轮 Skill 自动触发实现、文档核实与真实验证范围 |
 | [`docs/deferred-work.md`](docs/deferred-work.md) | 暂缓事项、重新启动条件、完成标准和进展记录 |
 | [`docs/architecture.md`](docs/architecture.md) | 架构原则、模块和数据流 |

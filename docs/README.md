@@ -8,6 +8,8 @@
 
 本目录记录截至 **2026-09-09** 已核实的实现、证据与缺口。早期目标来自本机 `artifacts/audit-ppt-20260809/01.pptx`，该文件不是仓库交付物或验收证据。根目录 [`README.md`](../README.md) 是启动、使用和安全边界的主入口；出现冲突时，以当前代码、实际数据库和本轮运行结果为准，并同步修正文档。
 
+PPT 描述的是项目主要建设内容和最终平台形态。其全部目标、当前实现、剩余差距、验收标准和完成优先级统一维护在 [`platform-target-gap-register.md`](platform-target-gap-register.md)；后续不再从 PPT、PRD、路线图和暂缓清单重复拼接完整缺口。
+
 2026-09-03 增加本地两角色登录和简化后的一级信息架构。登录页区分用户登录、管理员登录和只创建普通用户的公开注册；除初始管理员外，新增管理员只能由已有管理员在管理中心创建。开发前端通过同源 `/api` 代理访问后端，避免混用 `localhost` 与 `127.0.0.1` 时浏览器拒绝发送会话 Cookie。普通用户使用“项目、检测、风险治理、安全知识中枢、报告”，管理员额外使用独立“管理中心”；普通用户在管理员允许时保留 Grype 数据库和 Semgrep 社区规则的人工更新能力，规则编写与平台能力管理归管理员。认证、API 客户端、应用外壳和用户管理已从原单文件前端拆出，但大型模块页面仍需继续按功能拆分。
 
 AGENT 治理前端现按“概览、风险、资产与边界、动态验证、策略与交付”五个工作区组织；策略与交付再按扫描门禁、例外边界、报告审计分区，原有扫描、运行预检、门禁、例外和报告能力均保留。风险页将可处置 Finding 与覆盖缺口等扫描提示分开计数，动态验证采用五步渐进流程，策略编辑会显示已保存/未保存状态及生效时机，移动端高密度表格改为卡片。页面说明、限制、证据和状态文案统一使用中文，需要展示的业务时间均通过 `Asia/Shanghai` 时区格式化并明确标注“北京时间”；安全授权确认口令因需要精确匹配而保留原文。
@@ -32,5 +34,6 @@ DAST 自动策略生成已统一处理超长上游标题，在 200 字符数据�
 4. [`mvp-roadmap.md`](mvp-roadmap.md)：已交付里程碑和剩余工作。
 5. [`acceptance-baseline.md`](acceptance-baseline.md)：P0 可机读验收状态、证据与缺口。
 6. [`deferred-work.md`](deferred-work.md)：暂缓事项、重新启动条件和完成记录。
-7. [`PROJECT_HANDOFF_2026-07-26.md`](PROJECT_HANDOFF_2026-07-26.md)：当前交接快照；文件名因外部引用而保留。
-8. 专题文档：[`SAST_CI_INTEGRATIONS.md`](SAST_CI_INTEGRATIONS.md)、[`sca-ci-gate.md`](sca-ci-gate.md)、[`sandbox-adapter-protocol.md`](sandbox-adapter-protocol.md)。
+7. [`platform-target-gap-register.md`](platform-target-gap-register.md)：PPT 最终平台目标与当前实现的统一差距总表及优先级。
+8. [`PROJECT_HANDOFF_2026-07-26.md`](PROJECT_HANDOFF_2026-07-26.md)：当前交接快照；文件名因外部引用而保留。
+9. 专题文档：[`SAST_CI_INTEGRATIONS.md`](SAST_CI_INTEGRATIONS.md)、[`sca-ci-gate.md`](sca-ci-gate.md)、[`sandbox-adapter-protocol.md`](sandbox-adapter-protocol.md)。

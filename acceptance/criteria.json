@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "baseline_id": "2026-09-09-project-graphs",
-  "reviewed_source_commit": "4e73278394b2984fbd8cae1b5393a0af2e2ff8c3",
+  "reviewed_source_commit": "0247fef7a3884fec587c848db5558f5e835a117c",
   "reviewed_on": "2026-09-09",
   "scope": "single-host development and demonstration",
   "status_definitions": {
@@ -17,7 +17,7 @@
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
       "current": "Product, architecture, handoff, module and acceptance documents reviewed against the tenant-wide built-in Skills, automatic triggers, bounded project graphs, migration head and actual verification scope on 2026-09-09",
-      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-09.md"],
+      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-09.md", "docs/platform-target-gap-register.md"],
       "limitations": "This is a documentation review, not a full scanner acceptance run. Fixture README files describe test targets. Historical command counts retain their source commits and do not imply a rerun.",
       "required_for": ["p0", "production"]
     },
