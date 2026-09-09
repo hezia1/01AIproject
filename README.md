@@ -127,7 +127,7 @@ cd apps\api
 - Swagger API：<http://127.0.0.1:8000/docs>
 - ReDoc：<http://127.0.0.1:8000/redoc>
 
-`/api/health` 当前固定返回 `{"status":"ok"}`，只证明 HTTP 路由可以响应，不检查数据库、工具或扫描任务。Swagger/ReDoc 及业务 API 需要已登录的会话；数据库迁移和扫描执行状态需分别核实。
+`/api/health` 返回结构化的 API、PostgreSQL、Redis、Docker、固定 SCA 工具镜像和 Semgrep 就绪状态；必需依赖不可用时返回 HTTP 503，可选依赖不可用时返回 `degraded`。`?include_optional_tools=false` 可用于认证初始化时的快速依赖检查。工具就绪不代表目标扫描成功；外部网络、情报时效、模型服务、目标状态、数据库迁移和扫描执行结果仍需在对应模块分别核实。
 
 首次启动时 Web 会要求创建初始管理员，平台不会生成默认用户名或密码。初始化后默认显示用户登录，页面下方提供“管理员登录”和“用户注册”；公开注册始终只能创建普通用户。新增管理员账号只能由已有管理员在“管理中心 → 用户管理”创建。密码至少 6 位，会话使用 HttpOnly Cookie，密码只保存 scrypt 哈希。普通用户可以新增和切换项目、选择接入五个执行模块、运行基础检测、使用 ASPM 风险治理与安全知识中枢；管理员额外维护用户、本地/项目规则、平台策略和后续 Agent Skill 能力。
 
@@ -337,7 +337,7 @@ npm run test:skill-ui
 npm run test:graphs-ui
 ```
 
-九组冒烟的服务、浏览器、临时账号及清理要求见 [`apps/web/README.md`](apps/web/README.md)。反馈和分页用例需要 Vite 开发服务；生产构建通过不代表这些浏览器用例已执行。
+十组冒烟的服务、浏览器、临时账号及清理要求见 [`apps/web/README.md`](apps/web/README.md)。反馈和分页用例需要 Vite 开发服务；生产构建通过不代表这些浏览器用例已执行。
 
 部分 SANDBOX 和增强扫描能力依赖本机 Docker、固定镜像或离线漏洞库；缺少外部条件时，相应测试或能力会按设计显示跳过、阻塞或降级。
 
@@ -345,7 +345,7 @@ npm run test:graphs-ui
 
 “基线”是某个版本可追溯的能力、测试和环境记录，用于后续比较，不是全功能通过或质量保证。仓库用 [`acceptance/criteria.json`](acceptance/criteria.json) 保存这些证据和缺口，校验器 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 只检查记录结构和状态，不会自动运行测试或连接数据库。
 
-2026-09-09 加入通用 Skill 自动触发和单项目版本化代码/业务图谱后，已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `407 passed, 1 skipped`；前端生产构建、Skill 和图谱页面 1440px/390px 冒烟通过。九组已记录界面冒烟中有八组具备通过证据，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
+2026-09-09 加入通用 Skill 自动触发、单项目版本化代码/业务图谱和真实认证失败诊断后，已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `414 passed, 1 skipped`；前端生产构建、认证故障、Skill 和图谱页面冒烟通过。十组已记录界面冒烟中有九组具备通过证据，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0

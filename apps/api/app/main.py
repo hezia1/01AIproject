@@ -1,9 +1,11 @@
 ﻿from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.db import create_db_schema
 from app.middleware.auth import AuthenticationMiddleware
 from app.routers import agent, aspm, auth, dast, findings, knowledge, modules, projects, project_graphs, sandbox, scans, sast, sca, platform_policy, security_skills
+from app.services.platform_health import platform_health
 
 app = FastAPI(
     title="AI Native Application Security Platform",
@@ -49,8 +51,10 @@ def on_startup() -> None:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(include_optional_tools: bool = True) -> JSONResponse:
+    payload = platform_health(include_optional_tools=include_optional_tools)
+    status_code = 503 if payload["status"] == "unavailable" else 200
+    return JSONResponse(payload, status_code=status_code)
 
 
 

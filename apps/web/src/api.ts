@@ -1,6 +1,13 @@
 import { trackActionRequest } from "./action-feedback-state";
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 
+export class ApiRequestError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 /** Preserve native Response semantics for report downloads and binary uploads. */
 export async function feedbackFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const finished = trackActionRequest();
@@ -40,7 +47,7 @@ async function performRequest<T>(path: string, init: RequestInit): Promise<T> {
       const payload = await response.json();
       detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message ? String(payload.detail.message) : JSON.stringify(payload.detail ?? payload);
     } catch { /* keep HTTP status */ }
-    throw new Error(detail);
+    throw new ApiRequestError(response.status, detail);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

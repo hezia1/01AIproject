@@ -27,7 +27,7 @@
       "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
       "status": "verified",
       "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
-      "current": "Capability-claim, declarative Skill, automatic-trigger and bounded graph tests passed within the 407-test full backend run on 2026-09-09",
+      "current": "Capability-claim, declarative Skill, automatic-trigger and bounded graph tests passed within the 414-test full backend run on 2026-09-09",
       "evidence": ["apps/api/app/module_registry.py", "apps/api/app/services/security_skill_registry.py", "apps/api/app/services/project_graphs.py", "apps/api/tests/test_security_skill_registry.py", "apps/api/tests/test_project_graphs.py", "apps/web/src/project-graphs.tsx"],
       "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
       "required_for": ["p0", "production"]
@@ -38,13 +38,13 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"scope": "full", "passed": 407, "skipped": 1, "failed": 0, "warnings": 32, "full_suite_run": true},
+      "current": {"scope": "full", "passed": 414, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
       "evidence": ["From apps/api with an existing D: temp directory: python -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-09.md"],
       "historical_records": [
         {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
         {"source_commit": "1685a12", "source_file": "docs/PROJECT_HANDOFF_2026-07-26.md", "reported_passed": 317, "reported_skipped": 1}
       ],
-      "limitations": "One symlink test was skipped because the current Windows account cannot create symlinks. The suite emitted 32 datetime.utcnow deprecation warnings. The 307 and 317 counts are retained only as historical documentation records.",
+      "limitations": "One symlink test was skipped because the current Windows account cannot create symlinks. The suite emitted 32 datetime.utcnow and 2 FastAPI on_event deprecation warnings. The 307 and 317 counts are retained only as historical documentation records.",
       "required_for": ["p0", "production"]
     },
     {
@@ -52,10 +52,21 @@
       "category": "engineering",
       "metric": "Frontend TypeScript production build",
       "status": "partially_verified",
-      "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all nine documented browser smoke suites exit successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 655.32, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 8, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-09.md"],
-      "limitations": "Vite reports a chunk-size warning. The latest local-address change reran the build, development-server configuration smoke, IPv4 HTTP smoke and authentication browser smoke. The earlier seven-suite run still has one unresolved failure: test:agent-ui requires a five-step runtime plan while the configured testproject has no AGENT scan task; follow deferred-work UI-011.",
+      "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all ten documented browser smoke suites exit successfully",
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 658.32, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 9, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:auth-failure-ui", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-09.md"],
+      "limitations": "Vite reports a chunk-size warning. Authentication failure injection covers status 503, identity 503, unreachable API, timeout, retry and dual viewports. One unresolved failure remains: test:agent-ui requires a five-step runtime plan while the configured testproject has no AGENT scan task; the project owner has temporarily excluded it from the current implementation priority, but it is not rewritten as passed; follow deferred-work UI-011.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "failure_state_health_diagnostics",
+      "category": "engineering",
+      "metric": "Authentication bootstrap and platform dependencies expose truthful failure states",
+      "status": "verified",
+      "target": "Authentication distinguishes logged-out, service failure, database failure, unreachable API and timeout; health checks do not claim scan success",
+      "current": "Only /auth/me HTTP 401 is treated as logged out. Structured health reports required and optional dependency state; required failure returns HTTP 503, optional failure is degraded.",
+      "evidence": ["apps/api/app/services/platform_health.py", "apps/api/tests/test_platform_health.py", "apps/web/src/auth.tsx", "apps/web/scripts/auth-failure-ui-smoke.cjs", "docs/maintenance-verification-2026-09-09.md"],
+      "limitations": "The aggregate endpoint checks API, PostgreSQL, Redis, Docker and prepared local scanner tools. External-network reachability, intelligence freshness, model service, target health and scan-task execution remain module-specific and are not inferred from tool readiness.",
       "required_for": ["p0", "production"]
     },
     {

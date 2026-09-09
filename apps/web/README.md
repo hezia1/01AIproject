@@ -4,7 +4,7 @@
 
 文档按 2026-09-09 仓库实现复核；本轮运行结果见 [维护核实记录](../../docs/maintenance-verification-2026-09-09.md)。已实现本地登录、普通用户注册和 `user` / `admin` 两角色界面：两类用户均可使用项目、检测、风险治理、安全知识中枢和报告，管理员另有管理中心；后端继续执行权限检查。普通用户在管理员允许时可人工更新 Grype 数据库和 Semgrep 社区规则。
 
-业务页面仍主要集中在 `src/main.tsx`，登录、应用框架、用户管理、分页、操作反馈、维护策略、Skill 注册表和项目图谱已拆成独立组件。已有九组 Playwright 浏览器冒烟脚本，尚未建立完整浏览器回归、错误监控和充分分包。当前本地会话与共享工作区不等同于生产级 IAM 或租户隔离，适用边界见 [API README](../api/README.md)。
+业务页面仍主要集中在 `src/main.tsx`，登录、应用框架、用户管理、分页、操作反馈、维护策略、Skill 注册表和项目图谱已拆成独立组件。已有十组 Playwright 浏览器冒烟脚本，尚未建立完整浏览器回归、错误监控和充分分包。当前本地会话与共享工作区不等同于生产级 IAM 或租户隔离，适用边界见 [API README](../api/README.md)。
 
 ## 本地启动
 
@@ -37,7 +37,9 @@ npm run test:dev-server
 
 ## 界面冒烟
 
-`package.json` 提供 `test:auth-ui`、`test:admin-ui`、`test:governance-ui`、`test:agent-ui`、`test:sandbox-ui`、`test:pagination-ui`、`test:feedback-ui`、`test:skill-ui` 和 `test:graphs-ui`。浏览器由 `playwright-core` 控制，默认使用本机 Chrome，可通过 `PLAYWRIGHT_CHANNEL` 选择已安装的浏览器通道。
+`package.json` 提供 `test:auth-ui`、`test:auth-failure-ui`、`test:admin-ui`、`test:governance-ui`、`test:agent-ui`、`test:sandbox-ui`、`test:pagination-ui`、`test:feedback-ui`、`test:skill-ui` 和 `test:graphs-ui`。浏览器由 `playwright-core` 控制，默认使用本机 Chrome，可通过 `PLAYWRIGHT_CHANNEL` 选择已安装的浏览器通道。
+
+`test:auth-failure-ui` 使用受控路由故障注入，验证认证状态 HTTP 503、身份接口 HTTP 503、API 不可达、请求超时、重试以及 1440px/390px 无横向溢出；它不创建账号、会话或扫描。只有 `/auth/me` 的 HTTP 401 会被解释为未登录，服务和网络错误会展示真实诊断。
 
 登录和业务冒烟需要已启动的 Web/API、可用数据库以及通过环境变量提供的 `UI_TEST_USERNAME` / `UI_TEST_PASSWORD`；权限相关脚本需要测试管理员身份。分页与操作反馈脚本使用模拟数据/接口，不能替代真实扫描验证。具体站点地址可用脚本对应的 `AUTH_UI_BASE_URL`、`ADMIN_UI_BASE_URL`、`GOVERNANCE_UI_BASE_URL`、`AGENT_UI_BASE_URL`、`SANDBOX_UI_BASE_URL` 覆盖。
 

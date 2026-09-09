@@ -23,7 +23,7 @@ cd apps/api
 python -m alembic -c alembic.ini upgrade head
 ```
 
-健康检查：<http://127.0.0.1:8000/api/health>。它固定返回 `{"status":"ok"}`，只证明 API 路由能响应，不检查 PostgreSQL、Docker、扫描引擎、情报新鲜度或扫描成功状态。接口文档：<http://127.0.0.1:8000/docs>；当前中间件也保护文档路径，请先在同一主机名下完成登录。
+健康检查：<http://127.0.0.1:8000/api/health>。它检查 API、PostgreSQL、Redis、Docker、固定 SCA 工具镜像和 Semgrep：必需依赖失败返回 HTTP 503，可选依赖失败返回 HTTP 200 与 `degraded`。认证初始化可使用 `?include_optional_tools=false` 跳过较慢的本机工具探测。工具就绪只表示命令或镜像可用，不代表扫描执行成功；情报新鲜度、模型、外部网络和目标状态仍由对应模块报告。接口文档：<http://127.0.0.1:8000/docs>；当前中间件也保护文档路径，请先在同一主机名下完成登录。
 
 ## 测试
 

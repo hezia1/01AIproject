@@ -11,6 +11,7 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://ai_security:ai_security_dev@localhost:5432/ai_security",
 )
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

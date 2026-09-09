@@ -1,6 +1,6 @@
 # 维护核实记录（2026-09-09）
 
-本记录说明通用 Security Skill、扫描完成自动触发，以及单项目代码/业务图谱的实现和实际验证。仓库、数据库和运行结果优先于历史文档。
+本记录说明通用 Security Skill、扫描完成自动触发、单项目代码/业务图谱，以及认证失败和平台健康诊断的实现与实际验证。仓库、数据库和运行结果优先于历史文档。
 
 ## 开始状态
 
@@ -54,4 +54,13 @@
 - 核对以提交 `0247fef7a3884fec587c848db5558f5e835a117c`、数据库迁移 `20260909_0019`、当前服务和 `testproject` 数据为事实基线，没有把 PPT 的预期效果写成当前能力。
 - 全部目标、当前状态、剩余缺口、验收标准和完成优先级集中写入 [`platform-target-gap-register.md`](platform-target-gap-register.md)。`deferred-work.md` 继续记录实施状态和完成证据。
 - 当前 `testproject` 不包含 AGENT 内容。项目所有者决定暂时忽略因此产生的 AGENT 综合冒烟失败；机器可读 P0 状态在验收口径另行调整前仍保持失败，不能写成已经通过。
-- 本次只修改文档和机器可读文档证据，不修改扫描器、权限或数据库，也没有重新执行目标扫描或完整后端测试。`acceptance_check.py --profile baseline` 通过；P0 按既有口径仍因前端综合项失败。前端生产构建通过，最大 JavaScript 包仍为 655.32 kB 并保留 Vite 大包告警；`test:dev-server` 通过。Skill 冒烟首次连接日常认证服务时因未提供测试凭据而明确失败，随后在一次性 `AUTH_DISABLED=true` 的 8001/5174 隔离服务上与图谱冒烟一同通过 1440px/390px 验证，临时服务已停止。没有运行已决定暂时忽略的 AGENT 综合冒烟。
+- 上述 PPT 差距文档核对步骤只修改文档和机器可读文档证据，当时没有修改扫描器、权限或数据库，也没有重新执行目标扫描或完整后端测试。`acceptance_check.py --profile baseline` 通过；P0 按既有口径仍因前端综合项失败。前端生产构建通过，最大 JavaScript 包当时为 655.32 kB 并保留 Vite 大包告警；`test:dev-server` 通过。Skill 冒烟首次连接日常认证服务时因未提供测试凭据而明确失败，随后在一次性 `AUTH_DISABLED=true` 的 8001/5174 隔离服务上与图谱冒烟一同通过 1440px/390px 验证，临时服务已停止。没有运行已决定暂时忽略的 AGENT 综合冒烟。
+
+## 认证失败与健康诊断维护
+
+- 根因核实：认证状态请求失败后只结束 loading，没有写入可渲染错误状态，页面可永久停留“正在连接”；`/auth/me` 把 401 与 HTTP 5xx、网络错误、超时全部吞成未登录；React Strict Mode 的重复初始化缺少旧请求隔离。旧 `/api/health` 又固定返回 `ok`，无法辅助判断数据库或工具依赖。
+- 实现：只有 `/auth/me` HTTP 401 表示未登录；HTTP 错误、API 不可达、8 秒超时和数据库不可用显示真实诊断及重试，最新请求代次阻止旧结果覆盖。健康接口执行 PostgreSQL `SELECT 1`、Redis PING、Docker Engine、固定 Syft/Grype/Trivy 镜像及 Semgrep 就绪检查；必需依赖失败返回 503，可选依赖失败返回 `degraded`。认证页使用不探测本机工具的快速参数，避免工具检查拖延登录错误展示。
+- 通用边界：实现不包含 `testproject` 文件、路由、变量、行号或目录条件，没有改变扫描器、权限或扫描状态。工具/镜像就绪明确写为“未执行扫描”；外部网络、情报时效、模型和目标状态继续由对应模块核实。
+- 定向与界面：后端认证/健康定向 `13 passed, 2 warnings`；`test:auth-failure-ui` 的状态 503（1440px、390px）、身份 503、API 不可达、超时和重试全部通过；`test:dev-server` 及 `http://127.0.0.1:5173` HTTP 200 冒烟通过；生产构建通过，最大 JavaScript 包 `658.32 kB`（gzip `189.35 kB`），Vite 大包告警仍存在。
+- 完整回归：D 盘独立临时目录下为 `414 passed, 1 skipped, 34 warnings`，无失败。唯一跳过仍是当前 Windows 账号不允许创建符号链接；告警为 32 条既有 `datetime.utcnow()` 和 2 条 FastAPI `on_event` 弃用提示。
+- 实际运行：常驻 `/api/health` 返回 HTTP 200/`ok`，PostgreSQL、Redis、Docker、3/3 固定 SCA 镜像和 Semgrep 均就绪，但这不是扫描成功证据。数据库仍为 `20260909_0019`；`testproject` 对应项目 `test01`，只有 5 个 SAST 和 1 个 SCA 历史任务、没有 AGENT 任务，代码/业务图谱 v1 均为 `completed`。本轮未执行目标扫描、未创建账号或会话，也未使用 DVNA 或 `test_project`；完整测试专用临时目录已清理。

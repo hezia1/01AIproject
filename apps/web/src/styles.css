@@ -201,6 +201,15 @@ button {
 .auth-brand strong, .auth-brand span { display: block; }
 .auth-brand span { color: #64748b; font-size: 13px; margin-top: 3px; }
 .auth-message { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412; padding: 10px 12px; }
+.auth-error-card { max-width: 560px; }
+.auth-error-card h1 { color: #991b1b; font-size: 20px; margin: 0; }
+.auth-diagnostics { border: 1px solid #e2e8f0; border-radius: 9px; display: grid; overflow: hidden; }
+.auth-diagnostics > div { display: grid; gap: 4px; grid-template-columns: 1fr auto; padding: 10px 12px; }
+.auth-diagnostics > div + div { border-top: 1px solid #e2e8f0; }
+.auth-diagnostics small { grid-column: 1 / -1; }
+.health-ok { color: #166534; }
+.health-degraded { color: #9a3412; }
+.health-unavailable { color: #991b1b; }
 .auth-alternatives { border-top: 1px solid #e2e8f0; display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); padding-top: 13px; }
 .auth-alternatives button { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; color: #334155; cursor: pointer; padding: 9px 10px; }
 .auth-alternatives button:hover { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
