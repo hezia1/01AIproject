@@ -4,7 +4,7 @@
 
 > 当前版本提供本地用户名/密码登录和 `user` / `admin` 两种身份，但仍是单机研发与演示环境，没有生产级组织/租户隔离、外部身份源、密码恢复和审计保护。请勿直接暴露到公网，也不要对未获授权的目标执行动态验证。
 
-文档核对日期：**2026-09-08**。本轮仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-08.md)；历史测试和扫描数量仅代表其记录版本。
+文档核对日期：**2026-09-09**。本轮仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-09.md)；历史测试和扫描数量仅代表其记录版本。
 
 ## 目录
 
@@ -41,7 +41,7 @@
 
 平台数据保存在 PostgreSQL 中。已经完成的 DAST 运行、证据和三色裁决会随项目恢复，不依赖当前浏览器页面状态。
 
-可执行 Skill 位于“安全知识中枢 → 规则与 Skill”。管理员创建不可变版本并发布，普通用户只能查看和执行已发布版本。当前唯一动作是按来源、规则、分类、等级、状态和证据要求复核项目的当前 Finding；它不会重新运行或替换 SCA/SAST/AGENT，不执行上传脚本，不修改 Finding。Skill 显示“执行完成”只表示筛选流程完成，零命中不能解释为“无漏洞”。
+可执行 Skill 位于“安全知识中枢 → 规则与 Skill”。平台预置 5 个租户级通用 Skill，同一租户的所有项目共享；管理员创建不可变版本、发布，并可逐项选择仅手动执行或在 SCA/SAST/AGENT 成功完成后自动执行。普通用户只能查看和手动执行已发布版本。当前唯一动作是按来源、规则、分类、等级、状态和证据要求复核项目的当前 Finding；它不会重新运行或替换扫描器，不执行上传脚本，不修改 Finding。Skill 显示“执行完成”只表示筛选流程完成，零命中不能解释为“无漏洞”。
 
 ## 系统架构
 
@@ -341,7 +341,7 @@ npm run test:sandbox-ui
 
 “基线”是某个版本可追溯的能力、测试和环境记录，用于后续比较，不是全功能通过或质量保证。仓库用 [`acceptance/criteria.json`](acceptance/criteria.json) 保存这些证据和缺口，校验器 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 只检查记录结构和状态，不会自动运行测试或连接数据库。
 
-2026-09-08 加入声明式 Skill 注册表后，已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `402 passed, 1 skipped`；前端生产构建和 Skill 页面 1440px/390px 冒烟通过。此前七组综合界面冒烟仍只有六组通过，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
+2026-09-09 加入 5 个通用 Skill 和扫描完成自动触发后，已在真实存在的 D 盘临时目录下运行完整后端套件，结果为 `404 passed, 1 skipped`；前端生产构建和 Skill 页面 1440px/390px 冒烟通过。此前七组综合界面冒烟仍只有六组通过，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用演示数据或历史测试计数替代。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0
@@ -388,7 +388,7 @@ npm run test:sandbox-ui
 | --- | --- |
 | [`docs/prd.md`](docs/prd.md) | 产品目标、用户、范围和验收方向 |
 | [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与未建立基线项 |
-| [`docs/maintenance-verification-2026-09-08.md`](docs/maintenance-verification-2026-09-08.md) | 本轮文档核实、真实验证范围和历史证据来源 |
+| [`docs/maintenance-verification-2026-09-09.md`](docs/maintenance-verification-2026-09-09.md) | 本轮 Skill 自动触发实现、文档核实与真实验证范围 |
 | [`docs/deferred-work.md`](docs/deferred-work.md) | 暂缓事项、重新启动条件、完成标准和进展记录 |
 | [`docs/architecture.md`](docs/architecture.md) | 架构原则、模块和数据流 |
 | [`docs/module-system.md`](docs/module-system.md) | 六模块职责与关系 |

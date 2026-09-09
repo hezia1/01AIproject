@@ -38,6 +38,7 @@ from app.services.sast_community_rules import CommunityRulesUnavailable, communi
 from app.services.semgrep_scanner import DEFAULT_SEMGREP_IMAGE, SemgrepUnavailable, scan_with_semgrep
 from app.services.audit import record_audit
 from app.services.configuration_access import require_configuration_access, require_scan_configuration_access, USER_SAST_PROFILE_FIELDS
+from app.services.security_skill_registry import trigger_automatic_skills_safely
 
 router = APIRouter()
 
@@ -158,6 +159,10 @@ def run_sast_scan(payload: SastScanRequest, request: Request, db: Session = Depe
         if identity is not None:
             record_audit(db, tenant_id=identity.tenant_id, user_id=identity.user_id, project_id=str(payload.project_id), action="sast.scan", outcome="completed", detail={"scan_task_id": str(scan.id), "finding_count": len(records), "changed_files_only": bool(profile.get("changed_files_only"))})
         db.commit()
+        trigger_automatic_skills_safely(
+            db, scan, actor=identity.username if identity is not None else "sast-worker",
+            user_id=identity.user_id if identity is not None else None,
+        )
         for record in records:
             db.refresh(record)
         db.refresh(scan)

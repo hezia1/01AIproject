@@ -54,6 +54,7 @@ from app.services.sca_sbom import build_cyclonedx_sbom, build_spdx_sbom
 from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_health, grype_database_status, scan_with_syft_grype, update_grype_database
 from app.services.sca_assurance import build_sca_assurance, component_resolution
 from app.services.auth import current_identity, require_admin
+from app.services.security_skill_registry import trigger_automatic_skills_safely
 
 router = APIRouter()
 
@@ -468,6 +469,7 @@ def run_sca_scan(payload: ScaScanRequest, db: Session = Depends(get_db)) -> ScaS
         scan.status = ScanStatus.completed.value
         scan.finished_at = datetime.utcnow()
         db.commit()
+        trigger_automatic_skills_safely(db, scan, actor="sca-scan")
         for record in records:
             db.refresh(record)
         db.refresh(scan)

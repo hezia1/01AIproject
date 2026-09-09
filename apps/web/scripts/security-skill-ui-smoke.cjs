@@ -30,7 +30,10 @@ async function authenticateIfNeeded(page) {
       const text = await page.locator(".skill-registry").innerText();
       assert(text.includes("不替代专业扫描器"), "Skill 与扫描器边界缺失");
       assert(text.includes("不运行任意代码"), "任意代码执行边界缺失");
+      assert(text.includes("对所有项目通用"), "租户级通用范围说明缺失");
       assert(await page.getByText("创建声明式 Skill", { exact: true }).count() === 1, "管理员创建入口缺失");
+      assert(await page.locator(".skill-status.builtin").count() === 5, "应展示 5 个平台内置 Skill");
+      assert(await page.locator(".skill-automation input[type=checkbox]").count() === 15, "每个内置 Skill 应提供三类自动触发选择");
       const dimensions = await page.evaluate(() => ({ viewport: innerWidth, body: document.body.scrollWidth, document: document.documentElement.scrollWidth }));
       assert(dimensions.body <= dimensions.viewport && dimensions.document <= dimensions.viewport,
         `${viewport.width}px 页面横向溢出：${JSON.stringify(dimensions)}`);

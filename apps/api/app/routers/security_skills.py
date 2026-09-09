@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.db_models import (ProjectRecord, SecuritySkillRecord, SecuritySkillRunRecord,
                            SecuritySkillVersionRecord)
-from app.security_skill_models import (SecuritySkill, SecuritySkillCreate, SecuritySkillRun,
+from app.security_skill_models import (SecuritySkill, SecuritySkillAutomationUpdate,
+                                       SecuritySkillCreate, SecuritySkillRun,
                                        SecuritySkillVersionCreate)
 from app.services.audit import record_audit
 from app.services.auth import current_identity, require_admin
@@ -31,6 +32,7 @@ def skill_response(db: Session, skill: SecuritySkillRecord, include_unpublished:
     versions = list(db.scalars(version_query.order_by(SecuritySkillVersionRecord.version.desc())).all())
     return SecuritySkill(**{column: getattr(skill, column) for column in (
         "id", "slug", "name", "description", "module", "status", "active_version",
+        "is_builtin", "auto_trigger_scan_types",
         "created_by", "created_at", "updated_at")}, versions=versions)
 
 
@@ -127,6 +129,20 @@ def publish_version(skill_id: UUID, version: int, request: Request, db: Session 
     return skill_response(db, skill)
 
 
+@router.patch("/{skill_id}/automation", response_model=SecuritySkill)
+def update_automation(skill_id: UUID, payload: SecuritySkillAutomationUpdate, request: Request,
+                      db: Session = Depends(get_db)):
+    identity = require_admin(request)
+    skill = accessible_skill(db, skill_id, identity.tenant_id)
+    skill.auto_trigger_scan_types = payload.scan_types
+    skill.updated_at = datetime.utcnow()
+    record_audit(db, tenant_id=identity.tenant_id, user_id=audit_user_id(identity),
+        action="security_skill.automation_updated", outcome="completed",
+        detail={"skill_id": str(skill.id), "scan_types": payload.scan_types})
+    db.commit()
+    return skill_response(db, skill)
+
+
 @router.post("/{skill_id}/projects/{project_id}/run", response_model=SecuritySkillRun)
 def run_skill(skill_id: UUID, project_id: UUID, request: Request, db: Session = Depends(get_db)):
     identity = current_identity(request)
@@ -145,7 +161,8 @@ def run_skill(skill_id: UUID, project_id: UUID, request: Request, db: Session = 
     summary = execute_manifest(SecuritySkillManifest.model_validate(version.manifest), findings)
     now = datetime.utcnow()
     run = SecuritySkillRunRecord(skill_id=skill.id, skill_version_id=version.id, project_id=str(project_id),
-        status="completed", matched_finding_ids=[item["id"] for item in summary["matched_findings"]],
+        status="completed", trigger="manual", trigger_scan_task_id=None,
+        matched_finding_ids=[item["id"] for item in summary["matched_findings"]],
         result_summary=summary, requested_by=identity.username, started_at=now, finished_at=now)
     db.add(run)
     record_audit(db, tenant_id=identity.tenant_id, user_id=audit_user_id(identity), project_id=str(project_id),
@@ -169,6 +186,7 @@ def list_runs(project_id: UUID, request: Request, db: Session = Depends(get_db))
 
 def run_response(run: SecuritySkillRunRecord, version: int) -> SecuritySkillRun:
     return SecuritySkillRun(id=run.id, skill_id=run.skill_id, skill_version=version,
-        project_id=run.project_id, status=run.status, matched_finding_ids=run.matched_finding_ids,
+        project_id=run.project_id, status=run.status, trigger=run.trigger,
+        trigger_scan_task_id=run.trigger_scan_task_id, matched_finding_ids=run.matched_finding_ids,
         result_summary=run.result_summary, requested_by=run.requested_by,
         started_at=run.started_at, finished_at=run.finished_at)

@@ -52,6 +52,15 @@ class SecuritySkillVersionCreate(BaseModel):
     change_note: str = Field(min_length=1, max_length=2000)
 
 
+class SecuritySkillAutomationUpdate(BaseModel):
+    scan_types: list[Literal["sca", "sast", "agent"]] = Field(default_factory=list)
+
+    @field_validator("scan_types")
+    @classmethod
+    def unique_scan_types(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(values))
+
+
 class SecuritySkillVersion(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,6 +82,8 @@ class SecuritySkill(BaseModel):
     module: str
     status: str
     active_version: int | None
+    is_builtin: bool
+    auto_trigger_scan_types: list[str]
     created_by: str
     created_at: datetime
     updated_at: datetime
@@ -85,6 +96,8 @@ class SecuritySkillRun(BaseModel):
     skill_version: int
     project_id: UUID
     status: str
+    trigger: str
+    trigger_scan_task_id: UUID | None
     matched_finding_ids: list[UUID]
     result_summary: dict[str, object]
     requested_by: str

@@ -38,6 +38,7 @@ from app.models import (
     ScanStatus,
 )
 from app.repositories.mappers import finding_to_schema
+from app.services.security_skill_registry import trigger_automatic_skills_safely
 from app.services.agent_governance import (
     add_agent_exception,
     build_agent_html_report,
@@ -263,6 +264,7 @@ def run_agent_scan(payload: AgentScanRequest, db: Session = Depends(get_db)) -> 
             "trust_score": trust_score,
         }
         db.commit()
+        trigger_automatic_skills_safely(db, scan, actor="agent-scan")
         for record in records:
             db.refresh(record)
         db.refresh(scan)
