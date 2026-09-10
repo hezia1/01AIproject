@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "security-minimal-v1",
+  "recorded_on": "2026-09-10",
+  "report_sha256": "a9f326e8ff704b5ec93fb57bfa15252c37c8cb8adb4808f78b94d8f897000bd1",
+  "live_dast_report_sha256": "3d0d003b7038dbd755f7992e0bd3530788d4c4ba47f3d772e5829531bf67f152",
+  "input_hashes": {
+    "manifest.json": "99dc820c707510f20a4d7bca396fe7fc7d3593dcb228bfd2eed38173cba44565",
+    "external-testproject.json": "9c81f5e79f16cec7b4494bf648afc90041db30a409aeda89d3eed168f92ffac0",
+    "external_readme.md": "06a48ee621c57248f1565815313c48cbaf47bfca4815c51e85321487fe880d8d"
+  },
+  "internal": {
+    "status": "passed",
+    "sast": {"labelled_decisions": 10, "true_positive": 5, "false_positive": 0, "false_negative": 0, "true_negative": 5, "precision": 1.0, "recall": 1.0, "false_positive_rate": 0.0},
+    "agent": {"labelled_decisions": 6, "true_positive": 3, "false_positive": 0, "false_negative": 0, "true_negative": 3, "precision": 1.0, "recall": 1.0, "false_positive_rate": 0.0},
+    "sca": {"component_recall": 1.0, "vulnerability_precision": 1.0, "vulnerability_recall": 1.0},
+    "dast": {"cases": 4, "repeats_per_case": 3, "verdict_accuracy": 1.0, "replay_consistency": 1.0, "evidence_completeness": 1.0}
+  },
+  "live_dast": {
+    "status": "passed",
+    "base_image": "python:3.12-slim",
+    "base_image_id": "sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf",
+    "target_source_sha256": "22d8a06416659ae9e8d1eb13f9b57659b09af7f82c42497df63946583bc604f1",
+    "paired_cases": 4,
+    "repeats_per_case": 3,
+    "verdict_accuracy": 1.0,
+    "replay_consistency": 1.0,
+    "evidence_completeness": 1.0
+  },
+  "testproject_live_dast": {
+    "source_commit": "1f8fed353712940752a7bd9d7ddff06a65fb4791",
+    "probes": ["code_injection", "command_injection", "path_traversal", "security_misconfiguration"],
+    "repeats_per_probe": 3,
+    "verdicts": {"code_injection": "exploitable", "command_injection": "exploitable", "path_traversal": "exploitable", "security_misconfiguration": "exploitable"},
+    "consistent_runs": 12,
+    "evidence_complete_runs": 12,
+    "limitations": "The target used a read-only checkout and localhost-only disposable container, but npm dependencies were installed without a lock file; this observation is not the fixed paired benchmark."
+  },
+  "external": {
+    "source_commit": "1f8fed353712940752a7bd9d7ddff06a65fb4791",
+    "status": "partial",
+    "official_issue_count": 30,
+    "detected_issue_count": 15,
+    "official_list_coverage": 0.5,
+    "security_scope_issue_count": 24,
+    "security_scope_detected_count": 15,
+    "security_scope_coverage": 0.625,
+    "detected_issue_ids": [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 17, 19, 20],
+    "uncovered_issue_ids": [6, 14, 15, 16, 18, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+  },
+  "limitations": [
+    "Internal 100% values apply only to the small labelled v1 fixtures and must not be presented as platform-wide accuracy.",
+    "External coverage maps one fixed official list; it is not precision, general recall, or proof of runtime exploitability.",
+    "Contract-only DAST results are separate from the paired live Docker result and from the testproject observation."
+  ]
+}

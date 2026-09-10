@@ -1,0 +1,12 @@
+const cors = require('cors');
+
+app.use(cors({ origin: ['https://portal.example.test'] }));
+
+function updateAccount(req, res) {
+  const update = { displayName: String(req.body.displayName || '') };
+  const matcher = new RegExp('^[a-z0-9-]{1,32}$');
+  const claims = jwt.verify(req.cookies.session, signingKey, { algorithms: ['HS256'] });
+  return res.json({ update, matcher, subject: claims.sub });
+}
+
+module.exports = { updateAccount };

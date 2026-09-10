@@ -4,7 +4,7 @@
 
 > 当前版本提供本地用户名/密码登录和 `user` / `admin` 两种身份，但仍是单机研发与演示环境，没有生产级组织/租户隔离、外部身份源、密码恢复和审计保护。请勿直接暴露到公网，也不要对未获授权的目标执行动态验证。
 
-文档核对日期：**2026-09-10**。最新 CI 门禁、仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-10-ci.md)；历史测试和扫描数量仅代表其记录版本。
+文档核对日期：**2026-09-10**。最新检测基准、仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-10-benchmarks.md)；历史测试和扫描数量仅代表其记录版本。
 
 ## 目录
 
@@ -346,7 +346,7 @@ npm run test:diagnostics-ui
 
 “基线”是某个版本可追溯的能力、测试和环境记录，用于后续比较，不是全功能通过或质量保证。仓库用 [`acceptance/criteria.json`](acceptance/criteria.json) 保存这些证据和缺口，校验器 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 只检查记录结构和状态，不会自动运行测试或连接数据库。
 
-2026-09-10 进一步完成 CI 扫描状态语义和 Cookie 认证后，D 盘完整后端套件结果为 `441 passed, 1 skipped`；前端生产构建、认证故障冒烟和开发服务检查通过。十一组已记录界面冒烟中有十组具备通过证据，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项仍为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用诊断状态、演示数据或测试计数替代。
+2026-09-10 已建立最小版本化检测与 DAST 基准后，D 盘完整后端套件结果为 `444 passed, 1 skipped`；前端生产构建和开发服务检查通过。小型内部 SAST/AGENT/SCA 语料和 DAST 成对重放的 100% 只适用于各自固定样本；`testproject` 官方 30 项实际映射 15 项（50%），不得外推为通用召回率。AGENT 冒烟仍因当前验收项目没有 AGENT 扫描基线而失败，P0 门禁仍不通过；完整生态兼容率和生产就绪度也仍缺基准。详见 [检测基准说明](docs/security-benchmark.md)。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0
@@ -392,7 +392,8 @@ npm run test:diagnostics-ui
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/prd.md`](docs/prd.md) | 产品目标、用户、范围和验收方向 |
-| [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与未建立基线项 |
+| [`docs/acceptance-baseline.md`](docs/acceptance-baseline.md) | P0 量化验收状态、命令与部分/未建立基线项 |
+| [`docs/security-benchmark.md`](docs/security-benchmark.md) | 最小检测语料、官方 30 项映射与 DAST 重放基准 |
 | [`docs/platform-target-gap-register.md`](docs/platform-target-gap-register.md) | PPT 最终平台目标、当前实现差距、完成标准和优先级 |
 | [`docs/maintenance-verification-2026-09-09.md`](docs/maintenance-verification-2026-09-09.md) | 本轮 Skill 自动触发实现、文档核实与真实验证范围 |
 | [`docs/deferred-work.md`](docs/deferred-work.md) | 暂缓事项、重新启动条件、完成标准和进展记录 |

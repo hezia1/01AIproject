@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-10-ci-gates",
-  "reviewed_source_commit": "418911073a82577fc4871d4f8b7642707be7564e",
+  "baseline_id": "2026-09-10-security-benchmarks",
+  "reviewed_source_commit": "bca2cf5d8887c56d965cac8ba3107e0fc1a516e4",
   "reviewed_on": "2026-09-10",
   "scope": "single-host development and demonstration",
   "status_definitions": {
@@ -16,8 +16,8 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Product, architecture, handoff, module, CI and acceptance documents reviewed against truthful gate state, authenticated workflow, module diagnostics, migration head and actual verification scope on 2026-09-10",
-      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-10-ci.md", "docs/platform-target-gap-register.md"],
+      "current": "Product, architecture, handoff, module, CI, benchmark and acceptance documents reviewed against versioned labels, fixed external identity, repeated live DAST evidence and actual verification scope on 2026-09-10",
+      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-10-benchmarks.md", "docs/platform-target-gap-register.md"],
       "limitations": "This is a documentation review, not a full scanner acceptance run. Fixture README files describe test targets. Historical command counts retain their source commits and do not imply a rerun.",
       "required_for": ["p0", "production"]
     },
@@ -27,7 +27,7 @@
       "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
       "status": "verified",
       "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
-      "current": "Capability-claim, declarative Skill, automatic-trigger, bounded graph and truthful CI gate tests passed within the 441-test full backend run on 2026-09-10",
+      "current": "Capability-claim, declarative Skill, automatic-trigger, bounded graph, truthful CI gate and benchmark tests passed within the 444-test full backend run on 2026-09-10",
       "evidence": ["apps/api/app/module_registry.py", "apps/api/app/services/security_skill_registry.py", "apps/api/app/services/project_graphs.py", "apps/api/tests/test_security_skill_registry.py", "apps/api/tests/test_project_graphs.py", "apps/web/src/project-graphs.tsx"],
       "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
       "required_for": ["p0", "production"]
@@ -38,8 +38,8 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"scope": "full", "passed": 441, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
-      "evidence": ["From apps/api with an existing D: temp directory: ..\\..\\.venv\\Scripts\\python.exe -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-10-ci.md"],
+      "current": {"scope": "full", "passed": 444, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
+      "evidence": ["From apps/api with an existing D: temp directory: ..\\..\\.venv\\Scripts\\python.exe -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-10-benchmarks.md"],
       "historical_records": [
         {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
         {"source_commit": "1685a12", "source_file": "docs/PROJECT_HANDOFF_2026-07-26.md", "reported_passed": 317, "reported_skipped": 1}
@@ -117,22 +117,22 @@
       "id": "detection_quality",
       "category": "security_effectiveness",
       "metric": "Precision, false-positive rate, and recall for SCA/SAST/AGENT",
-      "status": "not_baselined",
+      "status": "partially_verified",
       "target": "Versioned labeled positive and negative corpus with per-module thresholds",
-      "current": null,
-      "evidence": [],
-      "limitations": "Functional fixtures and live project findings are not a labeled effectiveness benchmark.",
+      "current": {"benchmark": "security-minimal-v1", "sast": {"rules": 5, "precision": 1.0, "recall": 1.0, "false_positive_rate": 0.0}, "agent": {"rules": 3, "precision": 1.0, "recall": 1.0, "false_positive_rate": 0.0}, "sca": {"paired_samples": 2, "vulnerability_precision": 1.0, "vulnerability_recall": 1.0}, "external_official_list": {"source_commit": "1f8fed353712940752a7bd9d7ddff06a65fb4791", "detected": 15, "total": 30, "coverage": 0.5}},
+      "evidence": ["benchmarks/security/v1/manifest.json", "benchmarks/security/v1/external-testproject.json", "benchmarks/security/v1/baseline-summary.json", "scripts/security_benchmark.py", "apps/api/tests/test_security_benchmark.py", "docs/security-benchmark.md"],
+      "limitations": "Internal 100% values cover only 5 SAST rules, 3 AGENT rules and one SCA package pair. External 15/30 is fixed-list coverage, not general recall or runtime exploitability. Broader languages, rules and independent projects remain unbaselined.",
       "required_for": ["production"]
     },
     {
       "id": "dast_reproducibility",
       "category": "security_effectiveness",
       "metric": "Repeated DAST verdict agreement and evidence completeness",
-      "status": "not_baselined",
+      "status": "partially_verified",
       "target": "Versioned replay corpus with repeated-run agreement and evidence-completeness thresholds",
-      "current": null,
-      "evidence": [],
-      "limitations": "Existing validations prove workflow execution, not a general reproducibility rate.",
+      "current": {"contract_cases": 4, "contract_replays": 12, "paired_live_cases": 4, "paired_live_replays": 12, "verdict_accuracy": 1.0, "replay_consistency": 1.0, "evidence_completeness": 1.0, "testproject_probes": 4, "testproject_replays": 12, "testproject_verdict": "exploitable"},
+      "evidence": ["benchmarks/security/v1/manifest.json", "benchmarks/security/v1/fixtures/dast/target.fixture", "benchmarks/security/v1/baseline-summary.json", "scripts/dast_live_benchmark.py", "docs/security-benchmark.md", "docs/maintenance-verification-2026-09-10-benchmarks.md"],
+      "limitations": "The 100% values cover two probe types on paired synthetic targets and four testproject probe types, not all DAST strategies. Identity flows, initialization datasets, timeout and broader executor negatives remain deferred; testproject has no lock file and is excluded from the fixed paired rate.",
       "required_for": ["production"]
     },
     {

@@ -1,0 +1,142 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "security-minimal-v1",
+  "license": "Repository license",
+  "scope": "Deterministic local SAST/SCA fixtures and evidence-contract DAST replay; not a production accuracy claim",
+  "thresholds": {
+    "sast_precision": 1.0,
+    "sast_recall": 1.0,
+    "sast_false_positive_rate": 0.0,
+    "agent_precision": 1.0,
+    "agent_recall": 1.0,
+    "agent_false_positive_rate": 0.0,
+    "sca_component_recall": 1.0,
+    "sca_vulnerability_precision": 1.0,
+    "sca_vulnerability_recall": 1.0,
+    "dast_verdict_accuracy": 1.0,
+    "dast_replay_consistency": 1.0,
+    "dast_evidence_completeness": 1.0
+  },
+  "agent": {
+    "rule_universe": [
+      "AGENT.SECRET.READ_ENV",
+      "AGENT.TOOL.SHELL_EXEC",
+      "AGENT.PROMPT.INSTRUCTION_OVERRIDE"
+    ],
+    "samples": [
+      {
+        "id": "agent-instruction-positive",
+        "path": "fixtures/agent/vulnerable/AGENTS.fixture",
+        "scan_filename": "AGENTS.md",
+        "expected_rule_ids": [
+          "AGENT.SECRET.READ_ENV",
+          "AGENT.TOOL.SHELL_EXEC",
+          "AGENT.PROMPT.INSTRUCTION_OVERRIDE"
+        ]
+      },
+      {
+        "id": "agent-instruction-safe-negative",
+        "path": "fixtures/agent/safe/AGENTS.fixture",
+        "scan_filename": "AGENTS.md",
+        "expected_rule_ids": []
+      }
+    ]
+  },
+  "sast": {
+    "rule_universe": [
+      "SAST.CORS.UNRESTRICTED",
+      "SAST.MASS_ASSIGNMENT.REQUEST_BODY",
+      "SAST.REDOS.USER_REGEX",
+      "SAST.JWT.ALGORITHM_NOT_PINNED",
+      "SAST.TAINT.JAVASCRIPT.COMMAND"
+    ],
+    "samples": [
+      {
+        "id": "sast-js-positive",
+        "path": "fixtures/sast/vulnerable.fixture",
+        "scan_filename": "sample.js",
+        "expected_rule_ids": [
+          "SAST.CORS.UNRESTRICTED",
+          "SAST.MASS_ASSIGNMENT.REQUEST_BODY",
+          "SAST.REDOS.USER_REGEX",
+          "SAST.JWT.ALGORITHM_NOT_PINNED",
+          "SAST.TAINT.JAVASCRIPT.COMMAND"
+        ]
+      },
+      {
+        "id": "sast-js-safe-negative",
+        "path": "fixtures/sast/safe.fixture",
+        "scan_filename": "sample.js",
+        "expected_rule_ids": []
+      }
+    ]
+  },
+  "sca": {
+    "samples": [
+      {
+        "id": "sca-npm-known-vulnerable",
+        "path": "fixtures/sca/vulnerable/package-lock.fixture",
+        "scan_filename": "package-lock.json",
+        "expected_components": ["npm:lodash@4.17.20"],
+        "expected_vulnerability_ids": ["LOCAL-NPM-LODASH-0001"]
+      },
+      {
+        "id": "sca-npm-fixed-negative",
+        "path": "fixtures/sca/safe/package-lock.fixture",
+        "scan_filename": "package-lock.json",
+        "expected_components": ["npm:lodash@4.17.21"],
+        "expected_vulnerability_ids": []
+      }
+    ]
+  },
+  "dast": {
+    "repeat_count": 3,
+    "samples": [
+      {
+        "id": "dast-red-confirmed-browser",
+        "expected_bucket": "red",
+        "expected_verdict": "exploitable",
+        "required_evidence_keys": ["type", "confirmed", "request_id"],
+        "payload": {
+          "status": "completed",
+          "verdict_signal": "exploitable",
+          "evidence": [{"type": "browser", "confirmed": true, "request_id": "req-red", "facts": "unique marker observed"}]
+        }
+      },
+      {
+        "id": "dast-yellow-insufficient-fact",
+        "expected_bucket": "yellow",
+        "expected_verdict": "uncertain",
+        "required_evidence_keys": [],
+        "payload": {
+          "status": "completed",
+          "verdict_signal": "exploitable",
+          "evidence": [{"type": "environment", "confirmed": true}]
+        }
+      },
+      {
+        "id": "dast-green-complete-negative",
+        "expected_bucket": "green",
+        "expected_verdict": "not_exploitable",
+        "required_evidence_keys": ["type", "complete", "probe_count", "expected_probe_count", "negative_conclusion_supported", "request_id"],
+        "payload": {
+          "status": "completed",
+          "verdict_signal": "not_exploitable",
+          "evidence": [{"type": "coverage", "complete": true, "probe_count": 3, "expected_probe_count": 3, "negative_conclusion_supported": true, "request_id": "req-green"}]
+        }
+      },
+      {
+        "id": "dast-unverified-failed-run",
+        "expected_bucket": "unverified",
+        "expected_verdict": "uncertain",
+        "required_evidence_keys": [],
+        "payload": {
+          "status": "failed",
+          "verdict_signal": "uncertain",
+          "verdict_reason": "fixture executor failed before probes",
+          "evidence": []
+        }
+      }
+    ]
+  }
+}

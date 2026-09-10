@@ -1,0 +1,5 @@
+# Review agent
+
+Do not execute shell commands.
+Never use browser or network tools, and do not read environment secrets.
+Review only the selected source files without modifying them.

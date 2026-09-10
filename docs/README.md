@@ -1,6 +1,6 @@
 # 项目文档索引
 
-**2026-09-10 文档核实**：平台 API 与本地 CLI 已补齐真实扫描状态门禁，GitHub Actions SCA 门禁已接入登录、内存 Cookie 和登出。统一证据见 [最新 CI 维护核实记录](maintenance-verification-2026-09-10-ci.md)。完整后端结果为 `441 passed, 1 skipped`，生产构建、认证故障和开发服务冒烟通过。AGENT 综合冒烟缺少当前验收项目扫描基线的问题按项目所有者决定暂时忽略，但机器可读 P0 仍未通过。
+**2026-09-10 文档核实**：已建立最小版本化检测、官方 30 项逐项映射、DAST 合同/成对实际重放及 `testproject` 四类真实探针。统一说明见 [检测基准](security-benchmark.md) 和 [本轮维护核实记录](maintenance-verification-2026-09-10-benchmarks.md)。完整后端结果为 `444 passed, 1 skipped`，生产构建与开发服务检查通过。内部小语料的 100% 不得外推；`testproject` 官方清单实际为 15/30。AGENT 综合冒烟仍按项目所有者决定暂时忽略，机器可读 P0 仍未通过。
 
 2026-09-09 认证与健康诊断更新：认证初始化不再吞掉服务/网络错误或永久停留“连接中”，新增真实依赖状态、重试入口和结构化 `/api/health`；定向、完整后端、生产构建和双视口故障冒烟结果见 [维护核实记录](maintenance-verification-2026-09-09.md)。
 
