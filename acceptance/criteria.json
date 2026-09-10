@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-10-module-diagnostics",
-  "reviewed_source_commit": "f1c35c7a94def27414d90e95fe80add4ffca1d37",
+  "baseline_id": "2026-09-10-ci-gates",
+  "reviewed_source_commit": "418911073a82577fc4871d4f8b7642707be7564e",
   "reviewed_on": "2026-09-10",
   "scope": "single-host development and demonstration",
   "status_definitions": {
@@ -16,8 +16,8 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Product, architecture, handoff, module and acceptance documents reviewed against module diagnostics, built-in Skills, bounded project graphs, migration head and actual verification scope on 2026-09-10",
-      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-10.md", "docs/platform-target-gap-register.md"],
+      "current": "Product, architecture, handoff, module, CI and acceptance documents reviewed against truthful gate state, authenticated workflow, module diagnostics, migration head and actual verification scope on 2026-09-10",
+      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-10-ci.md", "docs/platform-target-gap-register.md"],
       "limitations": "This is a documentation review, not a full scanner acceptance run. Fixture README files describe test targets. Historical command counts retain their source commits and do not imply a rerun.",
       "required_for": ["p0", "production"]
     },
@@ -27,7 +27,7 @@
       "metric": "Backend registry, frontend fallback, and project report boundaries use calibrated claims",
       "status": "verified",
       "target": "No current claim of industry knowledge base, full system behavior monitoring, or cross-project ASPM",
-      "current": "Capability-claim, declarative Skill, automatic-trigger and bounded graph tests passed within the 414-test full backend run on 2026-09-09",
+      "current": "Capability-claim, declarative Skill, automatic-trigger, bounded graph and truthful CI gate tests passed within the 441-test full backend run on 2026-09-10",
       "evidence": ["apps/api/app/module_registry.py", "apps/api/app/services/security_skill_registry.py", "apps/api/app/services/project_graphs.py", "apps/api/tests/test_security_skill_registry.py", "apps/api/tests/test_project_graphs.py", "apps/web/src/project-graphs.tsx"],
       "limitations": "Copy review cannot replace functional acceptance of the underlying scanners.",
       "required_for": ["p0", "production"]
@@ -38,8 +38,8 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"scope": "full", "passed": 428, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
-      "evidence": ["From apps/api with an existing D: temp directory: ..\\..\\.venv\\Scripts\\python.exe -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-10.md"],
+      "current": {"scope": "full", "passed": 441, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
+      "evidence": ["From apps/api with an existing D: temp directory: ..\\..\\.venv\\Scripts\\python.exe -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-10-ci.md"],
       "historical_records": [
         {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
         {"source_commit": "1685a12", "source_file": "docs/PROJECT_HANDOFF_2026-07-26.md", "reported_passed": 317, "reported_skipped": 1}
@@ -54,8 +54,19 @@
       "status": "partially_verified",
       "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all eleven documented browser smoke suites exit successfully",
       "current": {"build": "passed", "largest_javascript_chunk_kb": 661.92, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 10, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:diagnostics-ui", "cd apps/web && npm run test:auth-failure-ui", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-10.md"],
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:diagnostics-ui", "cd apps/web && npm run test:auth-failure-ui", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-10-ci.md"],
       "limitations": "Vite reports a chunk-size warning. Authentication failure injection covers status 503, identity 503, unreachable API, timeout, retry and dual viewports. One unresolved failure remains: test:agent-ui requires a five-step runtime plan while the configured testproject has no AGENT scan task; the project owner has temporarily excluded it from the current implementation priority, but it is not rewritten as passed; follow deferred-work UI-011.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "sca_ci_gate_state_and_auth",
+      "category": "engineering",
+      "metric": "SCA API and local CI fail closed on incomplete scans and the remote workflow authenticates without bypass",
+      "status": "verified",
+      "target": "Failed, partial, pending, missing, invalid, cancelled and stale scans block; CI login uses protected secrets, an in-memory session and logout",
+      "current": "API and local CLI state matrices passed. The exact testproject blocked as stale through the platform and partial through standalone offline CLI. A temporary ordinary user completed real login, cookie gate and logout against the authenticated local API and was removed with its sessions.",
+      "evidence": ["apps/api/app/routers/sca.py", "apps/api/app/services/sca_ci.py", "scripts/sca_ci.py", "scripts/sca_api_gate.py", ".github/workflows/sca-gate.yml", "apps/api/tests/test_sca_policy_governance.py", "apps/api/tests/test_sca_api_gate_client.py", "docs/maintenance-verification-2026-09-10-ci.md"],
+      "limitations": "The GitHub-hosted runner was not connected to a real reachable HTTPS deployment. Current local username/password sessions are not production OIDC, fine-grained service identities, or tenant isolation. A gate pass is not a no-vulnerability claim.",
       "required_for": ["p0", "production"]
     },
     {

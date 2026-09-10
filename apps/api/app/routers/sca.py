@@ -55,6 +55,7 @@ from app.services.sca_tool_scanner import ToolScanResult, check_syft_grype_healt
 from app.services.sca_assurance import build_sca_assurance, component_resolution
 from app.services.auth import current_identity, require_admin
 from app.services.security_skill_registry import trigger_automatic_skills_safely
+from app.services.scan_status import scan_task_diagnostic
 
 router = APIRouter()
 
@@ -683,8 +684,8 @@ def get_project_dependency_graph(
 def sca_gate(project_id: UUID, scan_task_id: UUID | None = None, db: Session = Depends(get_db)) -> dict[str, object]:
     if db.get(ProjectRecord, str(project_id)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    components = load_project_components(db, project_id, scan_task_id)
-    resolved_scan_id = scan_task_id or latest_sca_scan_id(db, project_id)
+    resolved_scan_id = scan_task_id or latest_sca_gate_scan_id(db, project_id)
+    components = load_project_components(db, project_id, resolved_scan_id)
     scan = db.get(ScanTaskRecord, str(resolved_scan_id)) if resolved_scan_id else None
     return build_sca_gate_result(project_id, resolved_scan_id, components, scan, effective_gate_policy(scoped_policy_overrides(db, project_id)))
 
@@ -864,7 +865,29 @@ def build_sca_gate_result(
     scan: ScanTaskRecord | None,
     policy: dict[str, object],
 ) -> dict[str, object]:
-    block_reasons: list[dict[str, object]] = []
+    policy_block_reasons: list[dict[str, object]] = []
+    max_age = int(policy.get("max_scan_age_hours") or 168)
+    if scan is None:
+        scan_diagnostic = {
+            "status": "not_run", "persisted_status": None, "result_complete": False,
+            "stale": False, "age_hours": None, "reasons": ["没有可用于门禁的 SCA 扫描任务。"],
+        }
+    elif str(scan.project_id) != str(project_id):
+        scan_diagnostic = {
+            "status": "invalid", "persisted_status": scan.status, "result_complete": False,
+            "stale": False, "age_hours": None, "reasons": ["扫描任务不属于请求的项目。"],
+        }
+    elif str(scan.scan_type).lower() != "sca":
+        scan_diagnostic = {
+            "status": "invalid", "persisted_status": scan.status, "result_complete": False,
+            "stale": False, "age_hours": None, "reasons": ["扫描任务不是 SCA 类型。"],
+        }
+    else:
+        scan_diagnostic = scan_task_diagnostic(scan, max_age_hours=max_age)
+    operational_reasons = [] if scan_diagnostic["status"] == "succeeded" else [
+        f"scan_status:{scan_diagnostic['status']}",
+        *[str(item) for item in scan_diagnostic.get("reasons", [])],
+    ]
     exempt_statuses = {"accepted-risk", "not_affected", "fixed"}
     active = [item for item in components if item.risk_status not in exempt_statuses]
     severities = set(policy.get("block_severities", []))
@@ -886,20 +909,17 @@ def build_sca_gate_result(
         if policy.get("block_unverified_components") and metadata.get("vulnerability_verification") == "unverified":
             reasons.append("vulnerability_intelligence_unverified")
         if reasons:
-            block_reasons.append({"component": item, "reasons": reasons})
-    stale = False
-    max_age = int(policy.get("max_scan_age_hours", 0))
-    if max_age and scan and scan.finished_at:
-        stale = (datetime.now() - scan.finished_at).total_seconds() > max_age * 3600
-    if scan is None:
-        stale = True
-    if stale:
-        block_reasons.append({"component": None, "reasons": ["scan_stale_or_missing"]})
+            policy_block_reasons.append({"component": item, "reasons": reasons})
     if not bool(policy.get("enabled", True)):
-        block_reasons = []
-    blocked = [item for item in block_reasons if item["component"] is not None]
+        policy_block_reasons = []
+    blocked = [item for item in policy_block_reasons if item["component"] is not None]
     accepted = [item for item in components if item.risk_status == "accepted-risk"]
-    decision = "block" if block_reasons else "pass"
+    decision = "block" if operational_reasons or policy_block_reasons else "pass"
+    reason = (
+        "SCA 扫描未形成完整、时效内的可门禁结果" if operational_reasons
+        else "SCA 门禁策略命中阻断条件" if policy_block_reasons
+        else "SCA 扫描完整且未命中已启用的门禁阻断条件"
+    )
     return {
         "project_id": str(project_id),
         "scan_task_id": str(scan_task_id) if scan_task_id else None,
@@ -907,9 +927,14 @@ def build_sca_gate_result(
         "exit_code": 2 if decision == "block" else 0,
         "blocked_component_count": len(blocked),
         "accepted_risk_count": len(accepted),
-        "reason": "SCA 门禁策略命中阻断条件" if block_reasons else "未命中已启用的 SCA 门禁阻断条件",
+        "reason": reason,
         "policy": policy,
-        "scan_stale_or_missing": stale,
+        "scan_status": scan_diagnostic["status"],
+        "persisted_scan_status": scan_diagnostic["persisted_status"],
+        "result_complete": scan_diagnostic["result_complete"],
+        "scan_age_hours": scan_diagnostic.get("age_hours"),
+        "scan_stale_or_missing": scan_diagnostic["status"] in {"stale", "not_run"},
+        "operational_reasons": operational_reasons,
         "blocked_components": [
             {
                 "name": record["component"].name,
@@ -921,7 +946,7 @@ def build_sca_gate_result(
             }
             for record in blocked[:50]
         ],
-        "ci_usage": "GET /api/sca/projects/{project_id}/gate?scan_task_id={scan_task_id}; exit_code 为 0 代表 pass，2 代表 block。",
+        "ci_usage": "GET /api/sca/projects/{project_id}/gate?scan_task_id={scan_task_id}; 仅 scan_status=succeeded 且 decision=pass 时 exit_code 为 0，否则为 2。",
     }
 
 
@@ -1338,6 +1363,15 @@ def latest_sca_scan_id(db: Session, project_id: UUID) -> UUID | None:
             ScanTaskRecord.status == ScanStatus.completed.value,
         )
         .order_by(ScanTaskRecord.finished_at.desc().nullslast(), ScanTaskRecord.created_at.desc())
+    )
+    return UUID(str(scan.id)) if scan else None
+
+
+def latest_sca_gate_scan_id(db: Session, project_id: UUID) -> UUID | None:
+    scan = db.scalar(
+        select(ScanTaskRecord)
+        .where(ScanTaskRecord.project_id == str(project_id), ScanTaskRecord.scan_type == "sca")
+        .order_by(ScanTaskRecord.created_at.desc())
     )
     return UUID(str(scan.id)) if scan else None
 

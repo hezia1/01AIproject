@@ -28,6 +28,8 @@ Web 使用本地 `user` / `admin` 两角色认证，支持首次管理员初始�
 
 **增强引擎编排**：Syft 对待测目录生成一次 CycloneDX SBOM；Grype 直接读取该 SBOM，不再自行遍历目录生成资产；Trivy 默认关闭漏洞扫描，只负责配置错误和明文密钥。Grype 数据库或执行不可用时，Trivy 才启用离线漏洞扫描作为回退。Grype 健康时，SBOM 漏洞匹配与 Trivy 源码检查并行执行；`.git`、`node_modules`、`dist`、`build`、`coverage` 和 `vendor` 等目录从 Trivy 扫描范围排除。SCA 概览的引擎管理区可读取 Grype 数据库 schema、构建时间及按 720 小时上限计算的预计失效时间；过期或缺失时由用户显式触发联网更新，更新后再次校验。检测、更新和扫描共用 `artifacts/sca-offline/grype-cache`，日常扫描继续设置 `GRYPE_DB_AUTO_UPDATE=false`。Trivy 回退命中作为漏洞证据，未命中不作为完整 SBOM 的无漏洞证明。配置/密钥结果与组件 CVE 分开计数，且不保存疑似密钥的原始匹配文本。
 
+**CI 门禁**：平台 API 只有在 SCA 任务派生状态为 `succeeded`、证据时效内且风险政策通过时放行；风险政策关闭不能绕过执行完整性。本地 CLI 同步扫描若 assurance 为 partial 也会阻断，但它不读取平台 VEX、例外、项目策略或运行 Docker 增强。GitHub Actions API 门禁使用专用普通用户登录、内存 Cookie 和登出，未增加角色权限；生产服务身份和租户授权仍未实现。
+
 **边界**：尚无经过标注语料验证的漏洞准确率与生态兼容率；SCA Finding 当前不自动进入 DAST。
 
 ## SAST：智能静态审计

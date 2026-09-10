@@ -15,8 +15,8 @@ def run_local_sca(source_path: str, policy: dict[str, object] | None = None) -> 
     environment = inspect_python_environment(source_path)
     components = analyze_components(dedupe_components([*parsed.components, *environment.components]))
     effective_policy = {**DEFAULT_GATE_POLICY, **(policy or {})}
-    gate = evaluate_local_gate(components, effective_policy)
     assurance = build_sca_assurance(components, parsed.scanned_files)
+    gate = evaluate_local_gate(components, effective_policy, assurance)
     return {
         "source_path": source_path,
         "scanned_files": parsed.scanned_files,
@@ -30,7 +30,7 @@ def run_local_sca(source_path: str, policy: dict[str, object] | None = None) -> 
     }
 
 
-def evaluate_local_gate(components, policy: dict[str, object]) -> dict[str, object]:
+def evaluate_local_gate(components, policy: dict[str, object], assurance: dict[str, object]) -> dict[str, object]:
     blocked = []
     for component in components:
         if component.risk_status in {"accepted-risk", "not_affected", "fixed"}:
@@ -51,7 +51,32 @@ def evaluate_local_gate(components, policy: dict[str, object]) -> dict[str, obje
             blocked.append({"name": component.name, "version": component.version, "ecosystem": component.ecosystem, "vulnerability_ids": component.vulnerability_ids or [], "reasons": reasons})
     if not policy.get("enabled", True):
         blocked = []
-    return {"decision": "block" if blocked else "pass", "exit_code": 2 if blocked else 0, "policy": policy, "blocked_components": blocked}
+    assurance_status = str(assurance.get("status") or "unknown")
+    scan_status = "succeeded" if assurance_status == "complete" else "partial"
+    operational_reasons = [] if scan_status == "succeeded" else [
+        f"scan_status:{scan_status}",
+        *[str(item) for item in assurance.get("reasons", [])],
+    ]
+    decision = "block" if operational_reasons or blocked else "pass"
+    return {
+        "decision": decision,
+        "exit_code": 2 if decision == "block" else 0,
+        "reason": (
+            "本地 SCA 扫描结果不完整" if operational_reasons
+            else "本地 SCA 门禁策略命中阻断条件" if blocked
+            else "本地 SCA 扫描完整且未命中门禁阻断条件"
+        ),
+        "scan_status": scan_status,
+        "result_complete": scan_status == "succeeded",
+        "operational_reasons": operational_reasons,
+        "policy": policy,
+        "blocked_components": blocked,
+        "mode": "standalone",
+        "limitations": [
+            "本地 CLI 不读取平台数据库中的 VEX、例外审批、项目策略或历史任务。",
+            "本地 CLI 不执行平台 Syft、Grype、Trivy Docker 增强，不能与平台扫描宣称等价。",
+        ],
+    }
 
 
 def build_sarif(components) -> dict[str, object]:

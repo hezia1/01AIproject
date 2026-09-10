@@ -16,25 +16,24 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Check required endpoint configuration
         env:
           SCA_API_BASE: ${{ secrets.SCA_API_BASE }}
-        run: test -n "$SCA_API_BASE"
-      - name: Evaluate SCA gate
-        id: sca_gate
+          SCA_CI_USERNAME: ${{ secrets.SCA_CI_USERNAME }}
+          SCA_CI_PASSWORD: ${{ secrets.SCA_CI_PASSWORD }}
+        run: |
+          test -n "$SCA_API_BASE"
+          test -n "$SCA_CI_USERNAME"
+          test -n "$SCA_CI_PASSWORD"
+      - name: Authenticate and evaluate SCA gate
         env:
           SCA_API_BASE: ${{ secrets.SCA_API_BASE }}
+          SCA_CI_USERNAME: ${{ secrets.SCA_CI_USERNAME }}
+          SCA_CI_PASSWORD: ${{ secrets.SCA_CI_PASSWORD }}
           PROJECT_ID: ${{ inputs.project_id }}
           SCAN_TASK_ID: ${{ inputs.scan_task_id }}
-        run: |
-          response="$(curl --fail-with-body --silent --show-error "$SCA_API_BASE/api/sca/projects/$PROJECT_ID/gate?scan_task_id=$SCAN_TASK_ID")"
-          echo "$response" | jq .
-          decision="$(echo "$response" | jq -r '.decision')"
-          echo "decision=$decision" >> "$GITHUB_OUTPUT"
-          if [ "$decision" != "pass" ]; then
-            echo "SCA gate blocked this build."
-            exit 2
-          fi
-      - name: Gate passed
-        if: steps.sca_gate.outputs.decision == 'pass'
-        run: echo "SCA gate passed."
+        run: python scripts/sca_api_gate.py

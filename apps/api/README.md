@@ -2,7 +2,7 @@
 
 FastAPI 服务承载项目、模块、SCA、SAST、AGENT、DAST、SANDBOX、ASPM 和项目图谱 API。项目、任务、Finding、组件、动态验证、证据和图谱快照均持久化到 PostgreSQL，数据库结构通过 Alembic 管理。代码图谱只读源码，业务图谱只聚合已存储的项目事实，两者都不执行项目代码。
 
-文档按 2026-09-09 仓库实现复核；本轮运行结果见 [维护核实记录](../../docs/maintenance-verification-2026-09-09.md)。
+文档按 2026-09-10 仓库实现复核；最新运行结果见 [CI 门禁维护核实记录](../../docs/maintenance-verification-2026-09-10-ci.md)。
 
 当前 SAST 后台任务由 `scripts/sast_worker.py` 轮询 PostgreSQL 队列；本地基础设施包含 Redis，但 SAST 队列仍使用 PostgreSQL，尚不是生产级分布式任务系统。
 
@@ -24,6 +24,8 @@ python -m alembic -c alembic.ini upgrade head
 ```
 
 健康检查：<http://127.0.0.1:8000/api/health>。它检查 API、PostgreSQL、Redis、Docker、固定 SCA 工具镜像和 Semgrep：必需依赖失败返回 HTTP 503，可选依赖失败返回 HTTP 200 与 `degraded`。认证初始化可使用 `?include_optional_tools=false` 跳过较慢的本机工具探测。项目级 `GET /api/projects/{project_id}/diagnostics` 另行聚合情报时效、已保存模型调用证据、目标和最近任务的派生状态；默认 168 小时时效阈值可通过 `.env.example` 中四项诊断变量配置。工具就绪或任务完成不代表无漏洞。接口文档：<http://127.0.0.1:8000/docs>；当前中间件也保护文档路径，请先在同一主机名下完成登录。
+
+SCA 门禁接口只在扫描派生状态为 `succeeded` 且风险政策通过时返回 pass；失败、部分、未完成、缺失、无效和陈旧任务均阻断。GitHub Actions 使用专用普通用户的现有 Cookie 登录，不增加权限；配置及退出码见 [SCA CI 门禁说明](../../docs/sca-ci-gate.md)。
 
 ## 测试
 

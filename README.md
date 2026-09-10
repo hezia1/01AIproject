@@ -4,7 +4,7 @@
 
 > 当前版本提供本地用户名/密码登录和 `user` / `admin` 两种身份，但仍是单机研发与演示环境，没有生产级组织/租户隔离、外部身份源、密码恢复和审计保护。请勿直接暴露到公网，也不要对未获授权的目标执行动态验证。
 
-文档核对日期：**2026-09-09**。本轮仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-09.md)；历史测试和扫描数量仅代表其记录版本。
+文档核对日期：**2026-09-10**。最新 CI 门禁、仓库、数据库和运行验证范围见 [维护核实记录](docs/maintenance-verification-2026-09-10-ci.md)；历史测试和扫描数量仅代表其记录版本。
 
 ## 目录
 
@@ -302,7 +302,7 @@ SAST Finding 总数与 DAST 队列数量不必相等。只有适合运行态验�
 - [Jenkins SAST 示例](ci/sast/Jenkinsfile)
 - [Azure Pipelines SAST 示例](azure-pipelines-sast.yml)
 
-SCA API 门禁示例尚未接入当前 Cookie 登录，默认启用认证时会收到 401；本地 CLI 示例不受这一 API 认证缺口影响。API 门禁通过也不等于目标扫描成功，具体状态限制见 [SCA 门禁说明](docs/sca-ci-gate.md) 和 [暂缓事项](docs/deferred-work.md)。
+SCA API 门禁工作流已使用三个 secret 完成专用普通用户登录、内存 Cookie、门禁请求和登出；正式地址只接受 HTTPS。平台 API 与本地 CLI 都会阻断失败、部分完成和缺少有效结果的扫描，平台还会阻断排队/运行、取消、陈旧及无效任务。风险政策关闭不会绕过执行完整性，门禁通过也不等于无漏洞。配置和退出码见 [SCA 门禁说明](docs/sca-ci-gate.md)。
 
 ## 测试
 
@@ -346,7 +346,7 @@ npm run test:diagnostics-ui
 
 “基线”是某个版本可追溯的能力、测试和环境记录，用于后续比较，不是全功能通过或质量保证。仓库用 [`acceptance/criteria.json`](acceptance/criteria.json) 保存这些证据和缺口，校验器 [`scripts/acceptance_check.py`](scripts/acceptance_check.py) 只检查记录结构和状态，不会自动运行测试或连接数据库。
 
-2026-09-10 增加情报时效、模型调用证据、被测目标及扫描任务的项目级真实诊断后，D 盘完整后端套件结果为 `428 passed, 1 skipped`；前端生产构建和模块诊断 1440px/390px 冒烟通过。十一组已记录界面冒烟中有十组具备通过证据，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项仍为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用诊断状态、演示数据或测试计数替代。
+2026-09-10 进一步完成 CI 扫描状态语义和 Cookie 认证后，D 盘完整后端套件结果为 `441 passed, 1 skipped`；前端生产构建、认证故障冒烟和开发服务检查通过。十一组已记录界面冒烟中有十组具备通过证据，AGENT 冒烟因当前验收项目没有 AGENT 扫描基线而失败，因此清单的前端综合项仍为 `partially_verified`，P0 门禁仍不通过。精确率、召回率、DAST 复现率、完整生态兼容率和生产就绪度仍缺少版本化基准，不得用诊断状态、演示数据或测试计数替代。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\acceptance_check.py --profile p0
