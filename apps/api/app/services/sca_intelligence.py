@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from app.services.diagnostic_contract import bounded_positive_int, freshness
+
 
 def intelligence_path() -> Path:
     configured = os.getenv("SCA_INTELLIGENCE_PATH")
@@ -17,18 +19,21 @@ def intelligence_path() -> Path:
 
 def intelligence_status(path: Path | None = None) -> dict[str, object]:
     target = path or intelligence_path()
+    max_age_hours = bounded_positive_int("SCA_INTELLIGENCE_MAX_AGE_HOURS", 168)
     if not target.is_file():
-        return {"status": "not_configured", "path": str(target), "advisory_count": 0, "updated_at": None}
+        return {"status": "not_configured", "path": str(target), "advisory_count": 0, "updated_at": None, "detail": "未找到补充漏洞情报文件。", "freshness": freshness(None, max_age_hours=max_age_hours)}
     try:
         payload = load_intelligence(target)
     except ValueError as exc:
-        return {"status": "invalid", "path": str(target), "advisory_count": 0, "updated_at": None, "detail": str(exc)}
+        return {"status": "invalid", "path": str(target), "advisory_count": 0, "updated_at": None, "detail": str(exc), "freshness": freshness(None, max_age_hours=max_age_hours)}
+    data_freshness = freshness(payload.get("updated_at"), max_age_hours=max_age_hours)
     return {
-        "status": "available",
+        "status": "available" if data_freshness["status"] != "stale" else "stale",
         "path": str(target),
         "advisory_count": len(payload["advisories"]),
         "updated_at": payload.get("updated_at"),
         "sources": payload.get("sources", []),
+        "freshness": data_freshness,
     }
 
 

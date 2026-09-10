@@ -60,6 +60,7 @@ from app.services.project_onboarding import (
     inspect_project_assets,
     managed_import_root,
 )
+from app.services.module_diagnostics import project_module_diagnostics
 
 router = APIRouter()
 
@@ -162,6 +163,14 @@ def get_project_readiness(project_id: UUID, db: Session = Depends(get_db)) -> Pr
     if record is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectReadiness.model_validate(build_project_readiness(record, inspect_project_assets(record.source_path)))
+
+
+@router.get("/{project_id}/diagnostics")
+def get_project_diagnostics(project_id: UUID, db: Session = Depends(get_db)) -> dict[str, object]:
+    record = db.get(ProjectRecord, str(project_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project_module_diagnostics(db, record)
 
 
 @router.get("/{project_id}", response_model=Project)

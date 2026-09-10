@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "baseline_id": "2026-09-09-project-graphs",
-  "reviewed_source_commit": "0247fef7a3884fec587c848db5558f5e835a117c",
-  "reviewed_on": "2026-09-09",
+  "baseline_id": "2026-09-10-module-diagnostics",
+  "reviewed_source_commit": "f1c35c7a94def27414d90e95fe80add4ffca1d37",
+  "reviewed_on": "2026-09-10",
   "scope": "single-host development and demonstration",
   "status_definitions": {
     "verified": "The recorded target has reproducible repository or command evidence.",
@@ -16,8 +16,8 @@
       "metric": "Tracked project documentation reflects current implementation and boundaries",
       "status": "verified",
       "target": "All tracked project documentation uses implemented, conditional, or not implemented status",
-      "current": "Product, architecture, handoff, module and acceptance documents reviewed against the tenant-wide built-in Skills, automatic triggers, bounded project graphs, migration head and actual verification scope on 2026-09-09",
-      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-09.md", "docs/platform-target-gap-register.md"],
+      "current": "Product, architecture, handoff, module and acceptance documents reviewed against module diagnostics, built-in Skills, bounded project graphs, migration head and actual verification scope on 2026-09-10",
+      "evidence": ["docs/README.md", "docs/PROJECT_HANDOFF_2026-07-26.md", "docs/acceptance-baseline.md", "docs/maintenance-verification-2026-09-10.md", "docs/platform-target-gap-register.md"],
       "limitations": "This is a documentation review, not a full scanner acceptance run. Fixture README files describe test targets. Historical command counts retain their source commits and do not imply a rerun.",
       "required_for": ["p0", "production"]
     },
@@ -38,8 +38,8 @@
       "metric": "Backend automated test suite",
       "status": "verified",
       "target": "All runnable tests pass with the Agent staging directory on D:",
-      "current": {"scope": "full", "passed": 414, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
-      "evidence": ["From apps/api with an existing D: temp directory: python -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-09.md"],
+      "current": {"scope": "full", "passed": 428, "skipped": 1, "failed": 0, "warnings": 34, "full_suite_run": true},
+      "evidence": ["From apps/api with an existing D: temp directory: ..\\..\\.venv\\Scripts\\python.exe -B -m pytest tests -q -rs -p no:cacheprovider", "docs/maintenance-verification-2026-09-10.md"],
       "historical_records": [
         {"source_commit": "0f89cf8", "source_file": "acceptance/criteria.json", "reported_passed": 307, "reported_skipped": 1},
         {"source_commit": "1685a12", "source_file": "docs/PROJECT_HANDOFF_2026-07-26.md", "reported_passed": 317, "reported_skipped": 1}
@@ -52,10 +52,21 @@
       "category": "engineering",
       "metric": "Frontend TypeScript production build",
       "status": "partially_verified",
-      "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all ten documented browser smoke suites exit successfully",
-      "current": {"build": "passed", "largest_javascript_chunk_kb": 658.32, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 9, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
-      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:auth-failure-ui", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-09.md"],
+      "target": "npm run build, the development-server configuration smoke, IPv4 HTTP smoke and all eleven documented browser smoke suites exit successfully",
+      "current": {"build": "passed", "largest_javascript_chunk_kb": 661.92, "dev_server_config": "passed", "ipv4_http": "passed", "browser_smoke_passed": 10, "browser_smoke_failed": 1, "failed_browser_smoke": "test:agent-ui"},
+      "evidence": ["cd apps/web && npm run build", "cd apps/web && npm run test:diagnostics-ui", "cd apps/web && npm run test:auth-failure-ui", "cd apps/web && npm run test:skill-ui", "cd apps/web && npm run test:graphs-ui", "cd apps/web && npm run test:dev-server", "GET http://127.0.0.1:5173", "docs/maintenance-verification-2026-09-10.md"],
       "limitations": "Vite reports a chunk-size warning. Authentication failure injection covers status 503, identity 503, unreachable API, timeout, retry and dual viewports. One unresolved failure remains: test:agent-ui requires a five-step runtime plan while the configured testproject has no AGENT scan task; the project owner has temporarily excluded it from the current implementation priority, but it is not rewritten as passed; follow deferred-work UI-011.",
+      "required_for": ["p0", "production"]
+    },
+    {
+      "id": "project_module_diagnostics",
+      "category": "engineering",
+      "metric": "Project intelligence, model, target, and scan-task states are evidence-based",
+      "status": "verified",
+      "target": "Each execution module distinguishes success, partial, stale, failed, missing, unavailable, and not-applicable evidence without rewriting scanner state",
+      "current": "The project endpoint and detection UI report SCA intelligence freshness, saved model-call evidence, target state, and derived task completeness for SCA/SAST/AGENT/DAST/SANDBOX. The exact testproject was verified read-only on 2026-09-10.",
+      "evidence": ["apps/api/app/services/module_diagnostics.py", "apps/api/app/services/scan_status.py", "apps/api/tests/test_module_diagnostics.py", "apps/web/src/project-diagnostics.tsx", "apps/web/scripts/project-diagnostics-ui-smoke.cjs", "docs/maintenance-verification-2026-09-10.md"],
+      "limitations": "The endpoint does not actively contact arbitrary targets or invoke paid models. Configured-without-success-evidence remains unverified, stale evidence remains stale, and a successful task is not evidence that no vulnerability exists.",
       "required_for": ["p0", "production"]
     },
     {

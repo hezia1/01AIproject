@@ -207,6 +207,11 @@ class ScanTask(ScanCreate):
     attempt: int = 1
     queue_position: int | None = None
     error: str | None = None
+    diagnostic_status: str = "unknown"
+    diagnostic_reasons: list[str] = Field(default_factory=list)
+    result_complete: bool = False
+    is_stale: bool = False
+    age_hours: float | None = None
 
 
 class ScanProgressUpdate(BaseModel):

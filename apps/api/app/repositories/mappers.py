@@ -2,6 +2,7 @@
 
 from app.db_models import ComponentRecord, DastBusinessFlowRecord, DastBusinessRunRecord, DastBusinessSnapshotRecord, DastRunEvidenceRecord, DastValidationRecord, DastVerificationPlanRecord, DastVerificationRunRecord, FindingRecord, ProjectModuleRecord, ProjectRecord, SandboxEvidenceRecord, ScanTaskRecord
 from app.models import AiReview, Component, DastBusinessFlow, DastBusinessRun, DastBusinessSnapshot, DastRunEvidence, DastValidation, DastVerificationPlan, DastVerificationRun, Finding, ModuleKey, Project, ProjectModule, SandboxEvidence, ScanTask
+from app.services.scan_status import scan_task_diagnostic
 
 
 def project_to_schema(record: ProjectRecord) -> Project:
@@ -36,6 +37,7 @@ def project_module_to_schema(record: ProjectModuleRecord) -> ProjectModule:
 def scan_to_schema(record: ScanTaskRecord) -> ScanTask:
     metadata = record.scan_metadata or {}
     events = metadata.get("events") if isinstance(metadata.get("events"), list) else []
+    diagnostic = scan_task_diagnostic(record)
     return ScanTask(
         id=UUID(str(record.id)),
         project_id=UUID(str(record.project_id)),
@@ -51,6 +53,11 @@ def scan_to_schema(record: ScanTaskRecord) -> ScanTask:
         attempt=max(1, int(metadata.get("attempt") or 1)),
         queue_position=metadata.get("queue_position") if isinstance(metadata.get("queue_position"), int) else None,
         error=str(metadata.get("error")) if metadata.get("error") else None,
+        diagnostic_status=str(diagnostic["status"]),
+        diagnostic_reasons=list(diagnostic["reasons"]),
+        result_complete=bool(diagnostic["result_complete"]),
+        is_stale=bool(diagnostic["stale"]),
+        age_hours=diagnostic["age_hours"],
     )
 
 

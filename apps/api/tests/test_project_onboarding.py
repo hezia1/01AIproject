@@ -8,6 +8,7 @@ import pytest
 from app.models import SastScanRequest
 from app.db_models import ProjectRecord
 from app.routers.projects import delete_project
+from app.routers import projects
 from app.routers.sast import resolved_scan_profile
 from app.services.project_onboarding import (
     ProjectOnboardingError,
@@ -42,6 +43,17 @@ def test_asset_probe_recognizes_every_supported_dependency_family(tmp_path: Path
     assert inventory.dependency_file_count == len(fixtures)
     assert "sca" in inventory.recommended_tasks
     assert "sast" in inventory.recommended_tasks
+
+
+def test_project_diagnostics_route_uses_requested_project(monkeypatch) -> None:
+    project_id = uuid4()
+    record = SimpleNamespace(id=str(project_id))
+    session = SimpleNamespace(get=lambda model, key: record if key == str(project_id) else None)
+    monkeypatch.setattr(projects, "project_module_diagnostics", lambda db, project: {"project_id": str(project.id), "status": "degraded"})
+
+    result = projects.get_project_diagnostics(project_id, session)
+
+    assert result == {"project_id": str(project_id), "status": "degraded"}
 
 
 def test_zip_import_extracts_a_single_safe_project_root(tmp_path: Path, monkeypatch) -> None:

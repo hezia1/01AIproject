@@ -210,6 +210,27 @@ button {
 .health-ok { color: #166534; }
 .health-degraded { color: #9a3412; }
 .health-unavailable { color: #991b1b; }
+.project-diagnostics { margin-bottom: 18px; }
+.project-diagnostics .panel-header h2 { align-items: center; display: flex; gap: 7px; }
+.diagnostic-load-error { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #991b1b; padding: 11px 13px; }
+.diagnostic-summary { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 12px; }
+.diagnostic-summary span { color: #64748b; font-size: 12px; }
+.diagnostic-modules { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.diagnostic-module { border: 1px solid #e2e8f0; border-radius: 10px; min-width: 0; overflow: hidden; }
+.diagnostic-module > header { align-items: flex-start; background: #f8fafc; display: flex; gap: 10px; justify-content: space-between; padding: 11px 12px; }
+.diagnostic-module > header small { color: #64748b; display: block; margin-top: 3px; overflow-wrap: anywhere; }
+.diagnostic-checks > div { display: grid; gap: 4px; grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; }
+.diagnostic-checks > div + div { border-top: 1px solid #e2e8f0; }
+.diagnostic-checks small { color: #64748b; grid-column: 1 / -1; overflow-wrap: anywhere; }
+.diagnostic-state { font-size: 12px; white-space: nowrap; }
+.state-ok, .state-succeeded, .state-current, .state-ready { color: #166534; }
+.state-degraded, .state-partial, .state-stale, .state-configured_unverified, .state-queued, .state-running, .state-stopped, .state-not_run, .state-not_configured { color: #9a3412; }
+.state-unavailable, .state-failed, .state-invalid { color: #991b1b; }
+.state-disabled, .state-not_applicable, .state-not_required, .state-unknown, .state-cancelled { color: #475569; }
+.diagnostic-contract { background: #f8fafc; border-radius: 8px; margin-top: 12px; padding: 10px 12px; }
+.diagnostic-contract summary { cursor: pointer; font-weight: 700; }
+.diagnostic-contract p { margin: 8px 0 0; }
+@media (max-width: 720px) { .diagnostic-modules { grid-template-columns: 1fr; } .diagnostic-summary { align-items: flex-start; flex-direction: column; } }
 .auth-alternatives { border-top: 1px solid #e2e8f0; display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); padding-top: 13px; }
 .auth-alternatives button { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; color: #334155; cursor: pointer; padding: 9px 10px; }
 .auth-alternatives button:hover { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
